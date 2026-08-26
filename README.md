@@ -83,5 +83,4 @@ git diff -- testdata
 ```
 
 Tests must not depend on public Internet access, wall-clock timing, local
-timezones, usernames, checkout paths, random map iteration, external services,
-or mutable remote state.
+timezones, usernames, checkout paths, random map iteration, external services, or mutable remote state.
