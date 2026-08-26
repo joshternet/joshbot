@@ -47,6 +47,43 @@ go tool cover -func=/tmp/joshbot-coverage.out
 
 The reported total must be `100.0%`.
 
+## Continuous integration
+
+The `Quality` GitHub Actions workflow runs for every pull request and every push
+to `main`.
+
+It enforces:
+
+- Go formatting;
+- module tidiness;
+- `go vet`;
+- normal tests;
+- machine-readable test results;
+- ten deterministic race-enabled test runs;
+- exactly 100% statement coverage;
+- a clean working tree after normal quality checks.
+
+Each workflow run publishes a GitHub job summary and a downloadable quality
+reports artifact containing:
+
+- `quality-summary.md`;
+- `formatting.txt`;
+- `module-tidiness.txt`;
+- `vet.txt`;
+- `normal-tests.txt`;
+- `test-results.json`;
+- `race-tests.txt`;
+- `coverage.out`;
+- `coverage.txt`;
+- `coverage.html`;
+- `working-tree.txt`.
+
+Reports are retained for 14 days. The job summary contains a direct link to the
+artifact.
+
+The workflow uses read-only repository permissions and immutable commit pins
+for every external action.
+
 ## Golden-master tests
 
 Golden files are committed fixtures stored beneath the conventional `testdata`
