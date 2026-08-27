@@ -1,0 +1,192 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Go quality gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Prepare reports
+        id: prepare
+        shell: bash
+        run: |
+          report_dir="$RUNNER_TEMP/quality-reports"
+          mkdir -p "$report_dir"
+          printf 'REPORT_DIR=%s\n' "$report_dir" >> "$GITHUB_ENV"
+
+      - name: Check out repository
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        id: setup
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check formatting
+        id: formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            printf '%s\n' "$unformatted" > "$REPORT_DIR/formatting.txt"
+            cat "$REPORT_DIR/formatting.txt"
+            exit 1
+          fi
+
+          printf 'PASS: all Go files are gofmt-formatted\n' \
+            | tee "$REPORT_DIR/formatting.txt"
+
+      - name: Check module tidiness
+        id: tidy
+        shell: bash
+        run: |
+          if ! go mod tidy -diff > "$REPORT_DIR/module-tidiness.txt" 2>&1; then
+            cat "$REPORT_DIR/module-tidiness.txt"
+            exit 1
+          fi
+
+          printf 'PASS: go.mod requires no changes\n' \
+            > "$REPORT_DIR/module-tidiness.txt"
+          cat "$REPORT_DIR/module-tidiness.txt"
+
+      - name: Run vet
+        id: vet
+        shell: bash
+        run: |
+          if ! go vet ./... > "$REPORT_DIR/vet.txt" 2>&1; then
+            cat "$REPORT_DIR/vet.txt"
+            exit 1
+          fi
+
+          printf 'PASS: go vet reported no findings\n' \
+            > "$REPORT_DIR/vet.txt"
+          cat "$REPORT_DIR/vet.txt"
+
+      - name: Run normal tests
+        id: normal
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./... 2>&1 | tee "$REPORT_DIR/normal-tests.txt"
+
+      - name: Generate machine-readable test results
+        id: test_json
+        shell: bash
+        run: |
+          if ! go test -json ./... > "$REPORT_DIR/test-results.json"; then
+            cat "$REPORT_DIR/test-results.json"
+            exit 1
+          fi
+
+      - name: Run deterministic race tests with coverage
+        id: race
+        shell: bash
+        run: |
+          set -o pipefail
+          go test \
+            -count=10 \
+            -race \
+            -coverprofile="$REPORT_DIR/coverage.out" \
+            ./... 2>&1 | tee "$REPORT_DIR/race-tests.txt"
+
+      - name: Enforce 100 percent coverage
+        id: coverage
+        shell: bash
+        run: |
+          report="$(go tool cover -func="$REPORT_DIR/coverage.out")"
+          printf '%s\n' "$report" | tee "$REPORT_DIR/coverage.txt"
+          go tool cover \
+            -html="$REPORT_DIR/coverage.out" \
+            -o "$REPORT_DIR/coverage.html"
+
+          total="$(printf '%s\n' "$report" | awk '/^total:/ {print $3}')"
+          printf 'total=%s\n' "$total" >> "$GITHUB_OUTPUT"
+
+          if [[ "$total" != "100.0%" ]]; then
+            printf 'coverage total = %s, want 100.0%%\n' "$total"
+            exit 1
+          fi
+
+      - name: Verify clean working tree
+        id: clean
+        shell: bash
+        run: |
+          status="$(git status --porcelain)"
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status" > "$REPORT_DIR/working-tree.txt"
+            cat "$REPORT_DIR/working-tree.txt"
+            exit 1
+          fi
+
+          printf 'PASS: normal quality checks left the repository clean\n' \
+            > "$REPORT_DIR/working-tree.txt"
+          cat "$REPORT_DIR/working-tree.txt"
+
+      - name: Write quality summary
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$REPORT_DIR"
+
+          coverage="${{ steps.coverage.outputs.total }}"
+          if [[ -z "$coverage" ]]; then
+            coverage="unavailable"
+          fi
+
+          cat > "$REPORT_DIR/quality-summary.md" <<EOF
+          ## JoshBot quality report
+
+          | Gate | Result |
+          | --- | --- |
+          | Report preparation | \`${{ steps.prepare.outcome }}\` |
+          | Checkout | \`${{ steps.checkout.outcome }}\` |
+          | Go setup | \`${{ steps.setup.outcome }}\` |
+          | Formatting | \`${{ steps.formatting.outcome }}\` |
+          | Module tidiness | \`${{ steps.tidy.outcome }}\` |
+          | Vet | \`${{ steps.vet.outcome }}\` |
+          | Normal tests | \`${{ steps.normal.outcome }}\` |
+          | Test JSON | \`${{ steps.test_json.outcome }}\` |
+          | Race and repeatability | \`${{ steps.race.outcome }}\` |
+          | Coverage | \`${{ steps.coverage.outcome }}\` |
+          | Coverage total | \`${coverage}\` |
+          | Clean working tree | \`${{ steps.clean.outcome }}\` |
+          EOF
+
+          cat "$REPORT_DIR/quality-summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload quality reports
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: joshbot-quality-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quality-reports
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Link downloadable reports
+        if: always() && steps.upload.outcome == 'success'
+        shell: bash
+        run: |
+          printf '\n[Download quality reports](%s)\n' \
+            '${{ steps.upload.outputs.artifact-url }}' \
+            >> "$GITHUB_STEP_SUMMARY"
