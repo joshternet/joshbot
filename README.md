@@ -89,6 +89,9 @@ for every external action.
 Golden files are committed fixtures stored beneath the conventional `testdata`
 directory.
 
+Golden-test support lives in `internal/testutil` so tests in multiple packages
+can reuse it without adding test-only machinery to production packages.
+
 The golden-test contract is:
 
 - Actual output must be deterministic.
@@ -105,14 +108,18 @@ Normal comparison is the default:
 go test ./...
 ```
 
-Intentionally update golden files with:
+Intentionally update golden files across all repository packages with:
 
 ```bash
-go test ./... -update
+JOSHBOT_UPDATE_GOLDEN=1 go test ./...
 ```
 
-Never use `-update` in CI. After an intentional update, review every fixture
-change:
+Only the exact value `1` enables updates. The environment variable is inherited
+by every package test binary created by `go test ./...`, so packages do not need
+to register duplicate test flags.
+
+Never set `JOSHBOT_UPDATE_GOLDEN` in CI. After an intentional update, review
+every fixture change:
 
 ```bash
 git status --short
