@@ -123,7 +123,7 @@ every fixture change:
 
 ```bash
 git status --short
-git diff -- testdata
+git diff -- ':(glob)**/testdata/**'
 ```
 
 Tests must not depend on public Internet access, wall-clock timing, local

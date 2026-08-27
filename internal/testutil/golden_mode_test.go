@@ -33,6 +33,62 @@ func TestCheckGoldenUpdatesWhenEnvironmentEnabled(t *testing.T) {
 	}
 }
 
+func TestCheckGoldenRejectsFalseLookingUpdateValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{
+			name:  "zero",
+			value: "0",
+		},
+		{
+			name:  "true",
+			value: "true",
+		},
+		{
+			name:  "yes",
+			value: "yes",
+		},
+		{
+			name:  "one with trailing space",
+			value: "1 ",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := filepath.Join(t.TempDir(), "fixture.golden")
+			expected := []byte("expected\n")
+			actual := []byte("actual\n")
+
+			if err := os.WriteFile(fixture, expected, 0o600); err != nil {
+				t.Fatalf("write golden fixture: %v", err)
+			}
+
+			t.Setenv("JOSHBOT_UPDATE_GOLDEN", test.value)
+
+			if err := CheckGolden(fixture, actual); err == nil {
+				t.Fatal("CheckGolden() error = nil, want mismatch error")
+			}
+
+			got, err := os.ReadFile(fixture)
+			if err != nil {
+				t.Fatalf("read golden fixture: %v", err)
+			}
+
+			if !bytes.Equal(got, expected) {
+				t.Fatalf(
+					"fixture with JOSHBOT_UPDATE_GOLDEN=%q = %q, want %q",
+					test.value,
+					got,
+					expected,
+				)
+			}
+		})
+	}
+}
+
 func TestCheckGoldenExactMatchWhenEnvironmentDisabled(t *testing.T) {
 	fixture := filepath.Join(t.TempDir(), "fixture.golden")
 	expected := []byte("expected\n")
