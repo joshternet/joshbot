@@ -47,6 +47,8 @@ func hasForbiddenDomainCodePoint(host string) bool {
 // not represent a valid origin.
 type Origin struct {
 	serialization string
+	hostname      string
+	port          uint16
 }
 
 // Parse derives a canonical web origin from an absolute HTTP or HTTPS URL.
@@ -76,29 +78,45 @@ func Parse(rawURL string) (Origin, error) {
 		return Origin{}, errors.New("origin: missing host")
 	}
 
-	host := hostname
+	canonicalHostname := hostname
+	serializationHost := hostname
 	address, addressErr := netip.ParseAddr(hostname)
 	if addressErr == nil {
 		if address.Zone() != "" {
-			return Origin{}, errors.New("origin: IPv6 zone identifiers are not allowed")
+			return Origin{}, errors.New(
+				"origin: IPv6 zone identifiers are not allowed",
+			)
 		}
 
+		canonicalHostname = address.String()
+		serializationHost = canonicalHostname
 		if address.Is6() {
-			host = "[" + address.String() + "]"
+			serializationHost = "[" + canonicalHostname + "]"
 		}
 	} else {
 		asciiHost, idnaErr := idnaProfile.ToASCII(hostname)
+		stableHost, stableErr := idnaProfile.ToASCII(asciiHost)
 		if idnaErr != nil ||
+			stableErr != nil ||
 			asciiHost == "" ||
+			stableHost != asciiHost ||
 			hasForbiddenDomainCodePoint(asciiHost) {
 			return Origin{}, errors.New("origin: invalid host")
 		}
 
 		if endsInNumberPattern.MatchString(asciiHost) {
-			return Origin{}, errors.New("origin: nonstandard numeric IPv4 form")
+			return Origin{}, errors.New(
+				"origin: nonstandard numeric IPv4 form",
+			)
 		}
 
-		host = asciiHost
+		canonicalHostname = asciiHost
+		serializationHost = asciiHost
+	}
+
+	effectivePort := uint16(443)
+	if parsed.Scheme == "http" {
+		effectivePort = 80
 	}
 
 	port := parsed.Port()
@@ -108,15 +126,21 @@ func Parse(rawURL string) (Origin, error) {
 			return Origin{}, errors.New("origin: invalid port")
 		}
 
-		defaultPort := (parsed.Scheme == "http" && portNumber == 80) ||
-			(parsed.Scheme == "https" && portNumber == 443)
+		effectivePort = uint16(portNumber)
+		defaultPort := (parsed.Scheme == "http" &&
+			effectivePort == 80) ||
+			(parsed.Scheme == "https" &&
+				effectivePort == 443)
 		if !defaultPort {
-			host += ":" + strconv.FormatUint(portNumber, 10)
+			serializationHost += ":" +
+				strconv.FormatUint(portNumber, 10)
 		}
 	}
 
 	return Origin{
-		serialization: parsed.Scheme + "://" + host,
+		serialization: parsed.Scheme + "://" + serializationHost,
+		hostname:      canonicalHostname,
+		port:          effectivePort,
 	}, nil
 }
 
@@ -124,4 +148,15 @@ func Parse(rawURL string) (Origin, error) {
 // slash. It returns an empty string for the zero value.
 func (o Origin) String() string {
 	return o.serialization
+}
+
+// Hostname returns the canonical ASCII hostname without IPv6 brackets. It
+// returns an empty string for the zero value.
+func (o Origin) Hostname() string {
+	return o.hostname
+}
+
+// Port returns the effective network port. It returns zero for the zero value.
+func (o Origin) Port() uint16 {
+	return o.port
 }
