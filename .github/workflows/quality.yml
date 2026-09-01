@@ -19,6 +19,25 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
+    env:
+      JOSHBOT_TEST_DATABASE_URL: postgres://joshbot:joshbot-ci-only@127.0.0.1:5432/joshbot_test?sslmode=disable
+      JOSHBOT_REQUIRE_DATABASE_TESTS: "1"
+
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_DB: joshbot_test
+          POSTGRES_USER: joshbot
+          POSTGRES_PASSWORD: joshbot-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U joshbot -d joshbot_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Prepare reports
         id: prepare
@@ -80,6 +99,18 @@ jobs:
           printf 'PASS: go vet reported no findings\n' \
             > "$REPORT_DIR/vet.txt"
           cat "$REPORT_DIR/vet.txt"
+
+      - name: Verify PostgreSQL integration
+        id: postgres
+        shell: bash
+        run: |
+          set -o pipefail
+          go test \
+            -count=1 \
+            -v \
+            ./internal/store \
+            -run '^TestPostgreSQLIntegrationConfigured$' \
+            2>&1 | tee "$REPORT_DIR/postgresql-integration.txt"
 
       - name: Run normal tests
         id: normal
@@ -163,6 +194,7 @@ jobs:
           | Formatting | \`${{ steps.formatting.outcome }}\` |
           | Module tidiness | \`${{ steps.tidy.outcome }}\` |
           | Vet | \`${{ steps.vet.outcome }}\` |
+          | PostgreSQL integration | \`${{ steps.postgres.outcome }}\` |
           | Normal tests | \`${{ steps.normal.outcome }}\` |
           | Test JSON | \`${{ steps.test_json.outcome }}\` |
           | Race and repeatability | \`${{ steps.race.outcome }}\` |
