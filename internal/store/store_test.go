@@ -265,20 +265,33 @@ func newStoreTestPool(t *testing.T) *pgxpool.Pool {
 		}
 	})
 
-	migration, err := os.ReadFile(
+	migrationFiles := []string{
 		"migrations/0001_initial.sql",
-	)
-	if err != nil {
-		t.Fatalf("read initial migration: %v", err)
+		"migrations/0002_verification_queue.sql",
 	}
 
-	_, err = testPool.Exec(
-		context.Background(),
-		string(migration),
-		pgx.QueryExecModeSimpleProtocol,
-	)
-	if err != nil {
-		t.Fatalf("apply initial migration: %v", err)
+	for _, migrationFile := range migrationFiles {
+		migration, readErr := os.ReadFile(migrationFile)
+		if readErr != nil {
+			t.Fatalf(
+				"read migration %q: %v",
+				migrationFile,
+				readErr,
+			)
+		}
+
+		_, execErr := testPool.Exec(
+			context.Background(),
+			string(migration),
+			pgx.QueryExecModeSimpleProtocol,
+		)
+		if execErr != nil {
+			t.Fatalf(
+				"apply migration %q: %v",
+				migrationFile,
+				execErr,
+			)
+		}
 	}
 
 	return testPool
