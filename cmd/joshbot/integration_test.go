@@ -266,6 +266,16 @@ func newCLIIntegrationEnvironment(
 	query.Set("search_path", schema)
 	schemaURL.RawQuery = query.Encode()
 
+	runtimeURL := *schemaURL
+	databasePassword := "integration-test-password"
+	if runtimeURL.User != nil {
+		username := runtimeURL.User.Username()
+		if password, ok := runtimeURL.User.Password(); ok {
+			databasePassword = password
+			runtimeURL.User = url.User(username)
+		}
+	}
+
 	testPool, err := pgxpool.New(
 		context.Background(),
 		schemaURL.String(),
@@ -299,7 +309,7 @@ func newCLIIntegrationEnvironment(
 	)
 	if err := os.WriteFile(
 		passwordFile,
-		[]byte("integration-test-password\n"),
+		[]byte(databasePassword+"\n"),
 		0o600,
 	); err != nil {
 		t.Fatalf(
@@ -309,7 +319,7 @@ func newCLIIntegrationEnvironment(
 	}
 
 	environment := mapEnvironment{
-		databaseURLEnvironment:          schemaURL.String(),
+		databaseURLEnvironment:          runtimeURL.String(),
 		databasePasswordFileEnvironment: passwordFile,
 		workerIDEnvironment:             "integration-worker",
 	}
