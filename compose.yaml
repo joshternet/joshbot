@@ -1,0 +1,206 @@
+x-joshbot-image: &joshbot-image
+  image: ${JOSHBOT_IMAGE:-joshbot:phase8}
+  pull_policy: never
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+services:
+  postgres:
+    image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
+    restart: unless-stopped
+    stop_grace_period: 1m
+    environment:
+      POSTGRES_DB: joshbot
+      POSTGRES_USER: joshbot_admin
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    secrets:
+      - postgres_admin_password
+      - joshbot_migrator_password
+      - joshbot_app_password
+      - joshbot_backup_password
+    volumes:
+      - type: bind
+        source: ${JOSHBOT_POSTGRES_DATA_DIR:?set JOSHBOT_POSTGRES_DATA_DIR}
+        target: /var/lib/postgresql
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./deploy/postgres/init/010-joshbot-roles.sh
+        target: /docker-entrypoint-initdb.d/010-joshbot-roles.sh
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - database
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready --username=$${POSTGRES_USER} --dbname=$${POSTGRES_DB}
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  migrate:
+    <<: *joshbot-image
+    command:
+      - migrate
+    restart: "no"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      JOSHBOT_DATABASE_URL: postgres://joshbot_migrator@postgres:5432/joshbot?sslmode=disable
+      JOSHBOT_DATABASE_PASSWORD_FILE: /run/secrets/joshbot_migrator_password
+    secrets:
+      - joshbot_migrator_password
+    networks:
+      - database
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    <<: *joshbot-image
+    command:
+      - worker
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      JOSHBOT_DATABASE_URL: postgres://joshbot_app@postgres:5432/joshbot?sslmode=disable
+      JOSHBOT_DATABASE_PASSWORD_FILE: /run/secrets/joshbot_app_password
+      JOSHBOT_LEASE_DURATION: ${JOSHBOT_LEASE_DURATION:-5m}
+      JOSHBOT_MIN_ORIGIN_INTERVAL: ${JOSHBOT_MIN_ORIGIN_INTERVAL:-1m}
+      JOSHBOT_POLL_INTERVAL: ${JOSHBOT_POLL_INTERVAL:-30s}
+      JOSHBOT_JOB_TIMEOUT: ${JOSHBOT_JOB_TIMEOUT:-2m}
+      JOSHBOT_COMPLETION_GRACE: ${JOSHBOT_COMPLETION_GRACE:-30s}
+      JOSHBOT_RECHECK_INTERVAL: ${JOSHBOT_RECHECK_INTERVAL:-24h}
+    secrets:
+      - joshbot_app_password
+    networks:
+      - database
+      - egress
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - /joshbot
+        - health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  tools:
+    <<: *joshbot-image
+    profiles:
+      - tools
+    command:
+      - help
+    restart: "no"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      JOSHBOT_DATABASE_URL: postgres://joshbot_app@postgres:5432/joshbot?sslmode=disable
+      JOSHBOT_DATABASE_PASSWORD_FILE: /run/secrets/joshbot_app_password
+      JOSHBOT_LEASE_DURATION: ${JOSHBOT_LEASE_DURATION:-5m}
+      JOSHBOT_MIN_ORIGIN_INTERVAL: ${JOSHBOT_MIN_ORIGIN_INTERVAL:-1m}
+    secrets:
+      - joshbot_app_password
+    volumes:
+      - type: bind
+        source: ${JOSHBOT_EXPORT_DIR:?set JOSHBOT_EXPORT_DIR}
+        target: /exports
+        bind:
+          create_host_path: false
+    networks:
+      - database
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  backup:
+    image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
+    profiles:
+      - backup
+    entrypoint:
+      - /bin/sh
+      - /opt/joshbot/backup.sh
+    command: []
+    user: postgres
+    restart: "no"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: joshbot
+      PGUSER: joshbot_backup
+      PGCONNECT_TIMEOUT: "10"
+      JOSHBOT_DATABASE_PASSWORD_FILE: /run/secrets/joshbot_backup_password
+      JOSHBOT_BACKUP_DIRECTORY: /backups
+    secrets:
+      - joshbot_backup_password
+    volumes:
+      - type: tmpfs
+        target: /var/lib/postgresql
+        read_only: true
+        tmpfs:
+          size: 1048576
+          mode: 0555
+      - type: bind
+        source: ./deploy/backup.sh
+        target: /opt/joshbot/backup.sh
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${JOSHBOT_BACKUP_DIR:?set JOSHBOT_BACKUP_DIR}
+        target: /backups
+        bind:
+          create_host_path: false
+    networks:
+      - database
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+networks:
+  database:
+    internal: true
+  egress:
+    driver: bridge
+
+secrets:
+  postgres_admin_password:
+    file: ${JOSHBOT_POSTGRES_ADMIN_PASSWORD_FILE:?set JOSHBOT_POSTGRES_ADMIN_PASSWORD_FILE}
+  joshbot_migrator_password:
+    file: ${JOSHBOT_MIGRATOR_PASSWORD_FILE:?set JOSHBOT_MIGRATOR_PASSWORD_FILE}
+  joshbot_app_password:
+    file: ${JOSHBOT_APP_PASSWORD_FILE:?set JOSHBOT_APP_PASSWORD_FILE}
+  joshbot_backup_password:
+    file: ${JOSHBOT_BACKUP_PASSWORD_FILE:?set JOSHBOT_BACKUP_PASSWORD_FILE}
