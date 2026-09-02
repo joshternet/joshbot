@@ -1,0 +1,58 @@
+=== nodes/10/100680ad546ce6a577f42f52df33b4cfdca756859e664b8d7de329b150d09ce9.json ===
+{
+  "format_version": 1,
+  "origin": "https://example.com",
+  "declaration": {
+    "version": 1
+  }
+}
+
+=== nodes/35/35d5ef135871623822d3d4779a9ecac15bfa2cca75c908ff3b05102937f37bcd.json ===
+{
+  "format_version": 1,
+  "origin": "https://example.net",
+  "declaration": {
+    "version": 1,
+    "josh": true
+  }
+}
+
+=== nodes/50/50d7a905e3046b88638362cc34a31a1ae534766ca55e3aa397951efe653b062b.json ===
+{
+  "format_version": 1,
+  "origin": "https://example.org",
+  "declaration": {
+    "version": 1,
+    "josh": false
+  }
+}
+
+=== registry.json ===
+{
+  "format_version": 1,
+  "nodes": [
+    {
+      "origin": "https://example.com",
+      "path": "nodes/10/100680ad546ce6a577f42f52df33b4cfdca756859e664b8d7de329b150d09ce9.json",
+      "declaration": {
+        "version": 1
+      }
+    },
+    {
+      "origin": "https://example.net",
+      "path": "nodes/35/35d5ef135871623822d3d4779a9ecac15bfa2cca75c908ff3b05102937f37bcd.json",
+      "declaration": {
+        "version": 1,
+        "josh": true
+      }
+    },
+    {
+      "origin": "https://example.org",
+      "path": "nodes/50/50d7a905e3046b88638362cc34a31a1ae534766ca55e3aa397951efe653b062b.json",
+      "declaration": {
+        "version": 1,
+        "josh": false
+      }
+    }
+  ]
+}
