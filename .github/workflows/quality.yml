@@ -25,7 +25,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18.6
+        image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
         env:
           POSTGRES_DB: joshbot_test
           POSTGRES_USER: joshbot
@@ -220,5 +220,219 @@ jobs:
         shell: bash
         run: |
           printf '\n[Download quality reports](%s)\n' \
+            '${{ steps.upload.outputs.artifact-url }}' \
+            >> "$GITHUB_STEP_SUMMARY"
+
+  deployment:
+    name: Container deployment and recovery gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Prepare deployment reports
+        id: prepare
+        shell: bash
+        run: |
+          report_dir="$RUNNER_TEMP/deployment-reports"
+          mkdir -p "$report_dir"
+          printf 'DEPLOYMENT_REPORT_DIR=%s\n' "$report_dir" >> "$GITHUB_ENV"
+
+      - name: Check out repository
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Record Docker environment
+        id: docker
+        shell: bash
+        run: |
+          {
+            docker version
+            docker compose version
+            docker info
+          } > "$DEPLOYMENT_REPORT_DIR/docker-environment.txt"
+
+          cat "$DEPLOYMENT_REPORT_DIR/docker-environment.txt"
+
+      - name: Build and inspect production image
+        id: image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          image="joshbot-ci:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          container="joshbot-ci-rootfs-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          cleanup() {
+            status="$?"
+
+            docker rm \
+              --force \
+              "$container" \
+              >/dev/null \
+              2>&1 || true
+
+            docker image rm \
+              "$image" \
+              >/dev/null \
+              2>&1 || true
+
+            exit "$status"
+          }
+
+          trap cleanup EXIT
+
+          docker build \
+            --pull \
+            --tag "$image" \
+            . 2>&1 | tee "$DEPLOYMENT_REPORT_DIR/image-build.txt"
+
+          docker run \
+            --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            "$image" \
+            help \
+            > "$DEPLOYMENT_REPORT_DIR/image-help.txt" \
+            2>&1
+
+          cat "$DEPLOYMENT_REPORT_DIR/image-help.txt"
+
+          runtime_user="$(
+            docker image inspect \
+              "$image" \
+              --format '{{.Config.User}}'
+          )"
+
+          if [[ "$runtime_user" != "65532:65532" ]]; then
+            printf 'runtime user = %s, want 65532:65532\n' "$runtime_user"
+            exit 1
+          fi
+
+          docker create \
+            --name "$container" \
+            --network none \
+            "$image" \
+            help \
+            >/dev/null
+
+          docker export "$container" |
+            tar -tf - |
+            sed 's#^\./##' |
+            sort \
+              > "$DEPLOYMENT_REPORT_DIR/image-rootfs.txt"
+
+          grep \
+            -Fxq \
+            'joshbot' \
+            "$DEPLOYMENT_REPORT_DIR/image-rootfs.txt"
+
+          grep \
+            -Fxq \
+            'etc/ssl/certs/ca-certificates.crt' \
+            "$DEPLOYMENT_REPORT_DIR/image-rootfs.txt"
+
+          for forbidden_path in \
+            bin/sh \
+            bin/bash \
+            usr/bin/curl \
+            usr/bin/wget \
+            usr/bin/git \
+            usr/bin/pg_dump \
+            usr/bin/pg_restore \
+            usr/bin/psql \
+            usr/local/go/bin/go; do
+            if grep \
+              -Fxq \
+              "$forbidden_path" \
+              "$DEPLOYMENT_REPORT_DIR/image-rootfs.txt"; then
+              printf 'forbidden runtime path exists: %s\n' "$forbidden_path"
+              exit 1
+            fi
+          done
+
+          printf '%s\n' \
+            'PASS: image runs help without network access' \
+            'PASS: runtime user is 65532:65532' \
+            'PASS: CA certificate bundle is present' \
+            'PASS: shell, download tools, Git, PostgreSQL tools, and Go compiler are absent' \
+              | tee "$DEPLOYMENT_REPORT_DIR/image-security.txt"
+
+      - name: Run deployment and recovery smoke test
+        id: smoke
+        shell: bash
+        run: |
+          set -o pipefail
+          ./deploy/smoke.sh \
+            2>&1 | tee "$DEPLOYMENT_REPORT_DIR/deployment-smoke.txt"
+
+      - name: Verify deployment tests leave a clean checkout
+        id: clean
+        shell: bash
+        run: |
+          status="$(git status --porcelain)"
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status" \
+              > "$DEPLOYMENT_REPORT_DIR/working-tree.txt"
+            cat "$DEPLOYMENT_REPORT_DIR/working-tree.txt"
+            exit 1
+          fi
+
+          printf 'PASS: deployment tests left the repository clean\n' \
+            | tee "$DEPLOYMENT_REPORT_DIR/working-tree.txt"
+
+      - name: Record final Docker storage state
+        id: storage
+        if: always()
+        shell: bash
+        run: |
+          docker system df \
+            > "$DEPLOYMENT_REPORT_DIR/docker-storage.txt" \
+            2>&1 || true
+
+          cat "$DEPLOYMENT_REPORT_DIR/docker-storage.txt"
+
+      - name: Write deployment summary
+        if: always()
+        shell: bash
+        run: |
+          report_dir="${DEPLOYMENT_REPORT_DIR:-$RUNNER_TEMP/deployment-reports}"
+          mkdir -p "$report_dir"
+
+          cat > "$report_dir/deployment-summary.md" <<EOF
+          ## JoshBot deployment and recovery report
+
+          | Gate | Result |
+          | --- | --- |
+          | Report preparation | \`${{ steps.prepare.outcome }}\` |
+          | Checkout | \`${{ steps.checkout.outcome }}\` |
+          | Docker environment | \`${{ steps.docker.outcome }}\` |
+          | Production image | \`${{ steps.image.outcome }}\` |
+          | Deployment and recovery smoke | \`${{ steps.smoke.outcome }}\` |
+          | Clean working tree | \`${{ steps.clean.outcome }}\` |
+          | Docker storage report | \`${{ steps.storage.outcome }}\` |
+          EOF
+
+          cat "$report_dir/deployment-summary.md" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload deployment reports
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: joshbot-deployment-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/deployment-reports
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Link downloadable deployment reports
+        if: always() && steps.upload.outcome == 'success'
+        shell: bash
+        run: |
+          printf '\n[Download deployment reports](%s)\n' \
             '${{ steps.upload.outputs.artifact-url }}' \
             >> "$GITHUB_STEP_SUMMARY"

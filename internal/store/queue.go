@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
 )
 
@@ -18,12 +19,16 @@ var (
 	// ErrLeaseLost means the caller no longer has authority over queued work.
 	ErrLeaseLost = errors.New("store: queue lease lost")
 
-	errQueueUnavailable      = errors.New("store: queue is unavailable")
-	errQueueClockUnavailable = errors.New("store: queue clock is unavailable")
-	errInvalidQueueConfig    = errors.New("store: queue configuration is invalid")
-	errInvalidWorkerID       = errors.New("store: queue worker ID is invalid")
-	errInvalidAvailableAt    = errors.New("store: queue availability time is invalid")
-	errInvalidLease          = errors.New("store: queue lease is invalid")
+	errQueueUnavailable         = errors.New("store: queue is unavailable")
+	errQueueClockUnavailable    = errors.New("store: queue clock is unavailable")
+	errInvalidQueueConfig       = errors.New("store: queue configuration is invalid")
+	errInvalidWorkerID          = errors.New("store: queue worker ID is invalid")
+	errInvalidAvailableAt       = errors.New("store: queue availability time is invalid")
+	errInvalidLease             = errors.New("store: queue lease is invalid")
+	errInvalidRecheckAfter      = errors.New("store: recheck duration is invalid")
+	errCompletionOriginMismatch = errors.New(
+		"store: verification result origin does not match lease",
+	)
 )
 
 // QueueConfig contains the operational timing policy for a queue.
@@ -60,6 +65,21 @@ type queueClock interface {
 		context.Context,
 		*pgxpool.Pool,
 	) (time.Time, error)
+}
+
+type transactionQueueClock interface {
+	NowTransaction(
+		context.Context,
+		pgx.Tx,
+	) (time.Time, error)
+}
+
+type queueTimeQuerier interface {
+	QueryRow(
+		context.Context,
+		string,
+		...any,
+	) pgx.Row
 }
 
 type databaseQueueClock struct{}
@@ -425,6 +445,146 @@ func (q *Queue) Reschedule(
 	return nil
 }
 
+// CompleteVerification atomically records a verification result, schedules
+// the origin's next verification, and releases the active lease.
+//
+// The observation and scheduling timestamps use PostgreSQL shared time.
+// A worker that no longer owns the current unexpired lease cannot record an
+// observation.
+func (q *Queue) CompleteVerification(
+	ctx context.Context,
+	lease Lease,
+	result declaration.Result,
+	recheckAfter time.Duration,
+) error {
+	if err := q.validate(ctx); err != nil {
+		return err
+	}
+
+	if !validQueueLease(lease) {
+		return errInvalidLease
+	}
+
+	if result.Origin.String() == "" {
+		return errInvalidOrigin
+	}
+
+	if result.Origin != lease.Origin {
+		return errCompletionOriginMismatch
+	}
+
+	if !validVerificationResult(result) {
+		return errInvalidResult
+	}
+
+	if recheckAfter <= 0 {
+		return errInvalidRecheckAfter
+	}
+
+	version, identity := storedDeclarationValues(result)
+
+	err := pgx.BeginFunc(
+		ctx,
+		q.pool,
+		func(tx pgx.Tx) error {
+			completedAt, clockErr :=
+				q.completionTime(ctx, tx)
+			if clockErr != nil {
+				return clockErr
+			}
+
+			requestedAvailableAt := completedAt.Add(
+				recheckAfter,
+			).UTC()
+
+			commandTag, execErr := tx.Exec(
+				ctx,
+				`
+					WITH completed_queue AS (
+						UPDATE verification_queue
+						SET
+							available_at = GREATEST(
+								$5,
+								last_claimed_at +
+									make_interval(
+										secs =>
+											$6::double precision
+									)
+							),
+							lease_owner = NULL,
+							lease_expires_at = NULL
+						WHERE origin = $1
+							AND lease_owner = $2
+							AND lease_generation = $3
+							AND lease_expires_at > $4
+						RETURNING origin
+					),
+					recorded_origin AS (
+						INSERT INTO origins (
+							origin,
+							first_observed_at
+						)
+						SELECT
+							origin,
+							$4
+						FROM completed_queue
+						ON CONFLICT (origin) DO UPDATE
+						SET first_observed_at = LEAST(
+							origins.first_observed_at,
+							EXCLUDED.first_observed_at
+						)
+						RETURNING origin
+					)
+					INSERT INTO verification_observations (
+						origin,
+						observed_at,
+						outcome,
+						version,
+						identity
+					)
+					SELECT
+						origin,
+						$4,
+						$7,
+						$8,
+						$9
+					FROM recorded_origin
+				`,
+				lease.Origin.String(),
+				lease.WorkerID,
+				lease.Generation,
+				completedAt,
+				requestedAvailableAt,
+				q.config.MinOriginInterval.Seconds(),
+				outcomeToText[result.Outcome],
+				version,
+				identity,
+			)
+			if execErr != nil {
+				return execErr
+			}
+
+			if commandTag.RowsAffected() != 1 {
+				return ErrLeaseLost
+			}
+
+			return nil
+		},
+	)
+	if errors.Is(err, ErrLeaseLost) {
+		return ErrLeaseLost
+	}
+
+	if err != nil {
+		return fmt.Errorf(
+			"store: complete verification: %w",
+			err,
+		)
+	}
+
+	return nil
+}
+
 func (q *Queue) validate(ctx context.Context) error {
 	if q == nil {
 		return errQueueUnavailable
@@ -465,6 +625,31 @@ func (q *Queue) now(ctx context.Context) (time.Time, error) {
 	return now.UTC(), nil
 }
 
+func (q *Queue) completionTime(
+	ctx context.Context,
+	tx pgx.Tx,
+) (time.Time, error) {
+	var (
+		now time.Time
+		err error
+	)
+
+	if clock, ok := q.clock.(transactionQueueClock); ok {
+		now, err = clock.NowTransaction(ctx, tx)
+	} else {
+		now, err = q.clock.Now(ctx, q.pool)
+	}
+
+	if err != nil {
+		return time.Time{}, fmt.Errorf(
+			"store: read queue completion clock: %w",
+			err,
+		)
+	}
+
+	return now.UTC(), nil
+}
+
 func validQueueConfig(config QueueConfig) bool {
 	return config.LeaseDuration > 0 &&
 		config.MinOriginInterval > 0
@@ -489,8 +674,22 @@ func (databaseQueueClock) Now(
 	ctx context.Context,
 	pool *pgxpool.Pool,
 ) (time.Time, error) {
+	return readQueueTime(ctx, pool)
+}
+
+func (databaseQueueClock) NowTransaction(
+	ctx context.Context,
+	tx pgx.Tx,
+) (time.Time, error) {
+	return readQueueTime(ctx, tx)
+}
+
+func readQueueTime(
+	ctx context.Context,
+	querier queueTimeQuerier,
+) (time.Time, error) {
 	var now time.Time
-	err := pool.QueryRow(
+	err := querier.QueryRow(
 		ctx,
 		"SELECT clock_timestamp()",
 	).Scan(&now)
