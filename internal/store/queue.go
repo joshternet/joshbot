@@ -52,8 +52,8 @@ type Lease struct {
 // Queue coordinates declaration-verification work through PostgreSQL.
 //
 // The caller owns the supplied pool and remains responsible for closing it.
-// Normal operation needs SELECT, INSERT, and UPDATE privileges. Schema
-// migrations are intentionally separate.
+// Normal operation needs SELECT, INSERT, UPDATE, and narrowly scoped DELETE
+// access to verification_queue. Schema migrations are intentionally separate.
 type Queue struct {
 	pool   *pgxpool.Pool
 	config QueueConfig
@@ -120,10 +120,13 @@ func newQueue(
 	}, nil
 }
 
-// Schedule ensures source is queued no later than availableAt.
+// Schedule ensures source has recurring verification work no later than
+// availableAt.
 //
 // Scheduling demand for an origin with an active unexpired lease is coalesced
 // into that in-flight lease without changing its availability or authority.
+// Explicit operator scheduling promotes a probe to recurring without replacing
+// its active lease.
 func (q *Queue) Schedule(
 	ctx context.Context,
 	source origin.Origin,
@@ -151,20 +154,23 @@ func (q *Queue) Schedule(
 		`
 			INSERT INTO verification_queue (
 				origin,
-				available_at
+				available_at,
+				mode
 			)
-			VALUES ($1, $2)
+			VALUES ($1, $2, 'recurring')
 			ON CONFLICT (origin) DO UPDATE
-			SET available_at = CASE
-				WHEN
-					verification_queue.lease_owner IS NOT NULL
-					AND verification_queue.lease_expires_at > $3
-				THEN verification_queue.available_at
-				ELSE LEAST(
-					verification_queue.available_at,
-					EXCLUDED.available_at
-				)
-			END
+			SET
+				mode = 'recurring',
+				available_at = CASE
+					WHEN
+						verification_queue.lease_owner IS NOT NULL
+						AND verification_queue.lease_expires_at > $3
+					THEN verification_queue.available_at
+					ELSE LEAST(
+						verification_queue.available_at,
+						EXCLUDED.available_at
+					)
+				END
 		`,
 		source.String(),
 		availableAt.UTC(),
@@ -445,12 +451,12 @@ func (q *Queue) Reschedule(
 	return nil
 }
 
-// CompleteVerification atomically records a verification result, schedules
-// the origin's next verification, and releases the active lease.
+// CompleteVerification atomically records a verification result and finalizes
+// the active queue lease.
 //
-// The observation and scheduling timestamps use PostgreSQL shared time.
-// A worker that no longer owns the current unexpired lease cannot record an
-// observation.
+// Recurring work and valid probes remain queued for recurring verification.
+// Non-valid probes record their observation and leave the queue in the same
+// transaction.
 func (q *Queue) CompleteVerification(
 	ctx context.Context,
 	lease Lease,
@@ -500,12 +506,29 @@ func (q *Queue) CompleteVerification(
 			commandTag, execErr := tx.Exec(
 				ctx,
 				`
-					WITH completed_queue AS (
-						UPDATE verification_queue
+					WITH leased_queue AS (
+						SELECT
+							origin,
+							mode,
+							last_claimed_at
+						FROM verification_queue
+						WHERE origin = $1
+							AND lease_owner = $2
+							AND lease_generation = $3
+							AND lease_expires_at > $4
+						FOR UPDATE
+					),
+					retained_queue AS (
+						UPDATE verification_queue AS queued
 						SET
+							mode = CASE
+								WHEN $7 = 'valid'
+								THEN 'recurring'
+								ELSE queued.mode
+							END,
 							available_at = GREATEST(
 								$5,
-								last_claimed_at +
+								queued.last_claimed_at +
 									make_interval(
 										secs =>
 											$6::double precision
@@ -513,11 +536,33 @@ func (q *Queue) CompleteVerification(
 							),
 							lease_owner = NULL,
 							lease_expires_at = NULL
-						WHERE origin = $1
-							AND lease_owner = $2
-							AND lease_generation = $3
-							AND lease_expires_at > $4
-						RETURNING origin
+						FROM leased_queue
+						WHERE queued.origin =
+								leased_queue.origin
+							AND (
+								leased_queue.mode =
+									'recurring'
+								OR $7 = 'valid'
+							)
+						RETURNING queued.origin
+					),
+					removed_probe AS (
+						DELETE FROM verification_queue
+						USING leased_queue
+						WHERE verification_queue.origin =
+								leased_queue.origin
+							AND leased_queue.mode = 'probe'
+							AND $7 <> 'valid'
+						RETURNING verification_queue.origin
+					),
+					completed_queue AS (
+						SELECT origin
+						FROM retained_queue
+
+						UNION ALL
+
+						SELECT origin
+						FROM removed_probe
 					),
 					recorded_origin AS (
 						INSERT INTO origins (

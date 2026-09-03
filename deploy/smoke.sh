@@ -71,6 +71,9 @@ export JOSHBOT_POLL_INTERVAL="30s"
 export JOSHBOT_JOB_TIMEOUT="2m"
 export JOSHBOT_COMPLETION_GRACE="30s"
 export JOSHBOT_RECHECK_INTERVAL="24h"
+export JOSHBOT_DISCOVERY_INTERVAL="168h"
+export JOSHBOT_DISCOVERY_POLL_INTERVAL="30s"
+export JOSHBOT_DISCOVERY_PAGE_TIMEOUT="30s"
 
 unset COMPOSE_FILE
 unset COMPOSE_PROFILES
@@ -467,7 +470,7 @@ compose up \
   --detach \
   --wait
 
-pass "PostgreSQL, migration, and worker services started successfully"
+pass "PostgreSQL, migration, worker, and discovery services started successfully"
 
 migrate_container="$(
   compose ps \
@@ -481,6 +484,13 @@ worker_container="$(
     --all \
     --quiet \
     worker
+)"
+
+discovery_container="$(
+  compose ps \
+    --all \
+    --quiet \
+    discovery
 )"
 
 postgres_container="$(
@@ -497,6 +507,10 @@ assert_nonempty \
 assert_nonempty \
   "$worker_container" \
   "worker container was not created"
+
+assert_nonempty \
+  "$discovery_container" \
+  "discovery container was not created"
 
 assert_nonempty \
   "$postgres_container" \
@@ -517,9 +531,25 @@ assert_equal \
   "healthy" \
   "worker health"
 
-compose stop worker
+assert_equal \
+  "$(docker inspect "$discovery_container" --format '{{.State.Health.Status}}')" \
+  "healthy" \
+  "discovery health"
 
-pass "worker was stopped before scheduling; smoke test performs no public crawl"
+compose \
+  --profile tools \
+  run \
+  --rm \
+  --no-deps \
+  tools \
+  discover \
+  --once
+
+pass "one-shot discovery succeeded with no verified source and made no public request"
+
+compose stop worker discovery
+
+pass "worker and discovery were stopped before seeding; smoke test performs no public crawl"
 
 compose \
   --profile tools \
@@ -556,6 +586,8 @@ queue_state="$(
       SELECT
         origin
         || '|'
+        || mode
+        || '|'
         || lease_generation::text
         || '|'
         || (lease_owner IS NULL)::text
@@ -567,10 +599,10 @@ queue_state="$(
 
 assert_equal \
   "$queue_state" \
-  'https://example.com|0|true|true' \
+  'https://example.com|recurring|0|true|true' \
   "scheduled canonical queue state"
 
-pass "schedule command stored one canonical unleased queue row"
+pass "schedule command stored one canonical unleased recurring queue row"
 
 compose exec \
   -T \
@@ -656,7 +688,7 @@ migration_count="$(
 
 assert_equal \
   "$migration_count" \
-  "2" \
+  "3" \
   "source migration count"
 
 pass "known observation, effective state, queue state, and migrations exist"
@@ -694,6 +726,123 @@ assert_equal \
   "source public snapshot file count"
 
 pass "source public registry matches the expected deterministic bytes"
+
+compose exec \
+  -T \
+  postgres \
+  psql \
+  --username joshbot_admin \
+  --dbname joshbot \
+  --set=ON_ERROR_STOP=1 <<'SQL'
+SET ROLE joshbot_app;
+
+INSERT INTO discovery_source_state (
+    source_origin,
+    last_attempted_at
+)
+VALUES (
+    'https://example.com',
+    TIMESTAMPTZ '2026-01-03 03:04:05+00'
+);
+
+INSERT INTO discovery_candidates (
+    origin,
+    first_discovered_at,
+    last_discovered_at
+)
+VALUES (
+    'https://candidate.example',
+    TIMESTAMPTZ '2026-01-03 03:04:05+00',
+    TIMESTAMPTZ '2026-01-03 03:04:05+00'
+);
+
+INSERT INTO discovery_edges (
+    source_origin,
+    candidate_origin,
+    kind,
+    first_discovered_at,
+    last_discovered_at
+)
+VALUES (
+    'https://example.com',
+    'https://candidate.example',
+    'link',
+    TIMESTAMPTZ '2026-01-03 03:04:05+00',
+    TIMESTAMPTZ '2026-01-03 03:04:05+00'
+);
+
+INSERT INTO verification_queue (
+    origin,
+    available_at,
+    mode
+)
+VALUES (
+    'https://candidate.example',
+    TIMESTAMPTZ '2026-01-03 03:04:05+00',
+    'probe'
+);
+
+DELETE FROM verification_queue
+WHERE false;
+SQL
+
+private_discovery_state="$(
+  compose exec \
+    -T \
+    postgres \
+    psql \
+    --username joshbot_admin \
+    --dbname joshbot \
+    --no-align \
+    --tuples-only \
+    --quiet \
+    --command="
+      SET ROLE joshbot_app;
+
+      SELECT
+        discovery_source_state.source_origin
+        || '|'
+        || discovery_candidates.origin
+        || '|'
+        || discovery_edges.kind
+        || '|'
+        || verification_queue.mode
+      FROM discovery_source_state
+      JOIN discovery_edges
+        ON discovery_edges.source_origin =
+          discovery_source_state.source_origin
+      JOIN discovery_candidates
+        ON discovery_candidates.origin =
+          discovery_edges.candidate_origin
+      JOIN verification_queue
+        ON verification_queue.origin =
+          discovery_candidates.origin;
+    "
+)"
+
+assert_equal \
+  "$private_discovery_state" \
+  'https://example.com|https://candidate.example|link|probe' \
+  "private discovery state"
+
+compose \
+  --profile tools \
+  run \
+  --rm \
+  --no-deps \
+  tools \
+  export \
+  --output /exports/discovery-private-snapshot
+
+private_snapshot="$JOSHBOT_EXPORT_DIR/discovery-private-snapshot"
+
+diff \
+  --recursive \
+  --no-dereference \
+  "$source_snapshot" \
+  "$private_snapshot"
+
+pass "private discovery state leaves the public registry byte-identical"
 
 compose \
   --profile backup \
@@ -794,6 +943,11 @@ expect_role_failure \
 
 expect_role_failure \
   joshbot_app \
+  'ALTER TABLE discovery_candidates ADD COLUMN forbidden text;' \
+  'application role table alteration'
+
+expect_role_failure \
+  joshbot_app \
   'CREATE ROLE forbidden_app_role;' \
   'application role role creation'
 
@@ -842,6 +996,11 @@ assert_hardened_container \
   'worker container'
 
 assert_hardened_container \
+  "$discovery_container" \
+  '65532:65532' \
+  'discovery container'
+
+assert_hardened_container \
   "$migrate_container" \
   '65532:65532' \
   'migration container'
@@ -876,12 +1035,19 @@ expected_worker_networks="$(
     sort
 )"
 
+expected_discovery_networks="$expected_worker_networks"
+
 expected_database_network="$database_network"
 
 assert_equal \
   "$(inspect_network_names "$worker_container")" \
   "$expected_worker_networks" \
   "worker network membership"
+
+assert_equal \
+  "$(inspect_network_names "$discovery_container")" \
+  "$expected_discovery_networks" \
+  "discovery network membership"
 
 assert_equal \
   "$(inspect_network_names "$migrate_container")" \
@@ -907,6 +1073,11 @@ assert_equal \
   "$(inspect_mount_destinations "$worker_container")" \
   '/run/secrets/joshbot_app_password' \
   "worker mount boundary"
+
+assert_equal \
+  "$(inspect_mount_destinations "$discovery_container")" \
+  '/run/secrets/joshbot_app_password' \
+  "discovery mount boundary"
 
 expected_migrate_mounts='/run/secrets/joshbot_migrator_password'
 
@@ -1004,7 +1175,7 @@ assert_equal \
   "" \
   "Compose-managed volume count"
 
-pass "runtime container, network, secret, port, and mount boundaries are correct"
+pass "runtime container, discovery, network, secret, port, and mount boundaries are correct"
 
 docker network create \
   --internal \
@@ -1222,19 +1393,53 @@ restored_queue_state="$(
       SELECT
         origin
         || '|'
+        || mode
+        || '|'
         || lease_generation::text
         || '|'
         || (lease_owner IS NULL)::text
         || '|'
         || (lease_expires_at IS NULL)::text
-      FROM verification_queue;
+      FROM verification_queue
+      ORDER BY origin;
     "
 )"
 
 assert_equal \
   "$restored_queue_state" \
-  'https://example.com|0|true|true' \
+  $'https://candidate.example|probe|0|true|true\nhttps://example.com|recurring|0|true|true' \
   "restored queue state"
+
+restored_discovery_state="$(
+  docker exec \
+    "$restore_container" \
+    psql \
+    --username "$restore_user" \
+    --dbname "$restore_database" \
+    --no-align \
+    --tuples-only \
+    --quiet \
+    --command="
+      SELECT
+        discovery_source_state.source_origin
+        || '|'
+        || discovery_candidates.origin
+        || '|'
+        || discovery_edges.kind
+      FROM discovery_source_state
+      JOIN discovery_edges
+        ON discovery_edges.source_origin =
+          discovery_source_state.source_origin
+      JOIN discovery_candidates
+        ON discovery_candidates.origin =
+          discovery_edges.candidate_origin;
+    "
+)"
+
+assert_equal \
+  "$restored_discovery_state" \
+  'https://example.com|https://candidate.example|link' \
+  "restored discovery state"
 
 restored_migration_count="$(
   docker exec \
@@ -1253,10 +1458,10 @@ restored_migration_count="$(
 
 assert_equal \
   "$restored_migration_count" \
-  "2" \
+  "3" \
   "restored migration count"
 
-pass "known observation, effective state, queue state, and migration metadata survived restore"
+pass "known observation, discovery provenance, queue modes, and migration metadata survived restore"
 
 docker run \
   --rm \

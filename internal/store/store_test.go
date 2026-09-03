@@ -21,7 +21,7 @@ func TestStoreRecordsValidAffirmedVerification(
 ) {
 	ctx := context.Background()
 	pool := newStoreTestPool(t)
-	store := New(pool)
+	memory := New(pool)
 
 	source := mustStoreOrigin(t, "https://example.com")
 	observedAt := time.Date(
@@ -43,7 +43,7 @@ func TestStoreRecordsValidAffirmedVerification(
 		},
 	}
 
-	if err := store.RecordVerification(
+	if err := memory.RecordVerification(
 		ctx,
 		observedAt,
 		result,
@@ -54,9 +54,12 @@ func TestStoreRecordsValidAffirmedVerification(
 		)
 	}
 
-	got, found, err := store.OriginState(ctx, source)
+	got, found, err := memory.OriginState(ctx, source)
 	if err != nil {
-		t.Fatalf("OriginState() error = %v, want nil", err)
+		t.Fatalf(
+			"OriginState() error = %v, want nil",
+			err,
+		)
 	}
 
 	if !found {
@@ -79,17 +82,19 @@ func TestStoreRecordsValidAffirmedVerification(
 		)
 	}
 
+	wantObservation := Observation{
+		Outcome:    declaration.OutcomeValid,
+		ObservedAt: observedAt,
+		Declaration: declaration.Declaration{
+			Version:  1,
+			Identity: declaration.IdentityAffirmed,
+		},
+	}
+
 	assertStoreObservation(
 		t,
 		got.Latest,
-		Observation{
-			Outcome:    declaration.OutcomeValid,
-			ObservedAt: observedAt,
-			Declaration: declaration.Declaration{
-				Version:  1,
-				Identity: declaration.IdentityAffirmed,
-			},
-		},
+		wantObservation,
 	)
 
 	if got.Effective.State != StateVerified {
@@ -102,14 +107,7 @@ func TestStoreRecordsValidAffirmedVerification(
 	assertStoreObservation(
 		t,
 		got.Effective.Observation,
-		Observation{
-			Outcome:    declaration.OutcomeValid,
-			ObservedAt: observedAt,
-			Declaration: declaration.Declaration{
-				Version:  1,
-				Identity: declaration.IdentityAffirmed,
-			},
-		},
+		wantObservation,
 	)
 
 	var (
@@ -162,9 +160,8 @@ func TestStoreRecordsValidAffirmedVerification(
 
 	if storedOutcome != "valid" {
 		t.Errorf(
-			"stored outcome = %q, want %q",
+			"stored outcome = %q, want valid",
 			storedOutcome,
-			"valid",
 		)
 	}
 
@@ -177,9 +174,8 @@ func TestStoreRecordsValidAffirmedVerification(
 
 	if storedIdentity != "affirmed" {
 		t.Errorf(
-			"stored identity = %q, want %q",
+			"stored identity = %q, want affirmed",
 			storedIdentity,
-			"affirmed",
 		)
 	}
 }
@@ -187,7 +183,9 @@ func TestStoreRecordsValidAffirmedVerification(
 func newStoreTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
-	databaseURL := os.Getenv("JOSHBOT_TEST_DATABASE_URL")
+	databaseURL := os.Getenv(
+		"JOSHBOT_TEST_DATABASE_URL",
+	)
 	if databaseURL == "" {
 		if os.Getenv(
 			"JOSHBOT_REQUIRE_DATABASE_TESTS",
@@ -202,9 +200,13 @@ func newStoreTestPool(t *testing.T) *pgxpool.Pool {
 		)
 	}
 
-	adminConfig, err := pgxpool.ParseConfig(databaseURL)
+	adminConfig, err := pgxpool.ParseConfig(
+		databaseURL,
+	)
 	if err != nil {
-		t.Fatal("invalid test database configuration")
+		t.Fatal(
+			"invalid test database configuration",
+		)
 	}
 
 	adminPool, err := pgxpool.NewWithConfig(
@@ -212,18 +214,27 @@ func newStoreTestPool(t *testing.T) *pgxpool.Pool {
 		adminConfig,
 	)
 	if err != nil {
-		t.Fatal("cannot create test database pool")
+		t.Fatal(
+			"cannot create test database pool",
+		)
 	}
 	t.Cleanup(adminPool.Close)
 
-	if err := adminPool.Ping(context.Background()); err != nil {
-		t.Fatal("cannot reach configured test database")
+	if err := adminPool.Ping(
+		context.Background(),
+	); err != nil {
+		t.Fatal(
+			"cannot reach configured test database",
+		)
 	}
 
 	schema := fmt.Sprintf(
 		"store_test_%d_%d",
 		os.Getpid(),
-		atomic.AddUint64(&storeSchemaSequence, 1),
+		atomic.AddUint64(
+			&storeSchemaSequence,
+			1,
+		),
 	)
 	_, err = adminPool.Exec(
 		context.Background(),
@@ -231,36 +242,46 @@ func newStoreTestPool(t *testing.T) *pgxpool.Pool {
 			pgx.Identifier{schema}.Sanitize(),
 	)
 	if err != nil {
-		t.Fatalf("create isolated test schema: %v", err)
+		t.Fatalf(
+			"create isolated test schema: %v",
+			err,
+		)
 	}
 
-	testConfig, err := pgxpool.ParseConfig(databaseURL)
+	testConfig, err := pgxpool.ParseConfig(
+		databaseURL,
+	)
 	if err != nil {
-		t.Fatal("invalid test database configuration")
+		t.Fatal(
+			"invalid test database configuration",
+		)
 	}
-	testConfig.ConnConfig.RuntimeParams["search_path"] = schema
+	testConfig.ConnConfig.RuntimeParams["search_path"] =
+		schema
 
 	testPool, err := pgxpool.NewWithConfig(
 		context.Background(),
 		testConfig,
 	)
 	if err != nil {
-		t.Fatal("cannot create isolated test database pool")
+		t.Fatal(
+			"cannot create isolated test database pool",
+		)
 	}
 
 	t.Cleanup(func() {
 		testPool.Close()
 
-		_, cleanupError := adminPool.Exec(
+		_, cleanupErr := adminPool.Exec(
 			context.Background(),
 			"DROP SCHEMA "+
 				pgx.Identifier{schema}.Sanitize()+
 				" CASCADE",
 		)
-		if cleanupError != nil {
+		if cleanupErr != nil {
 			t.Errorf(
 				"drop isolated test schema: %v",
-				cleanupError,
+				cleanupErr,
 			)
 		}
 	})
@@ -268,10 +289,13 @@ func newStoreTestPool(t *testing.T) *pgxpool.Pool {
 	migrationFiles := []string{
 		"migrations/0001_initial.sql",
 		"migrations/0002_verification_queue.sql",
+		"migrations/0003_discovery.sql",
 	}
 
 	for _, migrationFile := range migrationFiles {
-		migration, readErr := os.ReadFile(migrationFile)
+		migration, readErr := os.ReadFile(
+			migrationFile,
+		)
 		if readErr != nil {
 			t.Fatalf(
 				"read migration %q: %v",
@@ -305,7 +329,11 @@ func mustStoreOrigin(
 
 	got, err := origin.Parse(rawURL)
 	if err != nil {
-		t.Fatalf("origin.Parse(%q) error = %v", rawURL, err)
+		t.Fatalf(
+			"origin.Parse(%q) error = %v",
+			rawURL,
+			err,
+		)
 	}
 
 	return got
