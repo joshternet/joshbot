@@ -239,9 +239,9 @@ func TestMigrateSerializesConcurrentInvocations(
 		t.Fatalf("count migration records: %v", err)
 	}
 
-	if count != 2 {
+	if count != 3 {
 		t.Errorf(
-			"migration record count = %d, want 2",
+			"migration record count = %d, want 3",
 			count,
 		)
 	}

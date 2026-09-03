@@ -22,16 +22,18 @@ Usage:
   joshbot migrate
   joshbot schedule <origin>
   joshbot worker
+  joshbot discover [--once]
   joshbot export --output <directory>
   joshbot help
 
 Commands:
-  health    Check PostgreSQL connectivity
-  migrate   Apply pending database migrations
-  schedule  Schedule an origin for verification
-  worker    Process queued verification work
-  export    Write a deterministic public registry snapshot
-  help      Show this help
+  health     Check PostgreSQL connectivity
+  migrate    Apply pending database migrations
+  schedule   Schedule an origin for recurring verification
+  worker     Process queued verification work
+  discover   Discover candidates from verified homepages
+  export     Write a deterministic public registry snapshot
+  help       Show this help
 `
 
 var errOperationsUnavailable = errors.New(
@@ -43,6 +45,7 @@ type commandOperations interface {
 	migrate(context.Context) error
 	schedule(context.Context, origin.Origin) error
 	worker(context.Context) error
+	discover(context.Context, bool) error
 	export(context.Context, string) error
 }
 
@@ -190,6 +193,41 @@ func runWithOperations(
 				stderr,
 				command,
 				err,
+			)
+		}
+
+		return exitSuccess
+
+	case "discover":
+		once := false
+
+		switch {
+		case len(commandArgs) == 0:
+		case len(commandArgs) == 1 &&
+			commandArgs[0] == "--once":
+			once = true
+		default:
+			return reportUsage(
+				stderr,
+				"discover accepts only the optional --once flag",
+			)
+		}
+
+		if err := operations.discover(
+			ctx,
+			once,
+		); err != nil {
+			return reportCommandFailure(
+				stderr,
+				command,
+				err,
+			)
+		}
+
+		if once {
+			_, _ = fmt.Fprintln(
+				stdout,
+				"discovery attempt complete",
 			)
 		}
 

@@ -2,7 +2,7 @@
 
 This is the reference deployment I use for JoshBot.
 
-I keep PostgreSQL, migrations, workers, operator tools, and backups seperate on purpose. Each service only gets the network access, credentials, and storage it actually needs.
+I keep PostgreSQL, migrations, verification workers, discovery, operator tools, and backups seperate on purpose. Each service only gets the network access, credentials, and storage it actually needs.
 
 This is still a reference setup. Before putting it on a real host, I need to review the actual host paths, firewall backend, Docker versions, and NAS mount instead of guessing.
 
@@ -14,6 +14,8 @@ A verification request may physically happen more than once after a crash or exp
 
 Successful completion records the observation, releases the lease, and schedules the next verification in one PostgreSQL transaction.
 
+Manually scheduled work is recurring. Discovery work starts as a one-shot probe. A valid declaration promotes the probe to recurring work. Every non-valid probe records its observation and then leaves the queue in the same transaction.
+
 JoshBot does not promise exactly-once network requests.
 
 ## Services
@@ -23,10 +25,11 @@ The Compose deployment includes:
 - `postgres`: persistent PostgreSQL 18.6 database;
 - `migrate`: one-shot schema migration service;
 - `worker`: long-running verification worker;
+- `discovery`: long-running verified-homepage discovery service;
 - `tools`: operator commands for health, scheduling, and exports;
 - `backup`: logical PostgreSQL backup utility.
 
-Only the worker is connected to the egress network.
+Only the worker and discovery services are connected to the egress network.
 
 PostgreSQL, migrations, tools, and backups only use the internal database network. PostgreSQL does not publish port 5432 to the host.
 
@@ -196,6 +199,16 @@ JOSHBOT_JOB_TIMEOUT + JOSHBOT_COMPLETION_GRACE
 
 A worker needs enough lease time left to commit its result after verification finishes.
 
+Review the discovery timing values too:
+
+```text
+JOSHBOT_DISCOVERY_INTERVAL > 0
+JOSHBOT_DISCOVERY_POLL_INTERVAL > 0
+JOSHBOT_DISCOVERY_PAGE_TIMEOUT > 0
+```
+
+The reference discovery interval is `168h`. Go durations do not accept `7d`.
+
 ## Create secrets
 
 Generate four different passwords:
@@ -287,6 +300,7 @@ docker compose \
   --pull \
   migrate \
   worker \
+  discovery \
   tools
 ```
 
@@ -316,7 +330,7 @@ docker compose \
   --wait
 ```
 
-This starts PostgreSQL, waits for it to become healthy, runs migrations, and starts the worker after migration completes succesfully.
+This starts PostgreSQL, waits for it to become healthy, runs migrations, and starts the worker and discovery services after migration completes succesfully.
 
 Check the service state:
 
@@ -327,7 +341,7 @@ docker compose \
   --all
 ```
 
-The migration container should exit with code zero. PostgreSQL and the worker should be healthy.
+The migration container should exit with code zero. PostgreSQL, the worker, and discovery should be healthy.
 
 ## Migration behavior
 
@@ -405,6 +419,8 @@ https://example.com
 
 Scheduling an origin does not create a verification observation by itself.
 
+Manual scheduling always means recurring verification. If the origin already has an active discovery probe lease, scheduling promotes it to recurring without invalidating that lease.
+
 ## Worker operation
 
 The worker:
@@ -439,6 +455,56 @@ docker compose \
   worker
 ```
 
+## Discovery operation
+
+Discovery starts only from origins whose current effective authoritative declaration is valid. Undeclared, affirmed, and declined identities are all valid participants and are equally eligible discovery sources.
+
+A discovery attempt fetches only the canonical homepage `/`, plus at most five same-origin redirects needed to reach that homepage representation. Every request goes through the existing robots checker and network guard. Same-origin links are ignored and never crawled. A cross-origin homepage redirect is not followed; its canonical origin becomes one redirect candidate instead.
+
+A hyperlink is not proof of Joshness, participation, trust, ownership, or endorsement. Discovery only says that an origin may be worth independently probing.
+
+The static HTML parser:
+
+- executes no JavaScript, CSS, or remote resources;
+- accepts HTML and XHTML responses;
+- reads at most 1 MiB of response bytes;
+- permits at most 2 MiB after character-set conversion;
+- keeps the first 64 unique external origins encountered;
+- returns those origins in canonical sorted order;
+- honors the first document `<base href>`;
+- extracts only `<a href>` and `<area href>` destinations.
+
+JoshBot stores only the canonical source origin, canonical candidate origin, discovery kind, and first/last discovery timestamps. It does not store raw hrefs, page paths, anchor text, HTML, headers, addresses, DNS answers, or TLS details. Each source can retain at most 1024 distinct historical candidate origins.
+
+Discovery creates a `probe` queue row only when the candidate has no queue row. It never changes an existing probe and never demotes recurring work. A valid probe becomes recurring. A non-valid probe records the observation and is removed until a later permitted discovery sees the candidate again.
+
+Candidate provenance, discovery timing, and queue mode stay private. None of those fields enter the public registry. A candidate appears publicly only after its own declaration independently verifies as valid.
+
+View discovery logs:
+
+```bash
+docker compose \
+  --env-file deploy/.env \
+  logs \
+  --follow \
+  discovery
+```
+
+Run at most one due discovery source and exit:
+
+```bash
+docker compose \
+  --env-file deploy/.env \
+  run \
+  --rm \
+  --no-deps \
+  discovery \
+  discover \
+  --once
+```
+
+If no verified source is due, this succeeds without making a network request.
+
 ## Export the public registry
 
 The export destination must not already exist.
@@ -461,7 +527,7 @@ docker compose \
 
 The snapshot appears below the configured host export directory.
 
-The worker cannot access this mount.
+The worker and discovery services cannot access this mount.
 
 ## Create a manual backup
 
@@ -492,7 +558,7 @@ The backup service:
 
 The backup does not copy live PostgreSQL data.
 
-The worker, tools, and PostgreSQL services do not have access to the backup directory.
+The worker, discovery, tools, and PostgreSQL services do not have access to the backup directory.
 
 ## Validate a backup archive
 
@@ -537,17 +603,19 @@ The smoke test:
 - creates unique disposable directories and secrets;
 - uses a unique Compose project;
 - initializes PostgreSQL 18.6;
-- applies migrations;
+- applies migrations through discovery migration 0003;
 - verifies least-privilege roles;
+- runs one-shot discovery with no verified source, so no public request occurs;
 - schedules a fake origin without crawling it;
-- creates known observations and queue state;
+- creates known observations, private provenance, and probe/recurring queue state;
 - exports deterministic registry data;
+- proves private discovery state leaves the public export byte-identical;
 - creates and validates a logical backup;
 - starts a seperate internal-only PostgreSQL restore instance;
 - restores the backup transactionally;
 - reruns current migrations;
 - verifies application connectivity;
-- verifies observations, effective state, queue rows, and migration metadata;
+- verifies observations, effective state, private provenance, queue modes, and migration metadata;
 - rebuilds byte-identical public registry files;
 - removes its containers, networks, image, database, exports, backups, and secrets.
 
@@ -591,23 +659,23 @@ docker inspect CONTAINER_ID
 Confirm:
 
 - JoshBot services run as UID/GID `65532:65532`;
-- worker, migration, and tools root filesystems are read-only;
+- worker, discovery, migration, and tools root filesystems are read-only;
 - configured services drop all Linux capabilities;
 - `no-new-privileges` is enabled;
 - no service is privileged;
 - no service uses host networking;
 - no service mounts `/var/run/docker.sock`;
-- only the worker is connected to egress;
+- only the worker and discovery services are connected to egress;
 - only tools receives the export mount;
 - only backup receives the backup mount;
 - PostgreSQL does not publish a host port;
-- worker has no export, backup, or PostgreSQL data mount.
+- worker and discovery have no export, backup, or PostgreSQL data mount.
 
 The deployment smoke test checks these properties against the actual containers instead of only trusting the YAML.
 
 ## Host firewall review
 
-JoshBot still uses its network guard inside the worker. The host firewall should provide a second boundary against private, LAN, management, metadata, and other special-purpose destinations.
+JoshBot still uses its network guard inside the worker and discovery service. The host firewall should provide a second boundary against private, LAN, management, metadata, and other special-purpose destinations.
 
 Do not apply firewall rules until the actual Docker firewall backend and host network layout are known.
 
@@ -627,7 +695,7 @@ sudo iptables-save
 Review:
 
 - whether Docker uses iptables or nftables;
-- the worker egress bridge;
+- the worker and discovery egress bridge;
 - Docker DNS requirements;
 - host LAN networks;
 - host management networks;
@@ -641,13 +709,14 @@ Firewall changes require their own human review.
 
 ## Graceful shutdown
 
-Stop the worker first:
+Stop the worker and discovery services first:
 
 ```bash
 docker compose \
   --env-file deploy/.env \
   stop \
-  worker
+  worker \
+  discovery
 ```
 
 SIGTERM cancels current bounded work. If a job has not completed, its lease remains in PostgreSQL and becomes recoverable after it expires.
@@ -683,6 +752,7 @@ docker compose \
   --pull \
   migrate \
   worker \
+  discovery \
   tools
 ```
 
@@ -697,7 +767,7 @@ docker compose \
   migrate
 ```
 
-Recreate the worker:
+Recreate the worker and discovery services:
 
 ```bash
 docker compose \
@@ -705,7 +775,8 @@ docker compose \
   up \
   --detach \
   --no-deps \
-  worker
+  worker \
+  discovery
 ```
 
 Check health and logs before calling the upgrade complete.
@@ -718,7 +789,7 @@ Do not assume an older application image is still compatible after a migration.
 
 If an application rollback is unsafe:
 
-- stop the worker;
+- stop the worker and discovery services;
 - preserve the failed deployment state;
 - select a validated pre-upgrade backup;
 - restore into a fresh PostgreSQL instance;
@@ -787,11 +858,17 @@ JOSHBOT_REQUIRE_DATABASE_TESTS=1 \
 go test \
   -count=10 \
   -race \
-  -coverprofile=/tmp/joshbot-phase8-final-coverage.out \
+  -coverprofile=/tmp/joshbot-phase9-final-coverage.out \
   ./...
 
 go tool cover \
-  -func=/tmp/joshbot-phase8-final-coverage.out
+  -func=/tmp/joshbot-phase9-final-coverage.out
+
+go test \
+  ./internal/discovery \
+  -run '^$' \
+  -fuzz '^FuzzExtract$' \
+  -fuzztime=10s
 
 go vet ./...
 go mod tidy -diff

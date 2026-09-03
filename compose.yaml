@@ -1,5 +1,5 @@
 x-joshbot-image: &joshbot-image
-  image: ${JOSHBOT_IMAGE:-joshbot:phase8}
+  image: ${JOSHBOT_IMAGE:-joshbot:phase9}
   pull_policy: never
   build:
     context: .
@@ -105,6 +105,44 @@ services:
       retries: 3
       start_period: 10s
 
+  discovery:
+    <<: *joshbot-image
+    command:
+      - discover
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      JOSHBOT_DATABASE_URL: postgres://joshbot_app@postgres:5432/joshbot?sslmode=disable
+      JOSHBOT_DATABASE_PASSWORD_FILE: /run/secrets/joshbot_app_password
+      JOSHBOT_DISCOVERY_INTERVAL: ${JOSHBOT_DISCOVERY_INTERVAL:-168h}
+      JOSHBOT_DISCOVERY_POLL_INTERVAL: ${JOSHBOT_DISCOVERY_POLL_INTERVAL:-30s}
+      JOSHBOT_DISCOVERY_PAGE_TIMEOUT: ${JOSHBOT_DISCOVERY_PAGE_TIMEOUT:-30s}
+    secrets:
+      - joshbot_app_password
+    networks:
+      - database
+      - egress
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - /joshbot
+        - health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
   tools:
     <<: *joshbot-image
     profiles:
@@ -122,6 +160,9 @@ services:
       JOSHBOT_DATABASE_PASSWORD_FILE: /run/secrets/joshbot_app_password
       JOSHBOT_LEASE_DURATION: ${JOSHBOT_LEASE_DURATION:-5m}
       JOSHBOT_MIN_ORIGIN_INTERVAL: ${JOSHBOT_MIN_ORIGIN_INTERVAL:-1m}
+      JOSHBOT_DISCOVERY_INTERVAL: ${JOSHBOT_DISCOVERY_INTERVAL:-168h}
+      JOSHBOT_DISCOVERY_POLL_INTERVAL: ${JOSHBOT_DISCOVERY_POLL_INTERVAL:-30s}
+      JOSHBOT_DISCOVERY_PAGE_TIMEOUT: ${JOSHBOT_DISCOVERY_PAGE_TIMEOUT:-30s}
     secrets:
       - joshbot_app_password
     volumes:

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/declaration"
+	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/store"
 )
@@ -28,6 +29,10 @@ func TestStoreProjectionHasSemanticStabilityAndNoQueueLeakage(
 	source := mustPublicDataOrigin(
 		t,
 		"https://example.com",
+	)
+	candidate := mustPublicDataOrigin(
+		t,
+		"https://example.net",
 	)
 
 	t1 := time.Date(
@@ -114,54 +119,59 @@ func TestStoreProjectionHasSemanticStabilityAndNoQueueLeakage(
 		)
 	}
 
-	queue, err := store.NewQueue(
-		pool,
-		store.QueueConfig{
-			LeaseDuration:     10 * time.Minute,
-			MinOriginInterval: time.Nanosecond,
-		},
+	_, err := pool.Exec(
+		ctx,
+		`
+			INSERT INTO discovery_source_state (
+				source_origin,
+				last_attempted_at
+			)
+			VALUES ($1, $3);
+
+			INSERT INTO discovery_candidates (
+				origin,
+				first_discovered_at,
+				last_discovered_at
+			)
+			VALUES ($2, $3, $3);
+
+			INSERT INTO discovery_edges (
+				source_origin,
+				candidate_origin,
+				kind,
+				first_discovered_at,
+				last_discovered_at
+			)
+			VALUES ($1, $2, 'link', $3, $3);
+
+			INSERT INTO verification_queue (
+				origin,
+				available_at,
+				mode
+			)
+			VALUES ($2, $3, 'probe');
+		`,
+		pgx.QueryExecModeSimpleProtocol,
+		source.String(),
+		candidate.String(),
+		t4,
 	)
 	if err != nil {
-		t.Fatalf("NewQueue() error = %v, want nil", err)
-	}
-
-	if err := queue.Schedule(
-		ctx,
-		source,
-		t1,
-	); err != nil {
-		t.Fatalf("Schedule() error = %v, want nil", err)
-	}
-
-	lease, found, err := queue.Claim(
-		ctx,
-		"private-worker-7",
-	)
-	if err != nil {
-		t.Fatalf("Claim() error = %v, want nil", err)
-	}
-
-	if !found {
-		t.Fatal("Claim() found = false, want true")
-	}
-
-	if lease.WorkerID != "private-worker-7" {
-		t.Errorf(
-			"lease worker = %q, want %q",
-			lease.WorkerID,
-			"private-worker-7",
+		t.Fatalf(
+			"seed private discovery state: %v",
+			err,
 		)
 	}
 
 	snapshotE := buildStoreSnapshot(t, memory)
 	if !reflect.DeepEqual(snapshotD, snapshotE) {
 		t.Error(
-			"queue scheduling and claim changed public snapshot",
+			"private discovery state changed public snapshot",
 		)
 	}
 
 	forbidden := []string{
-		"private-worker-7",
+		candidate.String(),
 		"unavailable",
 		"robots_denied",
 		"lease_generation",
@@ -170,6 +180,12 @@ func TestStoreProjectionHasSemanticStabilityAndNoQueueLeakage(
 		"available_at",
 		"observed_at",
 		"first_observed_at",
+		"last_attempted_at",
+		"mode",
+		"probe",
+		"discovery",
+		"candidate",
+		"edge",
 	}
 
 	for _, file := range snapshotE {
@@ -215,6 +231,261 @@ func TestStoreProjectionHasSemanticStabilityAndNoQueueLeakage(
 	}
 }
 
+func TestDiscoveredCandidateBecomesPublicOnlyAfterValidProbe(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newPublicDataTestPool(t)
+	memory := store.New(pool)
+	source := mustPublicDataOrigin(
+		t,
+		"https://example.com",
+	)
+	candidate := mustPublicDataOrigin(
+		t,
+		"https://candidate.example",
+	)
+
+	recordPublicDataResult(
+		t,
+		memory,
+		time.Date(
+			2026,
+			time.September,
+			1,
+			12,
+			0,
+			0,
+			0,
+			time.UTC,
+		),
+		validPublicDataResult(
+			source,
+			declaration.IdentityAffirmed,
+		),
+	)
+	baseline := buildStoreSnapshot(t, memory)
+
+	discoveryStore, err := store.NewDiscoveryStore(pool)
+	if err != nil {
+		t.Fatalf(
+			"NewDiscoveryStore() error = %v, want nil",
+			err,
+		)
+	}
+
+	queue, err := store.NewQueue(
+		pool,
+		store.QueueConfig{
+			LeaseDuration:     10 * time.Minute,
+			MinOriginInterval: time.Minute,
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"NewQueue() error = %v, want nil",
+			err,
+		)
+	}
+
+	recordCandidate := func() {
+		t.Helper()
+
+		result, recordErr := discoveryStore.RecordDiscovery(
+			ctx,
+			source,
+			[]discovery.Candidate{
+				{
+					Origin: candidate,
+					Kind:   discovery.KindLink,
+				},
+			},
+		)
+		if recordErr != nil {
+			t.Fatalf(
+				"RecordDiscovery() error = %v, want nil",
+				recordErr,
+			)
+		}
+
+		want := discovery.RecordResult{Accepted: 1}
+		if result != want {
+			t.Errorf(
+				"RecordDiscovery() result = %#v, want %#v",
+				result,
+				want,
+			)
+		}
+	}
+
+	claimCandidate := func(workerID string) store.Lease {
+		t.Helper()
+
+		lease, found, claimErr := queue.Claim(
+			ctx,
+			workerID,
+		)
+		if claimErr != nil {
+			t.Fatalf(
+				"Claim() error = %v, want nil",
+				claimErr,
+			)
+		}
+
+		if !found {
+			t.Fatal("Claim() found = false, want true")
+		}
+
+		if lease.Origin != candidate {
+			t.Fatalf(
+				"Claim() origin = %q, want %q",
+				lease.Origin,
+				candidate,
+			)
+		}
+
+		return lease
+	}
+
+	recordCandidate()
+	assertPublicDataQueueMode(
+		t,
+		pool,
+		candidate,
+		"probe",
+	)
+	if got := buildStoreSnapshot(t, memory); !reflect.DeepEqual(
+		got,
+		baseline,
+	) {
+		t.Error("unverified candidate changed public snapshot")
+	}
+
+	absentLease := claimCandidate("candidate-probe-absent")
+	err = queue.CompleteVerification(
+		ctx,
+		absentLease,
+		declaration.Result{
+			Outcome: declaration.OutcomeAbsent,
+			Origin:  candidate,
+		},
+		24*time.Hour,
+	)
+	if err != nil {
+		t.Fatalf(
+			"absent CompleteVerification() error = %v, want nil",
+			err,
+		)
+	}
+
+	var queueCount int
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT count(*)
+			FROM verification_queue
+			WHERE origin = $1
+		`,
+		candidate.String(),
+	).Scan(&queueCount)
+	if err != nil {
+		t.Fatalf("count completed probe queue rows: %v", err)
+	}
+
+	if queueCount != 0 {
+		t.Errorf(
+			"completed absent probe queue rows = %d, want 0",
+			queueCount,
+		)
+	}
+
+	if got := buildStoreSnapshot(t, memory); !reflect.DeepEqual(
+		got,
+		baseline,
+	) {
+		t.Error("absent candidate changed public snapshot")
+	}
+
+	recordCandidate()
+	validLease := claimCandidate("candidate-probe-valid")
+	err = queue.CompleteVerification(
+		ctx,
+		validLease,
+		validPublicDataResult(
+			candidate,
+			declaration.IdentityUndeclared,
+		),
+		24*time.Hour,
+	)
+	if err != nil {
+		t.Fatalf(
+			"valid CompleteVerification() error = %v, want nil",
+			err,
+		)
+	}
+
+	assertPublicDataQueueMode(
+		t,
+		pool,
+		candidate,
+		"recurring",
+	)
+
+	publicSnapshot := buildStoreSnapshot(t, memory)
+	if reflect.DeepEqual(publicSnapshot, baseline) {
+		t.Fatal("valid candidate did not change public snapshot")
+	}
+
+	foundCandidate := false
+	for _, file := range publicSnapshot {
+		if strings.Contains(
+			string(file.Data),
+			candidate.String(),
+		) {
+			foundCandidate = true
+			break
+		}
+	}
+
+	if !foundCandidate {
+		t.Errorf(
+			"public snapshot does not contain valid candidate %q",
+			candidate,
+		)
+	}
+}
+
+func assertPublicDataQueueMode(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	source origin.Origin,
+	want string,
+) {
+	t.Helper()
+
+	var got string
+	err := pool.QueryRow(
+		context.Background(),
+		`
+			SELECT mode
+			FROM verification_queue
+			WHERE origin = $1
+		`,
+		source.String(),
+	).Scan(&got)
+	if err != nil {
+		t.Fatalf("read queue mode: %v", err)
+	}
+
+	if got != want {
+		t.Errorf(
+			"queue mode = %q, want %q",
+			got,
+			want,
+		)
+	}
+}
+
 func newPublicDataTestPool(
 	t *testing.T,
 ) *pgxpool.Pool {
@@ -237,7 +508,9 @@ func newPublicDataTestPool(
 		)
 	}
 
-	adminConfig, err := pgxpool.ParseConfig(databaseURL)
+	adminConfig, err := pgxpool.ParseConfig(
+		databaseURL,
+	)
 	if err != nil {
 		t.Fatal(
 			"invalid test database configuration",
@@ -283,7 +556,9 @@ func newPublicDataTestPool(
 		)
 	}
 
-	testConfig, err := pgxpool.ParseConfig(databaseURL)
+	testConfig, err := pgxpool.ParseConfig(
+		databaseURL,
+	)
 	if err != nil {
 		t.Fatal(
 			"invalid test database configuration",
@@ -305,16 +580,16 @@ func newPublicDataTestPool(
 	t.Cleanup(func() {
 		testPool.Close()
 
-		_, cleanupError := adminPool.Exec(
+		_, cleanupErr := adminPool.Exec(
 			context.Background(),
 			"DROP SCHEMA "+
 				pgx.Identifier{schema}.Sanitize()+
 				" CASCADE",
 		)
-		if cleanupError != nil {
+		if cleanupErr != nil {
 			t.Errorf(
 				"drop isolated test schema: %v",
-				cleanupError,
+				cleanupErr,
 			)
 		}
 	})
@@ -322,6 +597,7 @@ func newPublicDataTestPool(
 	migrationFiles := []string{
 		"../store/migrations/0001_initial.sql",
 		"../store/migrations/0002_verification_queue.sql",
+		"../store/migrations/0003_discovery.sql",
 	}
 
 	for _, migrationFile := range migrationFiles {
@@ -439,7 +715,10 @@ func publicDataNodePath(
 	t.Helper()
 
 	for _, file := range files {
-		if strings.HasPrefix(file.Path, "nodes/") {
+		if strings.HasPrefix(
+			file.Path,
+			"nodes/",
+		) {
 			return file.Path
 		}
 	}
