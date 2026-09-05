@@ -909,6 +909,7 @@ archive_mode="$(
     --cap-drop ALL \
     --security-opt no-new-privileges:true \
     --tmpfs '/var/lib/postgresql:ro,size=1048576,mode=0555' \
+    --user postgres \
     --mount "type=bind,source=$archive_path,target=/archive.dump,readonly" \
     --entrypoint /usr/bin/stat \
     "$POSTGRES_IMAGE" \
@@ -1273,6 +1274,7 @@ docker run \
   --env "PGUSER=$restore_user" \
   --env 'PGPASSWORD_FILE=/run/secrets/joshbot_restore_password' \
   --mount "type=bind,source=$restore_password_file,target=/run/secrets/joshbot_restore_password,readonly" \
+  --user postgres \
   --mount "type=bind,source=$archive_path,target=/restore/joshbot.dump,readonly" \
   --entrypoint /bin/sh \
   "$POSTGRES_IMAGE" \
