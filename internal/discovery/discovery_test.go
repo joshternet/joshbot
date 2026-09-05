@@ -651,9 +651,6 @@ func TestExtractHyperlinkSemantics(t *testing.T) {
 		)
 	}
 
-	if result.Truncated {
-		t.Error("Truncated = true, want false")
-	}
 }
 
 func TestExtractUsesFirstDocumentBase(t *testing.T) {
@@ -929,7 +926,7 @@ func TestExtractReturnsUnavailableForDecoderFailure(
 	}
 }
 
-func TestExtractEnforcesBodyAndCandidateLimits(
+func TestExtractEnforcesBodyLimitWithoutCandidateTruncation(
 	t *testing.T,
 ) {
 	source := mustDiscoveryOrigin(t, "https://example.com")
@@ -980,11 +977,13 @@ func TestExtractEnforcesBodyAndCandidateLimits(
 		)
 	}
 
+	const candidateCount = 2083
+
 	var builder strings.Builder
-	for index := MaxCandidates + 1; index >= 0; index-- {
+	for index := candidateCount - 1; index >= 0; index-- {
 		fmt.Fprintf(
 			&builder,
-			`<a href="https://candidate-%03d.example/path">site</a>`,
+			`<a href="https://candidate-%04d.example/path">site</a>`,
 			index,
 		)
 	}
@@ -996,38 +995,33 @@ func TestExtractEnforcesBodyAndCandidateLimits(
 		[]byte(builder.String()),
 	)
 	if err != nil {
-		t.Fatalf("candidate-limit Extract() error = %v", err)
+		t.Fatalf("uncapped Extract() error = %v", err)
 	}
 
-	if !result.Truncated {
-		t.Error("Truncated = false, want true")
-	}
-
-	if len(result.Candidates) != MaxCandidates {
+	if len(result.Candidates) != candidateCount {
 		t.Errorf(
 			"candidate count = %d, want %d",
 			len(result.Candidates),
-			MaxCandidates,
+			candidateCount,
 		)
 	}
 
-	wantOrigins := make([]string, 0, MaxCandidates)
-	for index := 2; index <= MaxCandidates+1; index++ {
+	wantOrigins := make([]string, 0, candidateCount)
+	for index := 0; index < candidateCount; index++ {
 		wantOrigins = append(
 			wantOrigins,
 			fmt.Sprintf(
-				"https://candidate-%03d.example",
+				"https://candidate-%04d.example",
 				index,
 			),
 		)
 	}
-	sort.Strings(wantOrigins)
 
 	if got := candidateOriginStrings(
 		result.Candidates,
 	); !reflect.DeepEqual(got, wantOrigins) {
 		t.Errorf(
-			"limited origins = %#v, want %#v",
+			"candidate origins = %#v, want %#v",
 			got,
 			wantOrigins,
 		)
@@ -1282,7 +1276,6 @@ func TestRunnerProcessesOneSource(t *testing.T) {
 				Source:     source,
 				Status:     StatusComplete,
 				Candidates: candidates,
-				Truncated:  true,
 			}, nil
 		},
 	)
@@ -1314,7 +1307,6 @@ func TestRunnerProcessesOneSource(t *testing.T) {
 		Status:     StatusComplete,
 		Candidates: 1,
 		Accepted:   1,
-		Truncated:  true,
 	}
 	if report != want {
 		t.Errorf("report = %#v, want %#v", report, want)

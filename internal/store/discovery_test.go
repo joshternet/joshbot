@@ -982,8 +982,7 @@ func TestRecordDiscoveryPreservesFirstAndUpdatesLast(
 			)
 		}
 
-		if result.Accepted != 1 ||
-			result.Dropped != 0 {
+		if result.Accepted != 1 {
 			t.Errorf(
 				"attempt %d result = %#v",
 				attempt,
@@ -1177,8 +1176,7 @@ func TestRecordDiscoveryLeavesExistingQueueUntouched(
 				)
 			}
 
-			if result.Accepted != 1 ||
-				result.Dropped != 0 {
+			if result.Accepted != 1 {
 				t.Errorf(
 					"RecordDiscovery() result = %#v",
 					result,
@@ -1203,9 +1201,11 @@ func TestRecordDiscoveryLeavesExistingQueueUntouched(
 	}
 }
 
-func TestRecordDiscoveryEnforcesHistoricalCap(
+func TestRecordDiscoveryDoesNotEnforceHistoricalCap(
 	t *testing.T,
 ) {
+	const historicalCandidateCount = 1024
+
 	t.Run("existing relationship updates at cap", func(t *testing.T) {
 		ctx := context.Background()
 		pool := newStoreTestPool(t)
@@ -1220,7 +1220,7 @@ func TestRecordDiscoveryEnforcesHistoricalCap(
 			t,
 			pool,
 			source,
-			maxDiscoveryCandidatesPerSource,
+			historicalCandidateCount,
 			now.Add(-time.Hour),
 		)
 		newCandidate := mustStoreOrigin(
@@ -1259,8 +1259,7 @@ func TestRecordDiscoveryEnforcesHistoricalCap(
 		}
 
 		want := discovery.RecordResult{
-			Accepted: 1,
-			Dropped:  1,
+			Accepted: 2,
 		}
 		if result != want {
 			t.Errorf(
@@ -1284,9 +1283,9 @@ func TestRecordDiscoveryEnforcesHistoricalCap(
 			t.Fatalf("count new candidate: %v", err)
 		}
 
-		if newCount != 0 {
+		if newCount != 1 {
 			t.Errorf(
-				"new candidate count = %d, want 0",
+				"new candidate count = %d, want 1",
 				newCount,
 			)
 		}
@@ -1334,7 +1333,7 @@ func TestRecordDiscoveryEnforcesHistoricalCap(
 			t,
 			pool,
 			source,
-			maxDiscoveryCandidatesPerSource-2,
+			historicalCandidateCount-2,
 			now.Add(-time.Hour),
 		)
 
@@ -1380,8 +1379,7 @@ func TestRecordDiscoveryEnforcesHistoricalCap(
 		}
 
 		wantResult := discovery.RecordResult{
-			Accepted: 2,
-			Dropped:  2,
+			Accepted: 4,
 		}
 		if result != wantResult {
 			t.Errorf(
@@ -1433,6 +1431,8 @@ func TestRecordDiscoveryEnforcesHistoricalCap(
 		want := []string{
 			"https://a-new.example",
 			"https://b-new.example",
+			"https://y-new.example",
+			"https://z-new.example",
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf(
@@ -1839,15 +1839,6 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 				validCandidate,
 				validCandidate,
 			},
-			want: errInvalidDiscoveryCandidate,
-		},
-		{
-			name:   "oversized batch",
-			source: source,
-			candidates: make(
-				[]discovery.Candidate,
-				discovery.MaxCandidates+1,
-			),
 			want: errInvalidDiscoveryCandidate,
 		},
 	}

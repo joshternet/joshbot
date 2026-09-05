@@ -1,5 +1,5 @@
 x-joshbot-image: &joshbot-image
-  image: ${JOSHBOT_IMAGE:-joshbot:phase10}
+  image: ${JOSHBOT_IMAGE:-joshbot:phase11}
   pull_policy: never
   build:
     context: .
@@ -123,6 +123,11 @@ services:
       JOSHBOT_DISCOVERY_INTERVAL: ${JOSHBOT_DISCOVERY_INTERVAL:-168h}
       JOSHBOT_DISCOVERY_POLL_INTERVAL: ${JOSHBOT_DISCOVERY_POLL_INTERVAL:-30s}
       JOSHBOT_DISCOVERY_PAGE_TIMEOUT: ${JOSHBOT_DISCOVERY_PAGE_TIMEOUT:-30s}
+      JOSHBOT_CRAWL_MAX_DEPTH: ${JOSHBOT_CRAWL_MAX_DEPTH:-4}
+      JOSHBOT_CRAWL_MAX_PAGES: ${JOSHBOT_CRAWL_MAX_PAGES:-32}
+      JOSHBOT_CRAWL_MAX_PAGE_BYTES: ${JOSHBOT_CRAWL_MAX_PAGE_BYTES:-1048576}
+      JOSHBOT_CRAWL_REQUEST_DELAY: ${JOSHBOT_CRAWL_REQUEST_DELAY:-1s}
+      JOSHBOT_CRAWL_REDIRECT_LIMIT: ${JOSHBOT_CRAWL_REDIRECT_LIMIT:-5}
     secrets:
       - joshbot_app_password
     networks:
@@ -163,6 +168,11 @@ services:
       JOSHBOT_DISCOVERY_INTERVAL: ${JOSHBOT_DISCOVERY_INTERVAL:-168h}
       JOSHBOT_DISCOVERY_POLL_INTERVAL: ${JOSHBOT_DISCOVERY_POLL_INTERVAL:-30s}
       JOSHBOT_DISCOVERY_PAGE_TIMEOUT: ${JOSHBOT_DISCOVERY_PAGE_TIMEOUT:-30s}
+      JOSHBOT_CRAWL_MAX_DEPTH: ${JOSHBOT_CRAWL_MAX_DEPTH:-4}
+      JOSHBOT_CRAWL_MAX_PAGES: ${JOSHBOT_CRAWL_MAX_PAGES:-32}
+      JOSHBOT_CRAWL_MAX_PAGE_BYTES: ${JOSHBOT_CRAWL_MAX_PAGE_BYTES:-1048576}
+      JOSHBOT_CRAWL_REQUEST_DELAY: ${JOSHBOT_CRAWL_REQUEST_DELAY:-1s}
+      JOSHBOT_CRAWL_REDIRECT_LIMIT: ${JOSHBOT_CRAWL_REDIRECT_LIMIT:-5}
     secrets:
       - joshbot_app_password
     volumes:
@@ -256,14 +266,56 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
 
-networks:
-  database:
-    internal: true
-  egress:
-    driver: bridge
+  restore:
+    image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
+    profiles:
+      - backup
+    entrypoint:
+      - /bin/sh
+      - /opt/joshbot/restore.sh
+    command: []
+    user: postgres
+    restart: "no"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: joshbot
+      PGUSER: joshbot_backup
+      PGCONNECTTIMEOUT: "10"
+      JOSHBOT_DATABASE_PASSWORD_FILE: /run/secrets/joshbot_backup_password
+      JOSHBOT_BACKUP_DIRECTORY: /backups
+    secrets:
+      - joshbot_backup_password
+    volumes:
+      - type: tmpfs
+        target: /var/lib/postgresql
+        read_only: true
+        tmpfs:
+          size: 1048576
+          mode: 0555
+      - type: bind
+        source: ./deploy/restore.sh
+        target: /opt/joshbot/restore.sh
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${JOSHBOT_BACKUP_DIR:?set JOSHBOT_BACKUP_DIR}
+        target: /backups
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - database
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 secrets:
   postgres_admin_password:
@@ -275,4 +327,9 @@ secrets:
   joshbot_backup_password:
     file: ${JOSHBOT_BACKUP_PASSWORD_FILE:?set JOSHBOT_BACKUP_PASSWORD_FILE}
   joshbot_github_token:
-    file: ${JOSHBOT_GITHUB_TOKEN_FILE:-/dev/null}
+    file: ${JOSHBOT_GITHUB_TOKEN_FILE:-./deploy/secrets/github-token-not-configured}
+
+networks:
+  database:
+    internal: true
+  egress:

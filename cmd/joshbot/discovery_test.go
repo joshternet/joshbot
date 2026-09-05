@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/joshternet/joshbot/internal/discovery"
+	"github.com/joshternet/joshbot/internal/origin"
 )
 
 func (operations *fakeCommandOperations) discover(
@@ -353,7 +354,7 @@ func TestDiscoveryConfigurationRejectsInvalidValues(
 
 func TestExecuteDiscoveryOneShot(t *testing.T) {
 	runner := &fakeDiscoveryRunner{
-		report: discovery.Report{
+		report: discovery.CrawlReport{
 			Worked: true,
 		},
 	}
@@ -530,11 +531,7 @@ func TestNewDiscoveryRuntimeRejectsNilPool(
 ) {
 	runner, err := newDiscoveryRuntime(
 		nil,
-		discovery.Config{
-			DiscoveryInterval: time.Hour,
-			PollInterval:      time.Second,
-			PageTimeout:       time.Second,
-		},
+		testCrawlRuntimeSettings(t),
 	)
 	if err == nil {
 		t.Fatal(
@@ -555,6 +552,9 @@ func TestDiscoveryRuntimeOneShotWithNoSource(
 ) {
 	ctx := context.Background()
 	operations, _ := newCLIIntegrationEnvironment(t)
+	operations.getenv = withCrawlRuntimeEnvironment(
+		operations.getenv,
+	)
 
 	if err := operations.migrate(ctx); err != nil {
 		t.Fatalf(
@@ -601,6 +601,9 @@ func TestDiscoveryRuntimeRejectsUnavailablePool(
 	t *testing.T,
 ) {
 	operations, _ := newTestRuntimeOperations(t)
+	operations.getenv = withCrawlRuntimeEnvironment(
+		operations.getenv,
+	)
 
 	err := operations.discover(
 		context.Background(),
@@ -623,8 +626,102 @@ func TestDiscoveryRuntimeRejectsUnavailablePool(
 	}
 }
 
+func TestRuntimeCandidateSinkRecordsCandidates(
+	t *testing.T,
+) {
+	source, err := origin.Parse(
+		"https://source.example",
+	)
+	if err != nil {
+		t.Fatalf(
+			"Parse(source) error = %v, want nil",
+			err,
+		)
+	}
+
+	candidateOrigin, err := origin.Parse(
+		"https://candidate.example",
+	)
+	if err != nil {
+		t.Fatalf(
+			"Parse(candidate) error = %v, want nil",
+			err,
+		)
+	}
+
+	candidates := []discovery.Candidate{
+		{
+			Origin: candidateOrigin,
+			Kind:   discovery.KindLink,
+		},
+	}
+
+	candidateStore := &fakeDiscoveryCandidateStore{
+		result: discovery.RecordResult{
+			Accepted: 1,
+		},
+	}
+
+	err = (runtimeCandidateSink{
+		store: candidateStore,
+	}).RecordCandidates(
+		context.Background(),
+		source,
+		candidates,
+	)
+	if err != nil {
+		t.Fatalf(
+			"RecordCandidates() error = %v, want nil",
+			err,
+		)
+	}
+
+	if candidateStore.source != source {
+		t.Errorf(
+			"recorded source = %v, want %v",
+			candidateStore.source,
+			source,
+		)
+	}
+
+	if len(candidateStore.candidates) != 1 ||
+		candidateStore.candidates[0] != candidates[0] {
+		t.Errorf(
+			"recorded candidates = %#v, want %#v",
+			candidateStore.candidates,
+			candidates,
+		)
+	}
+}
+
+func TestRuntimeCandidateSinkReturnsStoreFailure(
+	t *testing.T,
+) {
+	recordErr := errors.New(
+		"record discovery failure",
+	)
+	candidateStore := &fakeDiscoveryCandidateStore{
+		err: recordErr,
+	}
+
+	err := (runtimeCandidateSink{
+		store: candidateStore,
+	}).RecordCandidates(
+		context.Background(),
+		origin.Origin{},
+		nil,
+	)
+	if !errors.Is(err, recordErr) {
+		t.Errorf(
+			"RecordCandidates() error = %v, want %v",
+			err,
+			recordErr,
+		)
+	}
+}
+
 type fakeDiscoveryRunner struct {
-	report       discovery.Report
+	report       discovery.CrawlReport
 	runOnceErr   error
 	runErr       error
 	runOnceCount int
@@ -633,7 +730,7 @@ type fakeDiscoveryRunner struct {
 
 func (runner *fakeDiscoveryRunner) RunOnce(
 	context.Context,
-) (discovery.Report, error) {
+) (discovery.CrawlReport, error) {
 	runner.runOnceCount++
 
 	return runner.report, runner.runOnceErr
@@ -645,6 +742,59 @@ func (runner *fakeDiscoveryRunner) Run(
 	runner.runCount++
 
 	return runner.runErr
+}
+
+type fakeDiscoveryCandidateStore struct {
+	source     origin.Origin
+	candidates []discovery.Candidate
+	result     discovery.RecordResult
+	err        error
+}
+
+func (candidateStore *fakeDiscoveryCandidateStore) RecordDiscovery(
+	_ context.Context,
+	source origin.Origin,
+	candidates []discovery.Candidate,
+) (discovery.RecordResult, error) {
+	candidateStore.source = source
+	candidateStore.candidates = append(
+		[]discovery.Candidate(nil),
+		candidates...,
+	)
+
+	return candidateStore.result, candidateStore.err
+}
+
+func testCrawlRuntimeSettings(
+	t *testing.T,
+) crawlRuntimeSettings {
+	t.Helper()
+
+	settings, err := loadCrawlRuntimeSettings(
+		validCrawlRuntimeEnvironment().get,
+	)
+	if err != nil {
+		t.Fatalf(
+			"loadCrawlRuntimeSettings() error = %v, want nil",
+			err,
+		)
+	}
+
+	return settings
+}
+
+func withCrawlRuntimeEnvironment(
+	getenv environmentGetter,
+) environmentGetter {
+	environment := validCrawlRuntimeEnvironment()
+
+	return func(name string) string {
+		if value, ok := environment[name]; ok {
+			return value
+		}
+
+		return getenv(name)
+	}
 }
 
 func testDiscoveryLogger() *slog.Logger {

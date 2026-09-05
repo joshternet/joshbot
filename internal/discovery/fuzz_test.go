@@ -62,14 +62,6 @@ func FuzzExtract(f *testing.F) {
 			)
 		}
 
-		if len(first.Candidates) > MaxCandidates {
-			t.Fatalf(
-				"candidate count = %d, maximum = %d",
-				len(first.Candidates),
-				MaxCandidates,
-			)
-		}
-
 		seen := make(map[origin.Origin]struct{})
 		previous := ""
 

@@ -74,6 +74,11 @@ export JOSHBOT_RECHECK_INTERVAL="24h"
 export JOSHBOT_DISCOVERY_INTERVAL="168h"
 export JOSHBOT_DISCOVERY_POLL_INTERVAL="30s"
 export JOSHBOT_DISCOVERY_PAGE_TIMEOUT="30s"
+export JOSHBOT_CRAWL_MAX_DEPTH="2"
+export JOSHBOT_CRAWL_MAX_PAGES="8"
+export JOSHBOT_CRAWL_MAX_PAGE_BYTES="65536"
+export JOSHBOT_CRAWL_REQUEST_DELAY="0s"
+export JOSHBOT_CRAWL_REDIRECT_LIMIT="3"
 
 unset COMPOSE_FILE
 unset COMPOSE_PROFILES
@@ -543,6 +548,33 @@ assert_equal \
   "healthy" \
   "discovery health"
 
+discovery_environment="$(
+  docker inspect \
+    "$discovery_container" \
+    --format '{{range .Config.Env}}{{println .}}{{end}}'
+)"
+
+for expected_setting in \
+  'JOSHBOT_CRAWL_MAX_DEPTH=2' \
+  'JOSHBOT_CRAWL_MAX_PAGES=8' \
+  'JOSHBOT_CRAWL_MAX_PAGE_BYTES=65536' \
+  'JOSHBOT_CRAWL_REQUEST_DELAY=0s' \
+  'JOSHBOT_CRAWL_REDIRECT_LIMIT=3'; do
+  if ! grep -Fxq \
+    "$expected_setting" \
+    <<<"$discovery_environment"; then
+    fail "discovery environment is missing $expected_setting"
+  fi
+done
+
+if grep -Eq \
+  '^JOSHBOT_(GITHUB_TOKEN_FILE|PUBLISH_)' \
+  <<<"$discovery_environment"; then
+  fail "discovery container received publication configuration"
+fi
+
+pass "discovery received the explicit smoke crawl budget without publication credentials"
+
 compose \
   --profile tools \
   run \
@@ -557,6 +589,84 @@ pass "one-shot discovery succeeded with no verified source and made no public re
 compose stop worker discovery
 
 pass "worker and discovery were stopped before seeding; smoke test performs no public crawl"
+
+compose \
+  --profile tools \
+  run \
+  --rm \
+  --no-deps \
+  tools \
+  seed \
+  add \
+  'https://DIRECTORY.example/path'
+
+compose \
+  --profile tools \
+  run \
+  --rm \
+  --no-deps \
+  tools \
+  seed \
+  add \
+  'https://directory.example/another-path'
+
+seed_list="$(
+  compose \
+    --profile tools \
+    run \
+    --rm \
+    --no-deps \
+    tools \
+    seed \
+    list
+)"
+
+assert_equal \
+  "$seed_list" \
+  'https://directory.example' \
+  "canonical curated seed list"
+
+seed_side_effect_state="$(
+  compose exec \
+    -T \
+    postgres \
+    psql \
+    --username joshbot_admin \
+    --dbname joshbot \
+    --no-align \
+    --tuples-only \
+    --quiet \
+    --command="
+      SET ROLE joshbot_app;
+
+      SELECT
+        (
+          SELECT count(*)::text
+          FROM discovery_source_state
+          WHERE source_origin = 'https://directory.example'
+            AND seeded
+        )
+        || '|'
+        || (
+          SELECT count(*)::text
+          FROM origins
+          WHERE origin = 'https://directory.example'
+        )
+        || '|'
+        || (
+          SELECT count(*)::text
+          FROM verification_queue
+          WHERE origin = 'https://directory.example'
+        );
+    "
+)"
+
+assert_equal \
+  "$seed_side_effect_state" \
+  '1|0|0' \
+  "curated seed private state"
+
+pass "seed CLI normalized an idempotent private seed without verification or queue side effects"
 
 compose \
   --profile tools \
@@ -695,7 +805,7 @@ migration_count="$(
 
 assert_equal \
   "$migration_count" \
-  "3" \
+  "4" \
   "source migration count"
 
 pass "known observation, effective state, queue state, and migrations exist"
@@ -743,14 +853,11 @@ compose exec \
   --set=ON_ERROR_STOP=1 <<'SQL'
 SET ROLE joshbot_app;
 
-INSERT INTO discovery_source_state (
-    source_origin,
-    last_attempted_at
-)
-VALUES (
-    'https://example.com',
+UPDATE discovery_source_state
+SET last_attempted_at =
     TIMESTAMPTZ '2026-01-03 03:04:05+00'
-);
+WHERE source_origin = 'https://directory.example'
+    AND seeded;
 
 INSERT INTO discovery_candidates (
     origin,
@@ -771,7 +878,7 @@ INSERT INTO discovery_edges (
     last_discovered_at
 )
 VALUES (
-    'https://example.com',
+    'https://directory.example',
     'https://candidate.example',
     'link',
     TIMESTAMPTZ '2026-01-03 03:04:05+00',
@@ -809,6 +916,14 @@ private_discovery_state="$(
       SELECT
         discovery_source_state.source_origin
         || '|'
+        || discovery_source_state.seeded::text
+        || '|'
+        || to_char(
+          discovery_source_state.last_attempted_at
+            AT TIME ZONE 'UTC',
+          'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'
+        )
+        || '|'
         || discovery_candidates.origin
         || '|'
         || discovery_edges.kind
@@ -829,7 +944,7 @@ private_discovery_state="$(
 
 assert_equal \
   "$private_discovery_state" \
-  'https://example.com|https://candidate.example|link|probe' \
+  'https://directory.example|true|2026-01-03T03:04:05Z|https://candidate.example|link|probe' \
   "private discovery state"
 
 compose \
@@ -1444,6 +1559,14 @@ restored_discovery_state="$(
       SELECT
         discovery_source_state.source_origin
         || '|'
+        || discovery_source_state.seeded::text
+        || '|'
+        || to_char(
+          discovery_source_state.last_attempted_at
+            AT TIME ZONE 'UTC',
+          'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'
+        )
+        || '|'
         || discovery_candidates.origin
         || '|'
         || discovery_edges.kind
@@ -1459,7 +1582,7 @@ restored_discovery_state="$(
 
 assert_equal \
   "$restored_discovery_state" \
-  'https://example.com|https://candidate.example|link' \
+  'https://directory.example|true|2026-01-03T03:04:05Z|https://candidate.example|link' \
   "restored discovery state"
 
 restored_migration_count="$(
@@ -1479,7 +1602,7 @@ restored_migration_count="$(
 
 assert_equal \
   "$restored_migration_count" \
-  "3" \
+  "4" \
   "restored migration count"
 
 pass "known observation, discovery provenance, queue modes, and migration metadata survived restore"
