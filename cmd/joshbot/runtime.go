@@ -79,6 +79,10 @@ type runtimeOperations struct {
 		*pgxpool.Pool,
 	) verifiedOriginSource
 
+	newDiscoveryStore func(
+		*pgxpool.Pool,
+	) (crawlSeedStore, error)
+
 	buildRegistry func(
 		[]store.VerifiedOrigin,
 	) ([]publicdata.File, error)
@@ -125,6 +129,7 @@ func newRuntimeOperations(
 		migrateDatabase:     migrateDatabase,
 		newQueue:            newStoreQueue,
 		newStore:            newVerifiedOriginStore,
+		newDiscoveryStore:   newRuntimeCrawlSeedStore,
 		buildRegistry:       buildRegistry,
 		writeRegistry:       writeRegistry,
 		loadPublishSettings: loadPublishSettings,

@@ -133,12 +133,19 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          go test \
-            ./internal/discovery \
-            -run '^$' \
-            -fuzz '^FuzzExtract$' \
-            -fuzztime=10s \
-            2>&1 | tee "$REPORT_DIR/discovery-fuzz.txt"
+          {
+            go test \
+              ./internal/discovery \
+              -run '^$' \
+              -fuzz '^FuzzExtract$' \
+              -fuzztime=10s
+
+            go test \
+              ./internal/discovery \
+              -run '^$' \
+              -fuzz '^FuzzExtractPageLinks$' \
+              -fuzztime=10s
+          } 2>&1 | tee "$REPORT_DIR/discovery-fuzz.txt"
 
       - name: Run deterministic race tests with coverage
         id: race

@@ -290,6 +290,7 @@ func newStoreTestPool(t *testing.T) *pgxpool.Pool {
 		"migrations/0001_initial.sql",
 		"migrations/0002_verification_queue.sql",
 		"migrations/0003_discovery.sql",
+		"migrations/0004_crawl_sources.sql",
 	}
 
 	for _, migrationFile := range migrationFiles {

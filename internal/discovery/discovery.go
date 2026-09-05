@@ -1,4 +1,4 @@
-// Package discovery performs bounded homepage candidate discovery.
+// Package discovery performs bounded web-link discovery.
 package discovery
 
 import (
@@ -21,7 +21,6 @@ import (
 const (
 	MaxRawBody     = 1024 * 1024
 	MaxDecodedBody = 2 * 1024 * 1024
-	MaxCandidates  = 64
 	MaxRedirects   = 5
 )
 
@@ -41,7 +40,7 @@ const (
 	KindRedirect
 )
 
-// Status describes the result of one homepage attempt.
+// Status describes the result of one page attempt.
 type Status uint8
 
 const (
@@ -64,13 +63,17 @@ type Result struct {
 	Source     origin.Origin
 	Status     Status
 	Candidates []Candidate
-	Truncated  bool
 }
 
-// RecordResult reports discovery persistence admission.
+// PageLinks contains the ephemeral crawl links extracted from one page.
+type PageLinks struct {
+	Internal   []*url.URL
+	Candidates []Candidate
+}
+
+// RecordResult reports successful discovery persistence.
 type RecordResult struct {
 	Accepted int
-	Dropped  int
 }
 
 // Getter is the robots-aware guarded HTTP behavior used by Crawler.
@@ -116,7 +119,6 @@ func (c *Crawler) Discover(
 		return Result{}, errGetterUnavailable
 	}
 
-	// A validated canonical origin always produces a parseable root URL.
 	current, _ := url.Parse(source.String() + "/")
 	redirects := 0
 
@@ -150,7 +152,6 @@ func (c *Crawler) Discover(
 				return result, nil
 			}
 
-			// redirectTarget already validates the resolved origin.
 			nextOrigin, _ := origin.Parse(next.String())
 			if nextOrigin != source {
 				result.Status = StatusRedirected
@@ -207,7 +208,6 @@ func (c *Crawler) Discover(
 			return result, nil
 		}
 
-		// The source and page URL satisfy Extract's validated input contract.
 		extracted, _ := Extract(
 			source,
 			current,
@@ -218,7 +218,8 @@ func (c *Crawler) Discover(
 	}
 }
 
-// Extract parses a bounded HTML document without executing remote content.
+// Extract parses a bounded HTML document using the legacy homepage result.
+// It returns every distinct external candidate from the accepted page body.
 func Extract(
 	source origin.Origin,
 	pageURL *url.URL,
@@ -234,6 +235,41 @@ func Extract(
 	)
 }
 
+// ExtractPageLinks parses every navigable hyperlink in one bounded page.
+//
+// Internal URLs remain ephemeral and retain deterministic document traversal
+// order. External candidates are deduplicated by canonical origin and returned
+// in canonical order without an arbitrary candidate-count limit.
+func ExtractPageLinks(
+	source origin.Origin,
+	pageURL *url.URL,
+	contentType string,
+	body []byte,
+) (PageLinks, Status, error) {
+	links, status, err := extractPageLinks(
+		source,
+		pageURL,
+		contentType,
+		body,
+		decodeHTML,
+	)
+	if err != nil {
+		return PageLinks{}, 0, err
+	}
+
+	sort.Slice(
+		links.Candidates,
+		func(left int, right int) bool {
+			return links.Candidates[left].
+				Origin.String() <
+				links.Candidates[right].
+					Origin.String()
+		},
+	)
+
+	return links, status, nil
+}
+
 func extract(
 	source origin.Origin,
 	pageURL *url.URL,
@@ -241,37 +277,78 @@ func extract(
 	body []byte,
 	decoder func(io.Reader, string) ([]byte, bool, error),
 ) (Result, error) {
-	result := Result{
-		Source: source,
-		Status: StatusComplete,
+	links, status, err := extractPageLinks(
+		source,
+		pageURL,
+		contentType,
+		body,
+		decoder,
+	)
+	if err != nil {
+		return Result{}, err
 	}
 
+	result := Result{
+		Source: source,
+		Status: status,
+	}
+
+	if status != StatusComplete {
+		return result, nil
+	}
+
+	result.Candidates = append(
+		[]Candidate(nil),
+		links.Candidates...,
+	)
+
+	sort.Slice(
+		result.Candidates,
+		func(left int, right int) bool {
+			return result.Candidates[left].
+				Origin.String() <
+				result.Candidates[right].
+					Origin.String()
+		},
+	)
+
+	return result, nil
+}
+
+func extractPageLinks(
+	source origin.Origin,
+	pageURL *url.URL,
+	contentType string,
+	body []byte,
+	decoder func(io.Reader, string) ([]byte, bool, error),
+) (PageLinks, Status, error) {
 	if source.String() == "" {
-		return Result{}, errInvalidSource
+		return PageLinks{}, 0, errInvalidSource
 	}
 
 	if pageURL == nil {
-		return Result{}, errInvalidPageURL
+		return PageLinks{}, 0, errInvalidPageURL
 	}
 
 	pageOrigin, err := origin.Parse(pageURL.String())
 	if err != nil || pageOrigin != source {
-		return Result{}, errInvalidPageURL
+		return PageLinks{}, 0, errInvalidPageURL
 	}
 
 	if len(body) > MaxRawBody {
-		result.Status = StatusTooLarge
-		return result, nil
+		return PageLinks{}, StatusTooLarge, nil
 	}
 
 	effectiveContentType := contentType
 	if effectiveContentType == "" {
-		effectiveContentType = http.DetectContentType(body)
+		effectiveContentType =
+			http.DetectContentType(body)
 	}
 
 	if !isHTMLContentType(effectiveContentType) {
-		result.Status = StatusUnsupportedContent
-		return result, nil
+		return PageLinks{},
+			StatusUnsupportedContent,
+			nil
 	}
 
 	decoded, tooLarge, err := decoder(
@@ -279,36 +356,38 @@ func extract(
 		effectiveContentType,
 	)
 	if err != nil {
-		result.Status = StatusUnavailable
-		return result, nil
+		return PageLinks{}, StatusUnavailable, nil
 	}
 
 	if tooLarge {
-		result.Status = StatusTooLarge
-		return result, nil
+		return PageLinks{}, StatusTooLarge, nil
 	}
 
-	// bytes.Reader cannot return a parsing read error.
-	document, _ := html.Parse(bytes.NewReader(decoded))
-	baseURL := documentBaseURL(document, pageURL)
+	document, _ := html.Parse(
+		bytes.NewReader(decoded),
+	)
+	baseURL := documentBaseURL(
+		document,
+		pageURL,
+	)
 
-	seen := make(
+	internalSeen := make(map[string]struct{})
+	candidateSeen := make(
 		map[origin.Origin]struct{},
-		MaxCandidates,
 	)
-	selected := make(
-		[]Candidate,
-		0,
-		MaxCandidates,
-	)
+	links := PageLinks{}
 
 	for node := range document.Descendants() {
 		if node.Type != html.ElementNode ||
-			(node.Data != "a" && node.Data != "area") {
+			(node.Data != "a" &&
+				node.Data != "area") {
 			continue
 		}
 
-		href, found := attributeValue(node, "href")
+		href, found := attributeValue(
+			node,
+			"href",
+		)
 		if !found {
 			continue
 		}
@@ -320,43 +399,55 @@ func extract(
 			continue
 		}
 
-		resolved := baseURL.ResolveReference(reference)
-		candidateOrigin, parseErr := origin.Parse(
+		resolved := baseURL.ResolveReference(
+			reference,
+		)
+		resolved.Fragment = ""
+		resolved.RawFragment = ""
+
+		destination, parseErr := origin.Parse(
 			resolved.String(),
 		)
-		if parseErr != nil || candidateOrigin == source {
+		if parseErr != nil {
 			continue
 		}
 
-		if _, duplicate := seen[candidateOrigin]; duplicate {
+		if destination == source {
+			internal := canonicalPageURL(
+				source,
+				resolved,
+			)
+			canonical := internal.String()
+
+			if _, duplicate :=
+				internalSeen[canonical]; duplicate {
+				continue
+			}
+
+			internalSeen[canonical] = struct{}{}
+			links.Internal = append(
+				links.Internal,
+				internal,
+			)
 			continue
 		}
 
-		if len(selected) == MaxCandidates {
-			result.Truncated = true
+		if _, duplicate :=
+			candidateSeen[destination]; duplicate {
 			continue
 		}
 
-		seen[candidateOrigin] = struct{}{}
-		selected = append(
-			selected,
+		candidateSeen[destination] = struct{}{}
+		links.Candidates = append(
+			links.Candidates,
 			Candidate{
-				Origin: candidateOrigin,
+				Origin: destination,
 				Kind:   KindLink,
 			},
 		)
 	}
 
-	sort.Slice(
-		selected,
-		func(left int, right int) bool {
-			return selected[left].Origin.String() <
-				selected[right].Origin.String()
-		},
-	)
-
-	result.Candidates = selected
-	return result, nil
+	return links, StatusComplete, nil
 }
 
 func decodeHTML(
@@ -437,13 +528,16 @@ func redirectTarget(
 }
 
 func isHTMLContentType(contentType string) bool {
-	mediaType, _, err := mime.ParseMediaType(contentType)
+	mediaType, _, err := mime.ParseMediaType(
+		contentType,
+	)
 	if err != nil {
 		return false
 	}
 
 	switch strings.ToLower(mediaType) {
-	case "text/html", "application/xhtml+xml":
+	case "text/html",
+		"application/xhtml+xml":
 		return true
 	default:
 		return false
@@ -462,7 +556,10 @@ func documentBaseURL(
 			continue
 		}
 
-		href, found := attributeValue(node, "href")
+		href, found := attributeValue(
+			node,
+			"href",
+		)
 		if !found {
 			continue
 		}
@@ -474,8 +571,12 @@ func documentBaseURL(
 			return baseURL
 		}
 
-		resolved := pageURL.ResolveReference(reference)
-		if _, err := origin.Parse(resolved.String()); err != nil {
+		resolved := pageURL.ResolveReference(
+			reference,
+		)
+		if _, err := origin.Parse(
+			resolved.String(),
+		); err != nil {
 			return baseURL
 		}
 
@@ -501,4 +602,22 @@ func attributeValue(
 func cloneURL(source *url.URL) *url.URL {
 	cloned := *source
 	return &cloned
+}
+
+func canonicalPageURL(
+	source origin.Origin,
+	pageURL *url.URL,
+) *url.URL {
+	sourceURL, _ := url.Parse(source.String())
+	canonical := cloneURL(pageURL)
+
+	canonical.Scheme = sourceURL.Scheme
+	canonical.Host = sourceURL.Host
+	canonical.User = nil
+	canonical.Fragment = ""
+	canonical.RawFragment = ""
+	canonical.Path = "/" +
+		strings.TrimPrefix(canonical.Path, "/")
+
+	return canonical
 }

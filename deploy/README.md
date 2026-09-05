@@ -20,6 +20,23 @@ JoshBot does not promise exactly-once network requests.
 
 Registry publication is seperate from verification. Publication reads an already-built deterministic snapshot and does not connect to PostgreSQL.
 
+## Crawler behavior
+
+JoshBot crawls both independently verified Joshternet participants and private curated seed origins. A seed is permission from the operator to use an origin as a discovery source. It is not a Joshternet declaration, verification result, or public registry entry.
+
+Each source crawl starts at `/` and uses a deterministic breadth-first in-memory frontier. The root is depth 0. Same-origin hyperlinks may be followed within the configured depth and page budgets. External HTTP and HTTPS origins become declaration-verification candidates; JoshBot does not recursively crawl those external sites unless they later verify as participants or are explicitly added as seeds.
+
+Every page request goes through the existing robots-aware guarded HTTP path. Robots permission controls whether a URI may be fetched. A Joshternet declaration independently controls whether an origin participates in the public registry. A missing or invalid declaration does not prohibit crawling a curated seed when robots permits it.
+
+The crawler retains only origin-level operational data:
+
+- explicit seed status;
+- the source's last crawl-attempt time;
+- source-to-candidate origin relationships and discovery times;
+- verification queue and declaration observations.
+
+It does not retain HTML, response bodies, titles, anchor text, headers, cookies, internal page history, page depth, or the crawl frontier. A stopped crawl starts again from the source root on its next scheduled attempt.
+
 ## Services
 
 The Compose deployment includes:
@@ -27,7 +44,7 @@ The Compose deployment includes:
 - `postgres`: persistent PostgreSQL 18.6 database;
 - `migrate`: one-shot schema migrations;
 - `worker`: long-running verification worker;
-- `discovery`: long-running verified-homepage discovery;
+- `discovery`: long-running multi-page crawling for verified origins and curated seeds;
 - `tools`: database-backed operator commands and exports;
 - `publisher`: one-shot GitHub registry publication;
 - `backup`: logical PostgreSQL backups.
@@ -184,6 +201,28 @@ JOSHBOT_DISCOVERY_PAGE_TIMEOUT > 0
 ```
 
 The reference discovery interval is `168h`. Go durations do not accept `7d`.
+
+Review the per-source crawl budget:
+
+```text
+JOSHBOT_CRAWL_MAX_DEPTH >= 0
+JOSHBOT_CRAWL_MAX_PAGES > 0
+JOSHBOT_CRAWL_MAX_PAGE_BYTES > 0
+JOSHBOT_CRAWL_REQUEST_DELAY >= 0
+JOSHBOT_CRAWL_REDIRECT_LIMIT > 0
+```
+
+The checked-in deployment values are:
+
+```text
+JOSHBOT_CRAWL_MAX_DEPTH=4
+JOSHBOT_CRAWL_MAX_PAGES=32
+JOSHBOT_CRAWL_MAX_PAGE_BYTES=1048576
+JOSHBOT_CRAWL_REQUEST_DELAY=1s
+JOSHBOT_CRAWL_REDIRECT_LIMIT=5
+```
+
+`MaxDepth` counts the root as depth 0. `MaxPages` counts each frontier page selected for a guarded fetch; redirect hops for that page do not consume another frontier slot. Requests within one source crawl are sequential, and the request delay is applied between page requests without sleeping after the final request. These are operating limits, not Joshternet protocol rules.
 
 ## Database secrets
 
@@ -417,6 +456,57 @@ The canonical scheduled origin becomes:
 https://example.com
 ```
 
+## Manage curated crawl seeds
+
+Add a private crawl seed:
+
+```bash
+docker compose \
+  --env-file deploy/.env \
+  --profile tools \
+  run \
+  --rm \
+  --no-deps \
+  tools \
+  seed add \
+  https://directory.example/some/path?q=ignored
+```
+
+The stored seed is normalized to its canonical origin:
+
+```text
+https://directory.example
+```
+
+List seeds in canonical order:
+
+```bash
+docker compose \
+  --env-file deploy/.env \
+  --profile tools \
+  run \
+  --rm \
+  --no-deps \
+  tools \
+  seed list
+```
+
+Remove explicit seed status:
+
+```bash
+docker compose \
+  --env-file deploy/.env \
+  --profile tools \
+  run \
+  --rm \
+  --no-deps \
+  tools \
+  seed remove \
+  https://directory.example
+```
+
+Adding a seed does not create a declaration observation, verification queue row, or public registry entry. Removing a seed does not delete observations, candidate provenance, or queue state. If the origin is independently verified, it remains crawl-eligible after its explicit seed status is removed.
+
 ## Export the public registry
 
 The output directory must not already exist:
@@ -512,13 +602,14 @@ The recovery smoke test:
 - initializes PostgreSQL;
 - applies migrations;
 - checks database role boundaries;
-- runs a no-network discovery attempt;
+- runs a no-network discovery attempt with an explicit multi-page budget;
+- verifies canonical, idempotent private seed management;
 - creates known verification and discovery state;
 - exports deterministic registry data;
 - proves private discovery data does not alter public output;
 - creates and validates a backup;
 - restores into a fresh isolated PostgreSQL instance;
-- verifies application connectivity and restored data;
+- verifies application connectivity and restored seed, crawl timing, candidate, queue, and migration data;
 - rebuilds byte-identical registry files;
 - cleans containers, networks, images, storage, and secrets.
 
@@ -669,7 +760,7 @@ The publisher remains one-shot.
 
 The quality workflow runs:
 
-- formatting, module, vet, PostgreSQL, normal test, fuzz, race, and coverage gates;
+- formatting, module, vet, PostgreSQL, normal test, both discovery extraction fuzz targets, race, and coverage gates;
 - production image inspection;
 - publication boundary tests;
 - deployment, backup, restore, and cleanup smoke tests.
@@ -680,7 +771,7 @@ Both jobs upload reports and add summaries to the Actions run.
 
 ## Local validation
 
-Run all validation only after every Phase 10 file is in place:
+Run all validation only after every Phase 11 file is in place:
 
 ```bash
 chmod 0755 \

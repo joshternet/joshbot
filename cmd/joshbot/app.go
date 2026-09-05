@@ -22,6 +22,9 @@ Usage:
   joshbot health
   joshbot migrate
   joshbot schedule <origin>
+  joshbot seed add <origin>
+  joshbot seed remove <origin>
+  joshbot seed list
   joshbot worker
   joshbot discover [--once]
   joshbot export --output <directory>
@@ -32,8 +35,9 @@ Commands:
   health     Check PostgreSQL connectivity
   migrate    Apply pending database migrations
   schedule   Schedule an origin for recurring verification
+  seed       Manage private curated crawl seeds
   worker     Process queued verification work
-  discover   Discover candidates from verified homepages
+  discover   Crawl verified origins and curated crawl seeds
   export     Write a deterministic public registry snapshot
   publish    Publish an existing registry snapshot to GitHub
   help       Show this help
@@ -54,6 +58,12 @@ type commandOperations interface {
 		context.Context,
 		string,
 	) (githubpublish.Result, error)
+}
+
+type crawlSeedCommandOperations interface {
+	addCrawlSeed(context.Context, origin.Origin) error
+	removeCrawlSeed(context.Context, origin.Origin) error
+	crawlSeeds(context.Context) ([]origin.Origin, error)
 }
 
 func run(
@@ -186,6 +196,134 @@ func runWithOperations(
 		)
 
 		return exitSuccess
+
+	case "seed":
+		seedOperations, available :=
+			operations.(crawlSeedCommandOperations)
+		if !available {
+			return reportCommandFailure(
+				stderr,
+				command,
+				errOperationsUnavailable,
+			)
+		}
+
+		if len(commandArgs) == 0 {
+			return reportUsage(
+				stderr,
+				"seed requires add, remove, or list",
+			)
+		}
+
+		switch commandArgs[0] {
+		case "add":
+			if len(commandArgs) != 2 {
+				return reportUsage(
+					stderr,
+					"seed add requires exactly one HTTP or HTTPS URL",
+				)
+			}
+
+			source, err := origin.Parse(
+				commandArgs[1],
+			)
+			if err != nil {
+				return reportUsage(
+					stderr,
+					"seed add requires a valid HTTP or HTTPS URL",
+				)
+			}
+
+			if err := seedOperations.addCrawlSeed(
+				ctx,
+				source,
+			); err != nil {
+				return reportCommandFailure(
+					stderr,
+					command,
+					err,
+				)
+			}
+
+			_, _ = fmt.Fprintf(
+				stdout,
+				"seed added %s\n",
+				source.String(),
+			)
+
+			return exitSuccess
+
+		case "remove":
+			if len(commandArgs) != 2 {
+				return reportUsage(
+					stderr,
+					"seed remove requires exactly one HTTP or HTTPS URL",
+				)
+			}
+
+			source, err := origin.Parse(
+				commandArgs[1],
+			)
+			if err != nil {
+				return reportUsage(
+					stderr,
+					"seed remove requires a valid HTTP or HTTPS URL",
+				)
+			}
+
+			if err := seedOperations.removeCrawlSeed(
+				ctx,
+				source,
+			); err != nil {
+				return reportCommandFailure(
+					stderr,
+					command,
+					err,
+				)
+			}
+
+			_, _ = fmt.Fprintf(
+				stdout,
+				"seed removed %s\n",
+				source.String(),
+			)
+
+			return exitSuccess
+
+		case "list":
+			if len(commandArgs) != 1 {
+				return reportUsage(
+					stderr,
+					"seed list does not accept arguments",
+				)
+			}
+
+			seeds, err := seedOperations.crawlSeeds(
+				ctx,
+			)
+			if err != nil {
+				return reportCommandFailure(
+					stderr,
+					command,
+					err,
+				)
+			}
+
+			for _, seed := range seeds {
+				_, _ = fmt.Fprintln(
+					stdout,
+					seed.String(),
+				)
+			}
+
+			return exitSuccess
+
+		default:
+			return reportUsage(
+				stderr,
+				"seed requires add, remove, or list",
+			)
+		}
 
 	case "worker":
 		if len(commandArgs) != 0 {

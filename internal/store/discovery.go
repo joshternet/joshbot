@@ -13,8 +13,6 @@ import (
 	"github.com/joshternet/joshbot/internal/origin"
 )
 
-const maxDiscoveryCandidatesPerSource = 1024
-
 var (
 	errDiscoveryStoreUnavailable = errors.New(
 		"store: discovery store is unavailable",
@@ -69,7 +67,134 @@ func newDiscoveryStore(
 	}, nil
 }
 
-// ClaimDiscoverySource claims and marks one due, effectively verified source.
+// AddCrawlSeed marks an origin as an explicitly curated crawl source.
+//
+// Adding a seed does not create verification observations or verification
+// queue work. Existing crawl scheduling state is preserved.
+func (s *DiscoveryStore) AddCrawlSeed(
+	ctx context.Context,
+	source origin.Origin,
+) error {
+	if err := s.validate(ctx); err != nil {
+		return err
+	}
+
+	if source.String() == "" {
+		return errInvalidOrigin
+	}
+
+	_, err := s.pool.Exec(
+		ctx,
+		`
+			INSERT INTO discovery_source_state (
+				source_origin,
+				seeded
+			)
+			VALUES ($1, true)
+			ON CONFLICT (source_origin) DO UPDATE
+			SET seeded = true
+		`,
+		source.String(),
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"store: add crawl seed: %w",
+			err,
+		)
+	}
+
+	return nil
+}
+
+// RemoveCrawlSeed removes explicit seed status from an origin.
+//
+// Verification observations, candidate provenance, queue state, and crawl
+// scheduling history remain unchanged.
+func (s *DiscoveryStore) RemoveCrawlSeed(
+	ctx context.Context,
+	source origin.Origin,
+) error {
+	if err := s.validate(ctx); err != nil {
+		return err
+	}
+
+	if source.String() == "" {
+		return errInvalidOrigin
+	}
+
+	_, err := s.pool.Exec(
+		ctx,
+		`
+			UPDATE discovery_source_state
+			SET seeded = false
+			WHERE source_origin = $1
+		`,
+		source.String(),
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"store: remove crawl seed: %w",
+			err,
+		)
+	}
+
+	return nil
+}
+
+// CrawlSeeds returns explicitly curated seeds in canonical order.
+func (s *DiscoveryStore) CrawlSeeds(
+	ctx context.Context,
+) ([]origin.Origin, error) {
+	if err := s.validate(ctx); err != nil {
+		return nil, err
+	}
+
+	var stored []string
+	err := s.pool.QueryRow(
+		ctx,
+		`
+			SELECT COALESCE(
+				array_agg(
+					source_origin
+					ORDER BY source_origin
+				),
+				ARRAY[]::text[]
+			)
+			FROM discovery_source_state
+			WHERE seeded
+		`,
+	).Scan(&stored)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"store: list crawl seeds: %w",
+			err,
+		)
+	}
+
+	seeds := make(
+		[]origin.Origin,
+		len(stored),
+	)
+
+	for index, rawOrigin := range stored {
+		seed, err := origin.Parse(rawOrigin)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"store: invalid crawl seed: %w",
+				err,
+			)
+		}
+
+		seeds[index] = seed
+	}
+
+	return seeds, nil
+}
+
+// ClaimDiscoverySource claims and marks one due crawl source.
+//
+// A source is eligible when it is explicitly seeded or its latest
+// authoritative declaration observation is valid.
 func (s *DiscoveryStore) ClaimDiscoverySource(
 	ctx context.Context,
 	interval time.Duration,
@@ -107,8 +232,15 @@ func (s *DiscoveryStore) ClaimDiscoverySource(
 			err = tx.QueryRow(
 				ctx,
 				`
-					WITH candidate AS (
-						SELECT stored_origin.origin
+					WITH verified_candidate AS (
+						SELECT
+							stored_origin.origin
+								AS source_origin,
+							source_state.last_attempted_at,
+							COALESCE(
+								source_state.seeded,
+								false
+							) AS seeded
 						FROM origins AS stored_origin
 						JOIN LATERAL (
 							SELECT observation.outcome
@@ -130,33 +262,91 @@ func (s *DiscoveryStore) ClaimDiscoverySource(
 						) AS effective
 							ON effective.outcome = 'valid'
 						LEFT JOIN discovery_source_state
-							ON discovery_source_state.source_origin =
+							AS source_state
+							ON source_state.source_origin =
 								stored_origin.origin
-						WHERE
-							discovery_source_state.last_attempted_at
-								IS NULL
-							OR discovery_source_state.last_attempted_at
-								<= (
-									$1::timestamptz -
-									make_interval(
-										secs =>
-											$2::double precision
+						WHERE NOT COALESCE(
+								source_state.seeded,
+								false
+							)
+							AND (
+								source_state.last_attempted_at
+									IS NULL
+								OR source_state.last_attempted_at
+									<= (
+										$1::timestamptz -
+										make_interval(
+											secs =>
+												$2::double precision
+										)
 									)
-								)
+							)
 						ORDER BY
-							discovery_source_state.last_attempted_at
+							source_state.last_attempted_at
 								ASC NULLS FIRST,
 							stored_origin.origin ASC
-						FOR UPDATE OF stored_origin SKIP LOCKED
+						FOR UPDATE OF stored_origin
+							SKIP LOCKED
+						LIMIT 1
+					),
+					seeded_candidate AS (
+						SELECT
+							source_state.source_origin,
+							source_state.last_attempted_at,
+							source_state.seeded
+						FROM discovery_source_state
+							AS source_state
+						WHERE source_state.seeded
+							AND (
+								source_state.last_attempted_at
+									IS NULL
+								OR source_state.last_attempted_at
+									<= (
+										$1::timestamptz -
+										make_interval(
+											secs =>
+												$2::double precision
+										)
+									)
+							)
+						ORDER BY
+							source_state.last_attempted_at
+								ASC NULLS FIRST,
+							source_state.source_origin ASC
+						FOR UPDATE OF source_state
+							SKIP LOCKED
+						LIMIT 1
+					),
+					candidate AS (
+						SELECT
+							source_origin,
+							last_attempted_at,
+							seeded
+						FROM verified_candidate
+
+						UNION ALL
+
+						SELECT
+							source_origin,
+							last_attempted_at,
+							seeded
+						FROM seeded_candidate
+
+						ORDER BY
+							last_attempted_at
+								ASC NULLS FIRST,
+							source_origin ASC
 						LIMIT 1
 					)
 					INSERT INTO discovery_source_state (
 						source_origin,
-						last_attempted_at
+						last_attempted_at,
+						seeded
 					)
 					SELECT
-						candidate.origin,
-						$1::timestamptz
+						candidate.source_origin,
+						$1::timestamptz,
+						candidate.seeded
 					FROM candidate
 					ON CONFLICT (source_origin) DO UPDATE
 					SET last_attempted_at =
@@ -197,7 +387,7 @@ func (s *DiscoveryStore) ClaimDiscoverySource(
 	return claimed, found, nil
 }
 
-// RecordDiscovery atomically records one bounded candidate batch.
+// RecordDiscovery atomically records one candidate batch.
 //
 // Existing queue rows remain completely untouched. A candidate receives a
 // probe only when it currently has no queue row.
@@ -264,11 +454,27 @@ func (s *DiscoveryStore) RecordDiscovery(
 			err = tx.QueryRow(
 				ctx,
 				`
-					WITH locked_source AS (
-						SELECT origin
+					WITH locked_verification_source AS (
+						SELECT
+							origin AS source_origin
 						FROM origins
 						WHERE origin = $1
 						FOR UPDATE
+					),
+					locked_crawl_source AS (
+						SELECT source_origin
+						FROM discovery_source_state
+						WHERE source_origin = $1
+						FOR UPDATE
+					),
+					locked_source AS (
+						SELECT source_origin
+						FROM locked_verification_source
+
+						UNION
+
+						SELECT source_origin
+						FROM locked_crawl_source
 					),
 					input AS (
 						SELECT
@@ -283,56 +489,6 @@ func (s *DiscoveryStore) RecordDiscovery(
 						)
 						CROSS JOIN locked_source
 					),
-					existing AS (
-						SELECT DISTINCT candidate_origin
-						FROM discovery_edges
-						WHERE source_origin = $1
-					),
-					capacity AS (
-						SELECT GREATEST(
-							$5 - count(*),
-							0
-						)::bigint AS remaining
-						FROM existing
-					),
-					existing_input AS (
-						SELECT
-							input.candidate_origin,
-							input.kind
-						FROM input
-						JOIN existing
-							USING (candidate_origin)
-					),
-					new_input AS (
-						SELECT
-							input.candidate_origin,
-							input.kind
-						FROM input
-						WHERE NOT EXISTS (
-							SELECT 1
-							FROM existing
-							WHERE existing.candidate_origin =
-								input.candidate_origin
-						)
-						ORDER BY input.candidate_origin
-						LIMIT (
-							SELECT remaining
-							FROM capacity
-						)
-					),
-					accepted AS (
-						SELECT
-							candidate_origin,
-							kind
-						FROM existing_input
-
-						UNION ALL
-
-						SELECT
-							candidate_origin,
-							kind
-						FROM new_input
-					),
 					stored_candidates AS (
 						INSERT INTO discovery_candidates (
 							origin,
@@ -343,7 +499,7 @@ func (s *DiscoveryStore) RecordDiscovery(
 							candidate_origin,
 							$4,
 							$4
-						FROM accepted
+						FROM input
 						ON CONFLICT (origin) DO UPDATE
 						SET
 							first_discovered_at = LEAST(
@@ -368,14 +524,14 @@ func (s *DiscoveryStore) RecordDiscovery(
 						)
 						SELECT
 							$1,
-							accepted.candidate_origin,
-							accepted.kind,
+							input.candidate_origin,
+							input.kind,
 							$4,
 							$4
-						FROM accepted
+						FROM input
 						JOIN stored_candidates
 							ON stored_candidates.origin =
-								accepted.candidate_origin
+								input.candidate_origin
 						ON CONFLICT (
 							source_origin,
 							candidate_origin,
@@ -401,10 +557,10 @@ func (s *DiscoveryStore) RecordDiscovery(
 							mode
 						)
 						SELECT
-							accepted.candidate_origin,
+							input.candidate_origin,
 							$4,
 							'probe'
-						FROM accepted
+						FROM input
 						ON CONFLICT (origin) DO NOTHING
 						RETURNING origin
 					)
@@ -415,7 +571,7 @@ func (s *DiscoveryStore) RecordDiscovery(
 						),
 						(
 							SELECT count(*)
-							FROM accepted
+							FROM input
 						),
 						(
 							SELECT count(*)
@@ -430,7 +586,6 @@ func (s *DiscoveryStore) RecordDiscovery(
 				candidateOrigins,
 				candidateKinds,
 				now.UTC(),
-				maxDiscoveryCandidatesPerSource,
 			).Scan(
 				&sourceCount,
 				&accepted,
@@ -470,7 +625,6 @@ func (s *DiscoveryStore) RecordDiscovery(
 
 	return discovery.RecordResult{
 		Accepted: accepted,
-		Dropped:  len(prepared) - accepted,
 	}, nil
 }
 
@@ -506,10 +660,6 @@ func prepareDiscoveryCandidates(
 ) ([]discovery.Candidate, error) {
 	if source.String() == "" {
 		return nil, errInvalidOrigin
-	}
-
-	if len(candidates) > discovery.MaxCandidates {
-		return nil, errInvalidDiscoveryCandidate
 	}
 
 	prepared := append(

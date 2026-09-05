@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/discovery"
+	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 )
@@ -24,12 +25,38 @@ var (
 
 type discoveryRunner interface {
 	Run(context.Context) error
-	RunOnce(context.Context) (discovery.Report, error)
+	RunOnce(context.Context) (discovery.CrawlReport, error)
+}
+
+type discoveryCandidateStore interface {
+	RecordDiscovery(
+		context.Context,
+		origin.Origin,
+		[]discovery.Candidate,
+	) (discovery.RecordResult, error)
+}
+
+type runtimeCandidateSink struct {
+	store discoveryCandidateStore
+}
+
+func (sink runtimeCandidateSink) RecordCandidates(
+	ctx context.Context,
+	source origin.Origin,
+	candidates []discovery.Candidate,
+) error {
+	_, err := sink.store.RecordDiscovery(
+		ctx,
+		source,
+		candidates,
+	)
+
+	return err
 }
 
 func newDiscoveryRuntime(
 	pool *pgxpool.Pool,
-	config discovery.Config,
+	settings crawlRuntimeSettings,
 ) (discoveryRunner, error) {
 	discoveryStore, err := store.NewDiscoveryStore(pool)
 	if err != nil {
@@ -43,12 +70,25 @@ func newDiscoveryRuntime(
 		net.DefaultResolver,
 		&net.Dialer{},
 	)
-	crawler := discovery.NewCrawler(checker)
 
-	runner, err := discovery.NewRunner(
+	crawler, err := discovery.NewMultiPageCrawler(
+		checker,
+		runtimeCandidateSink{
+			store: discoveryStore,
+		},
+		settings.crawl,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"construct multi-page crawler: %w",
+			err,
+		)
+	}
+
+	runner, err := discovery.NewCrawlRunner(
 		discoveryStore,
 		crawler,
-		config,
+		settings.runner,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -64,7 +104,7 @@ func (operations runtimeOperations) discover(
 	ctx context.Context,
 	once bool,
 ) error {
-	config, err := loadDiscoveryConfig(
+	settings, err := loadCrawlRuntimeSettings(
 		operations.getenv,
 	)
 	if err != nil {
@@ -76,7 +116,7 @@ func (operations runtimeOperations) discover(
 		func(connection databaseConnection) error {
 			runner, err := newDiscoveryRuntime(
 				connection.Pool(),
-				config,
+				settings,
 			)
 			if err != nil {
 				return err

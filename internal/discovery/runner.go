@@ -66,8 +66,6 @@ type Report struct {
 	Status     Status
 	Candidates int
 	Accepted   int
-	Dropped    int
-	Truncated  bool
 }
 
 // Runner coordinates durable source claiming, crawling, and persistence.
@@ -201,7 +199,6 @@ func (r *Runner) RunOnce(
 
 	report.Status = result.Status
 	report.Candidates = len(result.Candidates)
-	report.Truncated = result.Truncated
 
 	if len(result.Candidates) == 0 {
 		return report, nil
@@ -220,7 +217,6 @@ func (r *Runner) RunOnce(
 	}
 
 	report.Accepted = recorded.Accepted
-	report.Dropped = recorded.Dropped
 
 	return report, nil
 }
