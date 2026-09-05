@@ -263,11 +263,9 @@ run_restored_joshbot() {
 }
 
 cleanup() {
-  local status
+  local status="$?"
   local remaining_containers
   local remaining_volumes
-
-  status="$?"
 
   trap - EXIT HUP INT TERM
   set +e
@@ -323,8 +321,11 @@ cleanup() {
       --rm \
       --pull never \
       --network none \
+      --user 0:0 \
       --read-only \
       --cap-drop ALL \
+      --cap-add DAC_OVERRIDE \
+      --cap-add FOWNER \
       --security-opt no-new-privileges:true \
       --tmpfs '/var/lib/postgresql:ro,size=1048576,mode=0555' \
       --mount "type=bind,source=$smoke_root,target=/smoke" \
@@ -403,6 +404,12 @@ if docker network inspect "$restore_network" >/dev/null 2>&1; then
   fail "restore network name already exists"
 fi
 
+if [[ -L "$repository_root/external" ]] ||
+  { [[ -e "$repository_root/external" ]] && [[ ! -d "$repository_root/external" ]]; }; then
+  fail "external smoke root is unsafe"
+fi
+
+mkdir -p "$repository_root/external"
 mkdir "$smoke_root"
 
 mkdir \
@@ -415,11 +422,11 @@ mkdir \
 
 chmod 0700 \
   "$smoke_root" \
-  "$JOSHBOT_POSTGRES_DATA_DIR" \
   "$smoke_root/secrets" \
   "$expected_root"
 
 chmod 0777 \
+  "$JOSHBOT_POSTGRES_DATA_DIR" \
   "$JOSHBOT_EXPORT_DIR" \
   "$JOSHBOT_BACKUP_DIR" \
   "$restore_export_directory"
@@ -902,6 +909,7 @@ archive_mode="$(
     --cap-drop ALL \
     --security-opt no-new-privileges:true \
     --tmpfs '/var/lib/postgresql:ro,size=1048576,mode=0555' \
+    --user postgres \
     --mount "type=bind,source=$archive_path,target=/archive.dump,readonly" \
     --entrypoint /usr/bin/stat \
     "$POSTGRES_IMAGE" \
@@ -922,6 +930,7 @@ docker run \
   --cap-drop ALL \
   --security-opt no-new-privileges:true \
   --tmpfs '/var/lib/postgresql:ro,size=1048576,mode=0555' \
+  --user postgres \
   --mount "type=bind,source=$archive_path,target=/archive.dump,readonly" \
   "$POSTGRES_IMAGE" \
   pg_restore \
@@ -968,6 +977,13 @@ compose \
   tools \
   backup
 
+migrate_container="$(
+  compose ps \
+    --all \
+    --quiet \
+    migrate
+)"
+
 tools_container="$(
   compose ps \
     --all \
@@ -981,6 +997,10 @@ backup_container="$(
     --quiet \
     backup
 )"
+
+assert_nonempty \
+  "$migrate_container" \
+  "migration container was not recreated"
 
 assert_nonempty \
   "$tools_container" \
@@ -1266,6 +1286,7 @@ docker run \
   --env "PGUSER=$restore_user" \
   --env 'PGPASSWORD_FILE=/run/secrets/joshbot_restore_password' \
   --mount "type=bind,source=$restore_password_file,target=/run/secrets/joshbot_restore_password,readonly" \
+  --user postgres \
   --mount "type=bind,source=$archive_path,target=/restore/joshbot.dump,readonly" \
   --entrypoint /bin/sh \
   "$POSTGRES_IMAGE" \

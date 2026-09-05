@@ -374,6 +374,14 @@ jobs:
             'PASS: shell, download tools, Git, PostgreSQL tools, and Go compiler are absent' \
               | tee "$DEPLOYMENT_REPORT_DIR/image-security.txt"
 
+      - name: Run publication boundary smoke test
+        id: publication
+        shell: bash
+        run: |
+          set -o pipefail
+          ./deploy/publish_test.sh \
+            2>&1 | tee "$DEPLOYMENT_REPORT_DIR/publication-boundary.txt"
+
       - name: Run deployment and recovery smoke test
         id: smoke
         shell: bash
@@ -424,6 +432,7 @@ jobs:
           | Checkout | \`${{ steps.checkout.outcome }}\` |
           | Docker environment | \`${{ steps.docker.outcome }}\` |
           | Production image | \`${{ steps.image.outcome }}\` |
+          | Publication boundary | \`${{ steps.publication.outcome }}\` |
           | Deployment and recovery smoke | \`${{ steps.smoke.outcome }}\` |
           | Clean working tree | \`${{ steps.clean.outcome }}\` |
           | Docker storage report | \`${{ steps.storage.outcome }}\` |
