@@ -445,6 +445,12 @@ if [[ ! -f "$compose_file" ]]; then
   fail "compose.yaml is unavailable"
 fi
 
+if [[ -L "$repository_root/external" ]] ||
+  { [[ -e "$repository_root/external" ]] && [[ ! -d "$repository_root/external" ]]; }; then
+  fail "external test root is unsafe"
+fi
+
+mkdir -p "$repository_root/external"
 mkdir "$test_root"
 
 mkdir \

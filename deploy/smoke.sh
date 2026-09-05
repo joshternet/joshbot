@@ -401,6 +401,12 @@ if docker network inspect "$restore_network" >/dev/null 2>&1; then
   fail "restore network name already exists"
 fi
 
+if [[ -L "$repository_root/external" ]] ||
+  { [[ -e "$repository_root/external" ]] && [[ ! -d "$repository_root/external" ]]; }; then
+  fail "external smoke root is unsafe"
+fi
+
+mkdir -p "$repository_root/external"
 mkdir "$smoke_root"
 
 mkdir \
