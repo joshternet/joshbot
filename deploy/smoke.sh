@@ -977,6 +977,13 @@ compose \
   tools \
   backup
 
+migrate_container="$(
+  compose ps \
+    --all \
+    --quiet \
+    migrate
+)"
+
 tools_container="$(
   compose ps \
     --all \
@@ -990,6 +997,10 @@ backup_container="$(
     --quiet \
     backup
 )"
+
+assert_nonempty \
+  "$migrate_container" \
+  "migration container was not recreated"
 
 assert_nonempty \
   "$tools_container" \
