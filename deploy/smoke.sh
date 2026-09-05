@@ -930,6 +930,7 @@ docker run \
   --cap-drop ALL \
   --security-opt no-new-privileges:true \
   --tmpfs '/var/lib/postgresql:ro,size=1048576,mode=0555' \
+  --user postgres \
   --mount "type=bind,source=$archive_path,target=/archive.dump,readonly" \
   "$POSTGRES_IMAGE" \
   pg_restore \
