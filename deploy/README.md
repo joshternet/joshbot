@@ -2,42 +2,62 @@
 
 This is the reference deployment I use for JoshBot.
 
-I keep PostgreSQL, migrations, verification workers, discovery, operator tools, and backups seperate on purpose. Each service only gets the network access, credentials, and storage it actually needs.
+PostgreSQL, migrations, workers, discovery, operator tools, publication, and backups are kept seperate on purpose. Each service only receives the network access, credentials, and storage it needs.
 
-This is still a reference setup. Before putting it on a real host, I need to review the actual host paths, firewall backend, Docker versions, and NAS mount instead of guessing.
+Before putting this on a real host I still need to review the actual paths, Docker firewall backend, NAS mount, publication repository, and schedules. I dont want to guess at any of those values.
 
-## Runtime guarantee
+## Runtime guarantees
 
 JoshBot workers use at-least-once execution.
 
-A verification request may physically happen more than once after a crash or expired lease. Only the worker holding the current PostgreSQL lease can commit the result.
+A verification request can physically happen more than once after a crash or expired lease. Only the worker holding the current PostgreSQL lease can commit the result.
 
 Successful completion records the observation, releases the lease, and schedules the next verification in one PostgreSQL transaction.
 
-Manually scheduled work is recurring. Discovery work starts as a one-shot probe. A valid declaration promotes the probe to recurring work. Every non-valid probe records its observation and then leaves the queue in the same transaction.
+Manually scheduled work is recurring. Discovery work starts as a one-shot probe. A valid declaration promotes the probe to recurring work. Every non-valid probe records its observation and leaves the queue in the same transaction.
 
 JoshBot does not promise exactly-once network requests.
+
+Registry publication is seperate from verification. Publication reads an already-built deterministic snapshot and does not connect to PostgreSQL.
 
 ## Services
 
 The Compose deployment includes:
 
 - `postgres`: persistent PostgreSQL 18.6 database;
-- `migrate`: one-shot schema migration service;
+- `migrate`: one-shot schema migrations;
 - `worker`: long-running verification worker;
-- `discovery`: long-running verified-homepage discovery service;
-- `tools`: operator commands for health, scheduling, and exports;
-- `backup`: logical PostgreSQL backup utility.
+- `discovery`: long-running verified-homepage discovery;
+- `tools`: database-backed operator commands and exports;
+- `publisher`: one-shot GitHub registry publication;
+- `backup`: logical PostgreSQL backups.
 
-Only the worker and discovery services are connected to the egress network.
+The network and credential split is intentional:
 
-PostgreSQL, migrations, tools, and backups only use the internal database network. PostgreSQL does not publish port 5432 to the host.
+- `worker` and `discovery` receive the database network and egress;
+- `tools` receives the database network and a writable export mount;
+- `publisher` receives egress, a read-only export mount, and the GitHub token;
+- `migrate`, `postgres`, and `backup` only receive the database network;
+- no database service receives the GitHub token;
+- the publisher receives no database URL, password, network, or storage;
+- no service gets the Docker socket or host networking.
 
-No service gets the Docker socket or host networking.
+PostgreSQL does not publish port 5432 to the host.
 
-## Host information I need before deployment
+## Host requirements
 
-Before deploying on the real host, I need to record and review:
+The host needs:
+
+- Linux;
+- Docker Engine;
+- Docker Compose v2;
+- OpenSSL;
+- local persistent storage for PostgreSQL;
+- an export directory;
+- a seperate mounted backup destination;
+- enough storage for images, PostgreSQL, exports, and backups.
+
+Record the actual environment before deployment:
 
 ```bash
 docker version
@@ -49,39 +69,11 @@ docker info
 I also need to confirm:
 
 - the Docker firewall backend;
-- the local PostgreSQL storage path;
+- the PostgreSQL storage path;
 - the export path;
-- the actual NAS backup mount;
-- the backup schedule.
-
-I dont want to add firewall rules or scheduled backups until those values are confirmed on the real host.
-
-## Host requirements
-
-The host needs:
-
-- Linux;
-- Docker Engine;
-- Docker Compose v2;
-- OpenSSL for generating secrets;
-- local persistent storage for PostgreSQL;
-- a seperate mounted backup destination;
-- enough space for images, database data, exports, and backups.
-
-Check the Compose version:
-
-```bash
-docker compose version
-```
-
-After the environment file is configured, always validate Compose before starting anything:
-
-```bash
-docker compose \
-  --env-file deploy/.env \
-  config \
-  --quiet
-```
+- the real NAS backup mount;
+- the backup schedule;
+- the publication schedule.
 
 ## Host directories
 
@@ -94,13 +86,17 @@ The example configuration uses:
 /mnt/nas/joshbot/backups
 ```
 
-These are examples. The real host paths need to be chosen deliberately.
+These are examples, not automatic choices.
 
-Live PostgreSQL data must stay on local persistent storage. It should not be placed on the NAS backup mount.
+PostgreSQL data must stay on local persistent storage. It should not be placed on the NAS backup mount.
 
-Compose uses `create_host_path: false`, so the source directories must already exist. This is intentional because I would rather fail on a typo than silently create an empty directory in the wrong place.
+Compose uses `create_host_path: false`, so the source directories must already exist. This is intentional because I would rather fail on a typo than silently create an empty directory somewhere unexpected.
 
-For the example paths:
+The JoshBot image runs as UID/GID `65532:65532`. The PostgreSQL image uses UID/GID `999:999`.
+
+The tools container needs write access to the export directory. The host account running `deploy/publish.sh` also needs permission to remove publication snapshots created by UID 65532.
+
+One possible Linux setup is:
 
 ```bash
 sudo install \
@@ -112,9 +108,9 @@ sudo install \
 
 sudo install \
   -d \
-  -m 0750 \
-  -o "$(id -u)" \
-  -g "$(id -g)" \
+  -m 0770 \
+  -o 65532 \
+  -g 65532 \
   /srv/joshbot/exports
 
 sudo install \
@@ -127,9 +123,9 @@ sudo install \
 
 Do not create the backup directory until the NAS mount is confirmed.
 
-## Confirm local PostgreSQL storage
+## Confirm storage
 
-Check the filesystem containing the PostgreSQL directory:
+Check the PostgreSQL filesystem:
 
 ```bash
 findmnt \
@@ -137,17 +133,9 @@ findmnt \
   --output TARGET,SOURCE,FSTYPE,OPTIONS
 ```
 
-Make sure its the intended local filesystem.
+The PostgreSQL 18 image persists `/var/lib/postgresql`. Do not change the mount target to `/var/lib/postgresql/data`.
 
-The PostgreSQL 18 image persists `/var/lib/postgresql`. PostgreSQL 18 stores its versioned data directory below that location.
-
-Do not change the mount target to `/var/lib/postgresql/data`.
-
-## Confirm the NAS backup mount
-
-A directory existing does not prove the NAS is mounted.
-
-Before running a backup, inspect the selected path:
+Confirm that the backup directory is really on the NAS:
 
 ```bash
 findmnt \
@@ -157,19 +145,11 @@ findmnt \
 df -h /mnt/nas/joshbot/backups
 ```
 
-Confirm that:
-
-- the source is the intended NAS;
-- the filesystem type is correct;
-- the path is not falling back to the host root filesystem;
-- the mount is writable;
-- there is enough free space.
-
-Stop if the NAS is not mounted. A missing NAS should never cause backups to quietly fill the hosts local disk.
+A directory existing does not prove the NAS is mounted. Stop if the path falls back to the hosts local filesystem.
 
 ## Environment configuration
 
-Copy the example file:
+Copy the example:
 
 ```bash
 cp \
@@ -177,11 +157,9 @@ cp \
   deploy/.env
 ```
 
-Edit `deploy/.env` and replace the example paths with the actual host paths.
+Replace the example paths and publication target with the real values.
 
-The real environment file is ignored by Git.
-
-Database URLs in `compose.yaml` do not contain passwords. Passwords are read from mounted secret files.
+The actual environment file is ignored by Git. Database passwords and the GitHub token do not belong in it.
 
 Review the worker timing values:
 
@@ -197,9 +175,7 @@ JOSHBOT_JOB_TIMEOUT + JOSHBOT_COMPLETION_GRACE
     < JOSHBOT_LEASE_DURATION
 ```
 
-A worker needs enough lease time left to commit its result after verification finishes.
-
-Review the discovery timing values too:
+Review discovery timing too:
 
 ```text
 JOSHBOT_DISCOVERY_INTERVAL > 0
@@ -209,9 +185,9 @@ JOSHBOT_DISCOVERY_PAGE_TIMEOUT > 0
 
 The reference discovery interval is `168h`. Go durations do not accept `7d`.
 
-## Create secrets
+## Database secrets
 
-Generate four different passwords:
+Generate four different database passwords:
 
 ```bash
 sudo sh -c '
@@ -232,64 +208,100 @@ sudo sh -c '
 '
 ```
 
-The JoshBot image runs as UID/GID `65532:65532`.
-
-The PostgreSQL image uses UID/GID `999:999` for the PostgreSQL process.
-
-The PostgreSQL initialization process needs to read the migrator, application, and backup passwords. The application containers also need to read the specific secret assigned to them.
-
-For the reference Linux ownership setup:
-
-```bash
-sudo chown \
-  root:root \
-  /srv/joshbot/secrets/postgres_admin_password
-
-sudo chmod \
-  0400 \
-  /srv/joshbot/secrets/postgres_admin_password
-
-sudo chown \
-  65532:999 \
-  /srv/joshbot/secrets/joshbot_migrator_password \
-  /srv/joshbot/secrets/joshbot_app_password
-
-sudo chmod \
-  0440 \
-  /srv/joshbot/secrets/joshbot_migrator_password \
-  /srv/joshbot/secrets/joshbot_app_password
-
-sudo chown \
-  999:999 \
-  /srv/joshbot/secrets/joshbot_backup_password
-
-sudo chmod \
-  0400 \
-  /srv/joshbot/secrets/joshbot_backup_password
-```
-
 Do not:
 
 - commit secret files;
 - put passwords in `compose.yaml`;
 - put passwords in `deploy/.env`;
-- put passwords in `JOSHBOT_DATABASE_URL`;
+- put passwords in database URLs;
 - print passwords in logs.
 
-## Validate the configuration
+## Publication repository
+
+The publication target must be a dedicated data repository and branch controlled entirely by JoshBot.
+
+Do not point the publisher at:
+
+```text
+joshternet/joshbot
+joshternet/joshternet.github.io
+```
+
+A small dedicated public repository such as `joshternet/index-data` is the intended shape, but the final repository name is an operator decision.
+
+The machine-managed branch is replaced with an exact generated tree. Do not manually store README files, workflows, or anything else on that branch.
+
+Before the first publication, the target branch must already exist and contain this root file:
+
+```text
+.joshbot-registry-target
+```
+
+Its exact contents must be:
+
+```text
+joshbot-registry-v1
+```
+
+That text includes one final newline.
+
+The publisher will not:
+
+- create a repository;
+- create an organization;
+- create a token;
+- change Pages settings;
+- change repository settings;
+- create a workflow;
+- force-update a Git reference.
+
+## GitHub token
+
+Use a fine-grained token restricted to the dedicated publication repository.
+
+The required repository permission is:
+
+```text
+Contents: Read and write
+```
+
+Do not grant Administration, Actions, Workflows, Issues, Pull requests, Secrets, or unrelated permissions.
+
+Store the token only in the configured file:
+
+```text
+/srv/joshbot/secrets/joshbot_github_token
+```
+
+Do not put it in:
+
+- `compose.yaml`;
+- `deploy/.env`;
+- command arguments;
+- logs;
+- PostgreSQL;
+- registry output;
+- chat.
+
+The publisher container receives the token file but no database credential. Database services do not receive the token.
+
+## Validate Compose
 
 Run:
 
 ```bash
 docker compose \
   --env-file deploy/.env \
+  --profile tools \
+  --profile backup \
+  --profile publisher \
   config \
   --quiet
 ```
 
-Fix any missing path, secret, or required variable before starting the deployment.
+Fix missing paths or variables before starting anything.
 
-## Build the JoshBot image
+## Build the image
 
 Run:
 
@@ -301,25 +313,27 @@ docker compose \
   migrate \
   worker \
   discovery \
-  tools
+  tools \
+  publisher
 ```
 
-The final JoshBot image:
+All JoshBot services use the same minimal image.
 
-- contains a statically linked binary;
-- contains the CA certificate bundle needed for HTTPS;
+The final image:
+
+- contains one statically linked JoshBot binary;
+- contains the CA certificate bundle;
 - runs as UID/GID `65532:65532`;
 - has no shell;
 - has no Go compiler;
 - has no Git client;
+- has no `gh`;
 - has no curl or wget;
 - has no PostgreSQL client tools.
 
-PostgreSQL backup tools stay in the seperate PostgreSQL utility image.
+## Start the normal runtime
 
-## First startup
-
-Start the normal service set:
+Run:
 
 ```bash
 docker compose \
@@ -330,9 +344,9 @@ docker compose \
   --wait
 ```
 
-This starts PostgreSQL, waits for it to become healthy, runs migrations, and starts the worker and discovery services after migration completes succesfully.
+This starts PostgreSQL, applies migrations, and starts the worker and discovery services. The publisher is profile-controlled and is not a daemon.
 
-Check the service state:
+Check the state:
 
 ```bash
 docker compose \
@@ -341,9 +355,9 @@ docker compose \
   --all
 ```
 
-The migration container should exit with code zero. PostgreSQL, the worker, and discovery should be healthy.
+The migration container should exit with code zero. PostgreSQL, worker, and discovery should be healthy.
 
-## Migration behavior
+## Migrations
 
 Migrations are embedded from:
 
@@ -351,17 +365,9 @@ Migrations are embedded from:
 internal/store/migrations/
 ```
 
-The migration runner:
+Applied migrations must never be edited. Add a new forward migration instead.
 
-- serializes concurrent migration attempts with a PostgreSQL advisory lock;
-- applies pending migrations transactionally;
-- records migration versions, names, checksums, and application times;
-- rejects changes to migrations that were already applied;
-- treats an already-current schema as a successful no-op.
-
-Do not modify an applied migration. Add a new forward migration instead.
-
-Run migrations manually with:
+Run them manually with:
 
 ```bash
 docker compose \
@@ -373,8 +379,6 @@ docker compose \
 ```
 
 ## Health check
-
-Check database connectivity through the JoshBot application:
 
 ```bash
 docker compose \
@@ -393,11 +397,7 @@ Expected output:
 healthy
 ```
 
-The health command does not contact the public Internet.
-
 ## Schedule an origin
-
-Schedule an origin through the canonical origin parser:
 
 ```bash
 docker compose \
@@ -411,105 +411,15 @@ docker compose \
   https://example.com/path
 ```
 
-The canonical queue value becomes:
+The canonical scheduled origin becomes:
 
 ```text
 https://example.com
 ```
 
-Scheduling an origin does not create a verification observation by itself.
-
-Manual scheduling always means recurring verification. If the origin already has an active discovery probe lease, scheduling promotes it to recurring without invalidating that lease.
-
-## Worker operation
-
-The worker:
-
-- claims due origins using PostgreSQL lease authority;
-- runs verification with a bounded context;
-- leaves enough lease time for atomic completion;
-- uses the existing network guard, robots checker, and declaration verifier;
-- commits only while its lease is still authoritative;
-- attempts more work immediately after successful completion;
-- waits without busy-spinning when no work is available;
-- handles SIGINT and SIGTERM through context cancellation.
-
-If the worker dies before completion, it does not create a fake observation. The lease expires and another worker can recover the work.
-
-View worker logs:
-
-```bash
-docker compose \
-  --env-file deploy/.env \
-  logs \
-  --follow \
-  worker
-```
-
-Restart only the worker:
-
-```bash
-docker compose \
-  --env-file deploy/.env \
-  restart \
-  worker
-```
-
-## Discovery operation
-
-Discovery starts only from origins whose current effective authoritative declaration is valid. Undeclared, affirmed, and declined identities are all valid participants and are equally eligible discovery sources.
-
-A discovery attempt fetches only the canonical homepage `/`, plus at most five same-origin redirects needed to reach that homepage representation. Every request goes through the existing robots checker and network guard. Same-origin links are ignored and never crawled. A cross-origin homepage redirect is not followed; its canonical origin becomes one redirect candidate instead.
-
-A hyperlink is not proof of Joshness, participation, trust, ownership, or endorsement. Discovery only says that an origin may be worth independently probing.
-
-The static HTML parser:
-
-- executes no JavaScript, CSS, or remote resources;
-- accepts HTML and XHTML responses;
-- reads at most 1 MiB of response bytes;
-- permits at most 2 MiB after character-set conversion;
-- keeps the first 64 unique external origins encountered;
-- returns those origins in canonical sorted order;
-- honors the first document `<base href>`;
-- extracts only `<a href>` and `<area href>` destinations.
-
-JoshBot stores only the canonical source origin, canonical candidate origin, discovery kind, and first/last discovery timestamps. It does not store raw hrefs, page paths, anchor text, HTML, headers, addresses, DNS answers, or TLS details. Each source can retain at most 1024 distinct historical candidate origins.
-
-Discovery creates a `probe` queue row only when the candidate has no queue row. It never changes an existing probe and never demotes recurring work. A valid probe becomes recurring. A non-valid probe records the observation and is removed until a later permitted discovery sees the candidate again.
-
-Candidate provenance, discovery timing, and queue mode stay private. None of those fields enter the public registry. A candidate appears publicly only after its own declaration independently verifies as valid.
-
-View discovery logs:
-
-```bash
-docker compose \
-  --env-file deploy/.env \
-  logs \
-  --follow \
-  discovery
-```
-
-Run at most one due discovery source and exit:
-
-```bash
-docker compose \
-  --env-file deploy/.env \
-  run \
-  --rm \
-  --no-deps \
-  discovery \
-  discover \
-  --once
-```
-
-If no verified source is due, this succeeds without making a network request.
-
 ## Export the public registry
 
-The export destination must not already exist.
-
-Create a unique snapshot name:
+The output directory must not already exist:
 
 ```bash
 snapshot="registry-$(date -u '+%Y%m%dT%H%M%SZ')"
@@ -525,13 +435,43 @@ docker compose \
   --output "/exports/$snapshot"
 ```
 
-The snapshot appears below the configured host export directory.
+The tools container has database access and a writable export mount. It has no egress and no GitHub token.
 
-The worker and discovery services cannot access this mount.
+## Publish the public registry
 
-## Create a manual backup
+`deploy/publish.sh` performs one publication attempt using two separate containers:
 
-First prove the backup directory is really on the intended NAS mount.
+1. `tools` exports a fresh deterministic snapshot;
+2. `publisher` reads that snapshot and publishes it;
+3. the temporary local snapshot is removed after success or failure.
+
+The script expects the deployment variables to already be present in its environment. A service manager can load the reviewed `deploy/.env` as its environment file.
+
+Run:
+
+```bash
+./deploy/publish.sh
+```
+
+A changed publication prints:
+
+```text
+published COMMIT_SHA
+```
+
+An identical publication prints:
+
+```text
+registry unchanged
+```
+
+The publisher uses the official GitHub API directly. It rejects redirects, ignores HTTP proxy environment variables, requires the target sentinel, creates an exact tree without `base_tree`, and updates the branch without force.
+
+The temporary snapshot is transport staging. It is not a backup.
+
+## Manual backup
+
+First prove that the backup directory is on the intended NAS mount.
 
 Then run:
 
@@ -547,169 +487,116 @@ docker compose \
 
 The backup service:
 
-- connects through the internal database network;
+- uses the internal database network;
 - uses the read-only backup role;
-- creates a PostgreSQL custom-format archive;
+- creates a custom-format PostgreSQL archive;
 - writes a `.partial` file first;
 - validates it with `pg_restore --list`;
 - sets mode `0600`;
-- atomically renames the validated file to `.dump`;
-- removes the partial file if something fails.
+- atomically renames it to `.dump`;
+- removes a partial file after failure.
 
-The backup does not copy live PostgreSQL data.
+Retention is a seperate destructive policy decision and is not automated here.
 
-The worker, discovery, tools, and PostgreSQL services do not have access to the backup directory.
+## Recovery drill
 
-## Validate a backup archive
-
-List the available archives:
-
-```bash
-find \
-  /mnt/nas/joshbot/backups \
-  -maxdepth 1 \
-  -type f \
-  -name 'joshbot-*.dump' \
-  -print
-```
-
-Choose the exact archive deliberately, then validate it:
-
-```bash
-docker compose \
-  --env-file deploy/.env \
-  --profile backup \
-  run \
-  --rm \
-  --no-deps \
-  --entrypoint pg_restore \
-  backup \
-  --list \
-  /backups/joshbot-YYYYMMDDTHHMMSSZ.dump
-```
-
-This deployment does not automatically delete old backups. Retention is a seperate destructive policy decision.
-
-## Safe recovery drill
-
-Run the disposable recovery test:
+Run:
 
 ```bash
 ./deploy/smoke.sh
 ```
 
-The smoke test:
+The recovery smoke test:
 
-- creates unique disposable directories and secrets;
-- uses a unique Compose project;
-- initializes PostgreSQL 18.6;
-- applies migrations through discovery migration 0003;
-- verifies least-privilege roles;
-- runs one-shot discovery with no verified source, so no public request occurs;
-- schedules a fake origin without crawling it;
-- creates known observations, private provenance, and probe/recurring queue state;
+- creates disposable directories and secrets;
+- initializes PostgreSQL;
+- applies migrations;
+- checks database role boundaries;
+- runs a no-network discovery attempt;
+- creates known verification and discovery state;
 - exports deterministic registry data;
-- proves private discovery state leaves the public export byte-identical;
-- creates and validates a logical backup;
-- starts a seperate internal-only PostgreSQL restore instance;
-- restores the backup transactionally;
-- reruns current migrations;
-- verifies application connectivity;
-- verifies observations, effective state, private provenance, queue modes, and migration metadata;
-- rebuilds byte-identical public registry files;
-- removes its containers, networks, image, database, exports, backups, and secrets.
+- proves private discovery data does not alter public output;
+- creates and validates a backup;
+- restores into a fresh isolated PostgreSQL instance;
+- verifies application connectivity and restored data;
+- rebuilds byte-identical registry files;
+- cleans containers, networks, images, storage, and secrets.
 
-The smoke test never restores into the reference production PostgreSQL service.
+It never restores into the reference production database.
 
-## Recovering a real backup
+## Publication boundary smoke
 
-Do not restore a real archive into the running production database.
+Run:
 
-A real recovery requires:
+```bash
+./deploy/publish_test.sh
+```
 
-1. selecting and recording the exact backup archive;
-2. creating a new empty PostgreSQL 18.6 instance;
-3. confirming its container name, network, credentials, and storage are seperate;
-4. restoring with `pg_restore --no-owner --no-privileges`;
-5. running `joshbot migrate`;
-6. running `joshbot health`;
-7. verifying observations, effective state, queue rows, and exports;
-8. switching the application only after the restored system is verified.
+This test uses a fake Docker command for host-script execution. It never contacts GitHub and never needs a real token.
 
-Stop and make a host-specific recovery plan before doing this. `pg_restore` can be destructive when it is pointed at the wrong database.
+It verifies actual container configuration for:
 
-## Container security checks
+- non-root execution;
+- read-only root filesystem;
+- dropped capabilities;
+- `no-new-privileges`;
+- no published ports;
+- no Docker socket;
+- egress without the database network;
+- read-only export mount;
+- GitHub secret present only in the publisher;
+- database credentials absent from the publisher;
+- separate exporter and publisher containers;
+- snapshot cleanup after success and failure;
+- preservation of the publisher failure status;
+- no token logging.
 
-List the deployed containers:
+## Container inspection
+
+Inspect actual containers with:
 
 ```bash
 docker compose \
   --env-file deploy/.env \
+  --profile tools \
+  --profile backup \
+  --profile publisher \
+  create
+
+docker compose \
+  --env-file deploy/.env \
+  --profile tools \
+  --profile backup \
+  --profile publisher \
   ps \
   --all \
   --quiet
 ```
 
-Inspect each container:
+Then inspect specific container IDs:
 
 ```bash
 docker inspect CONTAINER_ID
 ```
 
-Confirm:
+The publisher must have:
 
-- JoshBot services run as UID/GID `65532:65532`;
-- worker, discovery, migration, and tools root filesystems are read-only;
-- configured services drop all Linux capabilities;
-- `no-new-privileges` is enabled;
-- no service is privileged;
-- no service uses host networking;
-- no service mounts `/var/run/docker.sock`;
-- only the worker and discovery services are connected to egress;
-- only tools receives the export mount;
-- only backup receives the backup mount;
-- PostgreSQL does not publish a host port;
-- worker and discovery have no export, backup, or PostgreSQL data mount.
-
-The deployment smoke test checks these properties against the actual containers instead of only trusting the YAML.
-
-## Host firewall review
-
-JoshBot still uses its network guard inside the worker and discovery service. The host firewall should provide a second boundary against private, LAN, management, metadata, and other special-purpose destinations.
-
-Do not apply firewall rules until the actual Docker firewall backend and host network layout are known.
-
-Collect read-only information:
-
-```bash
-docker info
-
-sudo test ! -f /etc/docker/daemon.json ||
-  sudo cat /etc/docker/daemon.json
-
-sudo nft list ruleset
-
-sudo iptables-save
-```
-
-Review:
-
-- whether Docker uses iptables or nftables;
-- the worker and discovery egress bridge;
-- Docker DNS requirements;
-- host LAN networks;
-- host management networks;
-- metadata and special-purpose networks.
-
-If Docker uses iptables, use the current Docker-supported operator filtering path.
-
-If Docker uses nftables, do not assume `DOCKER-USER` exists. Do not modify Docker-owned nftables tables. Use a seperate operator-owned table and chain appropriate for the confirmed backend.
-
-Firewall changes require their own human review.
+- UID/GID `65532:65532`;
+- read-only root filesystem;
+- all capabilities dropped;
+- `no-new-privileges`;
+- only the egress network;
+- a read-only `/exports`;
+- `/run/secrets/joshbot_github_token`;
+- no database configuration;
+- no database network;
+- no backup or PostgreSQL mount;
+- no Docker socket;
+- no published ports.
 
 ## Graceful shutdown
 
-Stop the worker and discovery services first:
+Stop worker and discovery first:
 
 ```bash
 docker compose \
@@ -719,11 +606,7 @@ docker compose \
   discovery
 ```
 
-SIGTERM cancels current bounded work. If a job has not completed, its lease remains in PostgreSQL and becomes recoverable after it expires.
-
-Create and validate a final logical backup if one is required.
-
-Stop the remaining services without removing host data:
+Then stop the remaining services without deleting host data:
 
 ```bash
 docker compose \
@@ -731,17 +614,17 @@ docker compose \
   down
 ```
 
-Do not delete the PostgreSQL host directory unless that destructive operation was explicitly approved.
+Do not delete the PostgreSQL directory unless that destructive operation was explicitly approved.
 
 ## Upgrade procedure
 
 Before upgrading:
 
 1. verify the NAS mount;
-2. create a logical backup;
-3. validate the backup with `pg_restore --list`;
-4. record the currently deployed image;
-5. review new migrations and compatibility.
+2. create and validate a backup;
+3. record the currently deployed image;
+4. review new migrations;
+5. confirm application compatibility.
 
 Build the new image:
 
@@ -753,7 +636,8 @@ docker compose \
   migrate \
   worker \
   discovery \
-  tools
+  tools \
+  publisher
 ```
 
 Apply migrations:
@@ -767,7 +651,7 @@ docker compose \
   migrate
 ```
 
-Recreate the worker and discovery services:
+Recreate the long-running services:
 
 ```bash
 docker compose \
@@ -779,63 +663,37 @@ docker compose \
   discovery
 ```
 
-Check health and logs before calling the upgrade complete.
-
-## Rollback and recovery
-
-Database migrations are forward-only.
-
-Do not assume an older application image is still compatible after a migration.
-
-If an application rollback is unsafe:
-
-- stop the worker and discovery services;
-- preserve the failed deployment state;
-- select a validated pre-upgrade backup;
-- restore into a fresh PostgreSQL instance;
-- test the restored database with the intended application image;
-- switch only after application-level validation.
-
-Never overwrite the only recoverable database while trying to diagnose a failed upgrade.
-
-## Backup scheduling
-
-This phase does not create or enable a backup scheduler.
-
-After manual backup and recovery are proven on the real host, I still need to choose:
-
-- the backup schedule;
-- the retention policy;
-- the confirmed NAS mount;
-- the systemd unit location.
-
-A future systemd backup service should require the selected mount with `RequiresMountsFor=` or another reviewed mechanism.
-
-Do not enable a timer until the NAS mount and schedule are approved.
+The publisher remains one-shot.
 
 ## Continuous integration
 
-The quality workflow runs two independent jobs:
+The quality workflow runs:
 
-- Go, PostgreSQL, race, repeatability, and 100% coverage;
-- production image, container security, deployment, backup, restore, and cleanup.
+- formatting, module, vet, PostgreSQL, normal test, fuzz, race, and coverage gates;
+- production image inspection;
+- publication boundary tests;
+- deployment, backup, restore, and cleanup smoke tests.
 
-Both jobs upload reports and add summaries to the GitHub Actions run.
+CI uses fake publication infrastructure. It does not require or receive a real GitHub token.
 
-A pull request is not ready just because the Go tests pass. The deployment and recovery job also has to pass, and I need to inspect its downloaded report.
+Both jobs upload reports and add summaries to the Actions run.
 
 ## Local validation
 
-Run:
+Run all validation only after every Phase 10 file is in place:
 
 ```bash
 chmod 0755 \
   deploy/backup.sh \
   deploy/postgres/init/010-joshbot-roles.sh \
+  deploy/publish.sh \
+  deploy/publish_test.sh \
   deploy/smoke.sh
 
 bash -n deploy/backup.sh
 bash -n deploy/postgres/init/010-joshbot-roles.sh
+bash -n deploy/publish.sh
+bash -n deploy/publish_test.sh
 bash -n deploy/smoke.sh
 
 Psych_command='Psych.parse_file(ARGV.fetch(0))'
@@ -844,37 +702,8 @@ ruby \
   -e "$Psych_command" \
   .github/workflows/quality.yml
 
+./deploy/publish_test.sh
 ./deploy/smoke.sh
-
-export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"
-export JOSHBOT_TEST_DATABASE_URL="postgres://$(whoami)@localhost:55432/joshbot_test?host=%2Ftmp&sslmode=disable"
-
-JOSHBOT_REQUIRE_DATABASE_TESTS=1 \
-go test \
-  -count=1 \
-  ./...
-
-JOSHBOT_REQUIRE_DATABASE_TESTS=1 \
-go test \
-  -count=10 \
-  -race \
-  -coverprofile=/tmp/joshbot-phase9-final-coverage.out \
-  ./...
-
-go tool cover \
-  -func=/tmp/joshbot-phase9-final-coverage.out
-
-go test \
-  ./internal/discovery \
-  -run '^$' \
-  -fuzz '^FuzzExtract$' \
-  -fuzztime=10s
-
-go vet ./...
-go mod tidy -diff
-gofmt -l .
-git diff --check
-git status --short --branch
 ```
 
-Coverage must remain exactly `100.0%`.
+Then run the Go quality suite described at the end of this phase.

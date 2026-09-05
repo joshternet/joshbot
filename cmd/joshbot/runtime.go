@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/database"
 	"github.com/joshternet/joshbot/internal/declaration"
+	"github.com/joshternet/joshbot/internal/githubpublish"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/publicdata"
 	"github.com/joshternet/joshbot/internal/robots"
@@ -45,6 +46,13 @@ type verifiedOriginSource interface {
 
 type workerRunner interface {
 	Run(context.Context) error
+}
+
+type registryPublisher interface {
+	Publish(
+		context.Context,
+		[]publicdata.File,
+	) (githubpublish.Result, error)
 }
 
 type runtimeOperations struct {
@@ -81,6 +89,20 @@ type runtimeOperations struct {
 		[]publicdata.File,
 	) error
 
+	loadPublishSettings func(
+		environmentGetter,
+	) (publishSettings, error)
+
+	readRegistry func(
+		context.Context,
+		string,
+	) ([]publicdata.File, error)
+
+	newPublisher func(
+		githubpublish.Config,
+		string,
+	) (registryPublisher, error)
+
 	newWorker func(
 		worker.Queue,
 		worker.Verifier,
@@ -96,18 +118,19 @@ func newRuntimeOperations(
 	stderr io.Writer,
 ) runtimeOperations {
 	return runtimeOperations{
-		getenv: os.Getenv,
-		random: rand.Reader,
-		logger: slog.New(
-			slog.NewTextHandler(stderr, nil),
-		),
-		newDatabase:     newPostgresDatabase,
-		migrateDatabase: migrateDatabase,
-		newQueue:        newStoreQueue,
-		newStore:        newVerifiedOriginStore,
-		buildRegistry:   buildRegistry,
-		writeRegistry:   writeRegistry,
-		newWorker:       newWorkerRuntime,
+		getenv:              os.Getenv,
+		random:              rand.Reader,
+		logger:              slog.New(slog.NewTextHandler(stderr, nil)),
+		newDatabase:         newPostgresDatabase,
+		migrateDatabase:     migrateDatabase,
+		newQueue:            newStoreQueue,
+		newStore:            newVerifiedOriginStore,
+		buildRegistry:       buildRegistry,
+		writeRegistry:       writeRegistry,
+		loadPublishSettings: loadPublishSettings,
+		readRegistry:        readRegistry,
+		newPublisher:        newGitHubPublisher,
+		newWorker:           newWorkerRuntime,
 	}
 }
 
@@ -171,6 +194,26 @@ func writeRegistry(
 		ctx,
 		root,
 		files,
+	)
+}
+
+func readRegistry(
+	ctx context.Context,
+	root string,
+) ([]publicdata.File, error) {
+	return publicdata.ReadDirectory(
+		ctx,
+		root,
+	)
+}
+
+func newGitHubPublisher(
+	config githubpublish.Config,
+	token string,
+) (registryPublisher, error) {
+	return githubpublish.New(
+		config,
+		token,
 	)
 }
 
@@ -325,6 +368,60 @@ func (operations runtimeOperations) export(
 			)
 		},
 	)
+}
+
+func (operations runtimeOperations) publish(
+	ctx context.Context,
+	root string,
+) (githubpublish.Result, error) {
+	settings, err := operations.loadPublishSettings(
+		operations.getenv,
+	)
+	if err != nil {
+		return githubpublish.Result{},
+			fmt.Errorf(
+				"load publication configuration: %w",
+				err,
+			)
+	}
+
+	files, err := operations.readRegistry(
+		ctx,
+		root,
+	)
+	if err != nil {
+		return githubpublish.Result{},
+			fmt.Errorf(
+				"read public registry snapshot: %w",
+				err,
+			)
+	}
+
+	publisher, err := operations.newPublisher(
+		settings.target,
+		settings.token,
+	)
+	if err != nil {
+		return githubpublish.Result{},
+			fmt.Errorf(
+				"construct GitHub publisher: %w",
+				err,
+			)
+	}
+
+	result, err := publisher.Publish(
+		ctx,
+		files,
+	)
+	if err != nil {
+		return githubpublish.Result{},
+			fmt.Errorf(
+				"publish public registry: %w",
+				err,
+			)
+	}
+
+	return result, nil
 }
 
 func (operations runtimeOperations) worker(

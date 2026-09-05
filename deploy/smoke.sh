@@ -263,11 +263,9 @@ run_restored_joshbot() {
 }
 
 cleanup() {
-  local status
+  local status="$?"
   local remaining_containers
   local remaining_volumes
-
-  status="$?"
 
   trap - EXIT HUP INT TERM
   set +e

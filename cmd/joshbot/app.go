@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/joshternet/joshbot/internal/githubpublish"
 	"github.com/joshternet/joshbot/internal/origin"
 )
 
@@ -24,6 +25,7 @@ Usage:
   joshbot worker
   joshbot discover [--once]
   joshbot export --output <directory>
+  joshbot publish --input <directory>
   joshbot help
 
 Commands:
@@ -33,6 +35,7 @@ Commands:
   worker     Process queued verification work
   discover   Discover candidates from verified homepages
   export     Write a deterministic public registry snapshot
+  publish    Publish an existing registry snapshot to GitHub
   help       Show this help
 `
 
@@ -47,6 +50,10 @@ type commandOperations interface {
 	worker(context.Context) error
 	discover(context.Context, bool) error
 	export(context.Context, string) error
+	publish(
+		context.Context,
+		string,
+	) (githubpublish.Result, error)
 }
 
 func run(
@@ -259,6 +266,43 @@ func runWithOperations(
 			"exported %s\n",
 			commandArgs[1],
 		)
+
+		return exitSuccess
+
+	case "publish":
+		if len(commandArgs) != 2 ||
+			commandArgs[0] != "--input" ||
+			commandArgs[1] == "" {
+			return reportUsage(
+				stderr,
+				"publish requires --input <directory>",
+			)
+		}
+
+		result, err := operations.publish(
+			ctx,
+			commandArgs[1],
+		)
+		if err != nil {
+			return reportCommandFailure(
+				stderr,
+				command,
+				err,
+			)
+		}
+
+		if result.Changed {
+			_, _ = fmt.Fprintf(
+				stdout,
+				"published %s\n",
+				result.CommitSHA,
+			)
+		} else {
+			_, _ = fmt.Fprintln(
+				stdout,
+				"registry unchanged",
+			)
+		}
 
 		return exitSuccess
 
