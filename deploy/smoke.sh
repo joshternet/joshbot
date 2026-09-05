@@ -321,8 +321,11 @@ cleanup() {
       --rm \
       --pull never \
       --network none \
+      --user 0:0 \
       --read-only \
       --cap-drop ALL \
+      --cap-add DAC_OVERRIDE \
+      --cap-add FOWNER \
       --security-opt no-new-privileges:true \
       --tmpfs '/var/lib/postgresql:ro,size=1048576,mode=0555' \
       --mount "type=bind,source=$smoke_root,target=/smoke" \
@@ -419,11 +422,11 @@ mkdir \
 
 chmod 0700 \
   "$smoke_root" \
-  "$JOSHBOT_POSTGRES_DATA_DIR" \
   "$smoke_root/secrets" \
   "$expected_root"
 
 chmod 0777 \
+  "$JOSHBOT_POSTGRES_DATA_DIR" \
   "$JOSHBOT_EXPORT_DIR" \
   "$JOSHBOT_BACKUP_DIR" \
   "$restore_export_directory"
