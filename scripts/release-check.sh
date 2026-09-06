@@ -190,7 +190,25 @@ for path in $shell_files; do
 		continue
 	fi
 
-	if sh -n "$path"; then
+	if ! IFS= read -r shebang <"$path"; then
+		fail "cannot read shell interpreter: $path"
+		continue
+	fi
+
+	case "$shebang" in
+		'#!/bin/sh')
+			shell_command=sh
+			;;
+		'#!/bin/bash' | '#!/usr/bin/env bash')
+			shell_command=bash
+			;;
+		*)
+			fail "unsupported shell interpreter in $path: $shebang"
+			continue
+			;;
+	esac
+
+	if "$shell_command" -n "$path"; then
 		pass "shell syntax is valid: $path"
 	else
 		fail "shell syntax is invalid: $path"
