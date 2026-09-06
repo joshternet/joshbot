@@ -12,7 +12,7 @@ import (
 func TestManualScheduleCreatesRecurringWork(t *testing.T) {
 	ctx := context.Background()
 	pool := newStoreTestPool(t)
-	queue := newPhase9Queue(t, pool)
+	queue := newQueueDiscoveryQueue(t, pool)
 
 	source := mustStoreOrigin(t, "https://example.com")
 	availableAt := queueTestTime()
@@ -77,7 +77,7 @@ func TestManualSchedulePromotesProbeWithoutChangingLease(
 		t.Fatal("Claim() found = false, want true")
 	}
 
-	before := readPhase9LeaseState(
+	before := readQueueDiscoveryLeaseState(
 		t,
 		ctx,
 		pool,
@@ -92,7 +92,7 @@ func TestManualSchedulePromotesProbeWithoutChangingLease(
 		t.Fatalf("Schedule() error = %v, want nil", err)
 	}
 
-	after := readPhase9LeaseState(
+	after := readQueueDiscoveryLeaseState(
 		t,
 		ctx,
 		pool,
@@ -164,7 +164,7 @@ func TestValidProbePromotesToRecurring(t *testing.T) {
 
 	for _, identity := range identities {
 		t.Run(
-			phase9IdentityName(identity),
+			queueDiscoveryIdentityName(identity),
 			func(t *testing.T) {
 				fixture := newProbeCompletionFixture(t)
 				completedAt := fixture.lease.ClaimedAt.Add(
@@ -203,7 +203,7 @@ func TestValidProbePromotesToRecurring(t *testing.T) {
 					"recurring",
 				)
 
-				state := readPhase9LeaseState(
+				state := readQueueDiscoveryLeaseState(
 					t,
 					fixture.ctx,
 					fixture.pool,
@@ -263,7 +263,7 @@ func TestEveryNonValidProbeEnds(t *testing.T) {
 
 	for _, outcome := range outcomes {
 		t.Run(
-			phase9OutcomeName(outcome),
+			queueDiscoveryOutcomeName(outcome),
 			func(t *testing.T) {
 				fixture := newProbeCompletionFixture(t)
 				fixture.queue.clock = fixedQueueClock{
@@ -363,7 +363,7 @@ func TestFailedProbeCompletionIsAtomic(t *testing.T) {
 		)
 	}
 
-	state := readPhase9LeaseState(
+	state := readQueueDiscoveryLeaseState(
 		t,
 		fixture.ctx,
 		fixture.pool,
@@ -419,7 +419,7 @@ func TestRecurringCompletionStillRetainsEveryOutcome(
 
 	for _, outcome := range outcomes {
 		t.Run(
-			phase9OutcomeName(outcome),
+			queueDiscoveryOutcomeName(outcome),
 			func(t *testing.T) {
 				fixture := newCompletionFixture(
 					t,
@@ -471,7 +471,7 @@ func TestRecurringCompletionStillRetainsEveryOutcome(
 	}
 }
 
-type phase9LeaseState struct {
+type queueDiscoveryLeaseState struct {
 	mode        string
 	availableAt time.Time
 	generation  int64
@@ -480,7 +480,7 @@ type phase9LeaseState struct {
 	claimedAt   time.Time
 }
 
-func newPhase9Queue(
+func newQueueDiscoveryQueue(
 	t *testing.T,
 	pool *pgxpool.Pool,
 ) *Queue {
@@ -571,16 +571,16 @@ func assertQueueMode(
 	}
 }
 
-func readPhase9LeaseState(
+func readQueueDiscoveryLeaseState(
 	t *testing.T,
 	ctx context.Context,
 	pool *pgxpool.Pool,
 	storedOrigin string,
-) phase9LeaseState {
+) queueDiscoveryLeaseState {
 	t.Helper()
 
 	var (
-		state     phase9LeaseState
+		state     queueDiscoveryLeaseState
 		owner     *string
 		expiresAt *time.Time
 		claimedAt *time.Time
@@ -632,7 +632,7 @@ func readPhase9LeaseState(
 	return state
 }
 
-func phase9IdentityName(
+func queueDiscoveryIdentityName(
 	identity declaration.Identity,
 ) string {
 	switch identity {
@@ -647,7 +647,7 @@ func phase9IdentityName(
 	}
 }
 
-func phase9OutcomeName(
+func queueDiscoveryOutcomeName(
 	outcome declaration.Outcome,
 ) string {
 	switch outcome {

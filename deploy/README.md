@@ -1,80 +1,97 @@
 # JoshBot deployment and recovery
 
-This is the reference deployment I use for JoshBot.
+This is the operator runbook for the reference JoshBot deployment.
 
-PostgreSQL, migrations, workers, discovery, operator tools, publication, and backups are kept seperate on purpose. Each service only receives the network access, credentials, and storage it needs.
+The deployment intentionally separates PostgreSQL, migrations, verification,
+discovery, operator tools, GitHub publication, and backups. Each service
+receives only the network, credentials, and storage required for its job.
 
-Before putting this on a real host I still need to review the actual paths, Docker firewall backend, NAS mount, publication repository, and schedules. I dont want to guess at any of those values.
+Review every path, mount, credential, publication target, firewall rule, and
+schedule before using this configuration on a production host.
 
 ## Runtime guarantees
 
-JoshBot workers use at-least-once execution.
+JoshBot uses at-least-once execution.
 
-A verification request can physically happen more than once after a crash or expired lease. Only the worker holding the current PostgreSQL lease can commit the result.
+A verification request may physically occur more than once after a crash or
+expired lease. Only the worker holding the current PostgreSQL lease may commit
+completion.
 
-Successful completion records the observation, releases the lease, and schedules the next verification in one PostgreSQL transaction.
+Successful completion records the observation, releases the lease, and
+schedules future recurring work in one PostgreSQL transaction.
 
-Manually scheduled work is recurring. Discovery work starts as a one-shot probe. A valid declaration promotes the probe to recurring work. Every non-valid probe records its observation and leaves the queue in the same transaction.
+Manually scheduled work is recurring. A discovered candidate starts as a
+one-shot probe. A valid declaration promotes the origin to recurring work.
+Every non-valid probe records its observation and removes completed one-shot
+queue state transactionally.
 
 JoshBot does not promise exactly-once network requests.
 
-Registry publication is seperate from verification. Publication reads an already-built deterministic snapshot and does not connect to PostgreSQL.
+Registry publication is separate from verification. Publication reads an
+already-built deterministic snapshot and never connects to PostgreSQL.
 
 ## Crawler behavior
 
-JoshBot crawls both independently verified Joshternet participants and private curated seed origins. A seed is permission from the operator to use an origin as a discovery source. It is not a Joshternet declaration, verification result, or public registry entry.
+JoshBot crawls independently verified Joshternet participants and private
+operator-curated seeds.
 
-Each source crawl starts at `/` and uses a deterministic breadth-first in-memory frontier. The root is depth 0. Same-origin hyperlinks may be followed within the configured depth and page budgets. External HTTP and HTTPS origins become declaration-verification candidates; JoshBot does not recursively crawl those external sites unless they later verify as participants or are explicitly added as seeds.
+A seed grants permission to use an origin as a discovery source. It is not a
+Joshternet declaration, verification result, or public registry entry.
 
-Every page request goes through the existing robots-aware guarded HTTP path. Robots permission controls whether a URI may be fetched. A Joshternet declaration independently controls whether an origin participates in the public registry. A missing or invalid declaration does not prohibit crawling a curated seed when robots permits it.
+Each source crawl begins at `/` and uses a deterministic breadth-first
+in-memory frontier. The root is depth zero. Same-origin hyperlinks may be
+followed within the configured depth and page budgets.
 
-The crawler retains only origin-level operational data:
+External HTTP and HTTPS origins become declaration-verification candidates.
+JoshBot does not recursively crawl them unless they later verify or are
+explicitly added as seeds.
 
-- explicit seed status;
-- the source's last crawl-attempt time;
-- source-to-candidate origin relationships and discovery times;
-- verification queue and declaration observations.
+Every page request uses the robots-aware guarded HTTP path.
 
-It does not retain HTML, response bodies, titles, anchor text, headers, cookies, internal page history, page depth, or the crawl frontier. A stopped crawl starts again from the source root on its next scheduled attempt.
+JoshBot retains origin-level operational data, not crawled pages. It does not
+retain HTML, complete response bodies, titles, anchor text, headers, cookies,
+page history, page depth, or old frontiers.
+
+See [the crawler documentation](../docs/crawler.md).
 
 ## Services
 
 The Compose deployment includes:
 
-- `postgres`: persistent PostgreSQL 18.6 database;
-- `migrate`: one-shot schema migrations;
-- `worker`: long-running verification worker;
-- `discovery`: long-running multi-page crawling for verified origins and curated seeds;
+- `postgres`: persistent PostgreSQL 18.6;
+- `migrate`: one-shot schema migration;
+- `worker`: long-running declaration verification;
+- `discovery`: long-running multi-page discovery;
 - `tools`: database-backed operator commands and exports;
 - `publisher`: one-shot GitHub registry publication;
-- `backup`: logical PostgreSQL backups.
+- `backup`: logical PostgreSQL backups;
+- `restore`: controlled logical restoration.
 
-The network and credential split is intentional:
+## Network and credential separation
 
-- `worker` and `discovery` receive the database network and egress;
-- `tools` receives the database network and a writable export mount;
-- `publisher` receives egress, a read-only export mount, and the GitHub token;
-- `migrate`, `postgres`, and `backup` only receive the database network;
-- no database service receives the GitHub token;
-- the publisher receives no database URL, password, network, or storage;
-- no service gets the Docker socket or host networking.
-
-PostgreSQL does not publish port 5432 to the host.
+- `worker` and `discovery` receive the internal database network and egress.
+- `tools` receives the database network and writable export storage.
+- `publisher` receives egress, a read-only export mount, and the GitHub token.
+- `migrate`, `postgres`, `backup`, and `restore` receive the database network.
+- Database services never receive the GitHub token.
+- The publisher receives no database URL, password, network, or storage.
+- No service receives the Docker socket or host networking.
+- PostgreSQL port 5432 is not published to the host.
 
 ## Host requirements
 
-The host needs:
+The reference host needs:
 
 - Linux;
 - Docker Engine;
 - Docker Compose v2;
 - OpenSSL;
-- local persistent storage for PostgreSQL;
+- local persistent PostgreSQL storage;
 - an export directory;
-- a seperate mounted backup destination;
-- enough storage for images, PostgreSQL, exports, and backups.
+- a separately mounted backup destination;
+- enough space for images, PostgreSQL, exports, and backups.
 
-Record the actual environment before deployment:
+Record the environment:
 
 ```bash
 docker version
@@ -83,18 +100,11 @@ cat /etc/os-release
 docker info
 ```
 
-I also need to confirm:
-
-- the Docker firewall backend;
-- the PostgreSQL storage path;
-- the export path;
-- the real NAS backup mount;
-- the backup schedule;
-- the publication schedule.
+Confirm the Docker firewall backend and outbound policy separately.
 
 ## Host directories
 
-The example configuration uses:
+The example environment uses:
 
 ```text
 /srv/joshbot/postgres
@@ -103,15 +113,15 @@ The example configuration uses:
 /mnt/nas/joshbot/backups
 ```
 
-These are examples, not automatic choices.
+These paths are examples. Replace them with reviewed host paths.
 
-PostgreSQL data must stay on local persistent storage. It should not be placed on the NAS backup mount.
+PostgreSQL data belongs on local persistent storage, not the backup mount.
 
-Compose uses `create_host_path: false`, so the source directories must already exist. This is intentional because I would rather fail on a typo than silently create an empty directory somewhere unexpected.
+Compose uses `create_host_path: false`; source directories must already exist.
+This prevents a typo from silently creating storage in the wrong place.
 
-The JoshBot image runs as UID/GID `65532:65532`. The PostgreSQL image uses UID/GID `999:999`.
-
-The tools container needs write access to the export directory. The host account running `deploy/publish.sh` also needs permission to remove publication snapshots created by UID 65532.
+The JoshBot image runs as UID/GID `65532:65532`. The PostgreSQL image uses
+UID/GID `999:999`.
 
 One possible Linux setup is:
 
@@ -138,11 +148,12 @@ sudo install \
   /srv/joshbot/secrets
 ```
 
-Do not create the backup directory until the NAS mount is confirmed.
+Do not create the backup directory until its intended remote mount is
+confirmed.
 
 ## Confirm storage
 
-Check the PostgreSQL filesystem:
+Check PostgreSQL storage:
 
 ```bash
 findmnt \
@@ -150,9 +161,10 @@ findmnt \
   --output TARGET,SOURCE,FSTYPE,OPTIONS
 ```
 
-The PostgreSQL 18 image persists `/var/lib/postgresql`. Do not change the mount target to `/var/lib/postgresql/data`.
+PostgreSQL 18 persists `/var/lib/postgresql`. Do not change the Compose target
+to `/var/lib/postgresql/data`.
 
-Confirm that the backup directory is really on the NAS:
+Confirm backup storage:
 
 ```bash
 findmnt \
@@ -162,7 +174,8 @@ findmnt \
 df -h /mnt/nas/joshbot/backups
 ```
 
-A directory existing does not prove the NAS is mounted. Stop if the path falls back to the hosts local filesystem.
+A directory existing does not prove remote storage is mounted. Stop if the
+path has fallen back to the host’s local filesystem.
 
 ## Environment configuration
 
@@ -174,11 +187,12 @@ cp \
   deploy/.env
 ```
 
-Replace the example paths and publication target with the real values.
+Replace example paths and the publication target.
 
-The actual environment file is ignored by Git. Database passwords and the GitHub token do not belong in it.
+`deploy/.env` is ignored by Git. Passwords and the GitHub token do not belong
+inside it.
 
-Review the worker timing values:
+Review worker timing:
 
 ```text
 JOSHBOT_POLL_INTERVAL > 0
@@ -192,7 +206,7 @@ JOSHBOT_JOB_TIMEOUT + JOSHBOT_COMPLETION_GRACE
     < JOSHBOT_LEASE_DURATION
 ```
 
-Review discovery timing too:
+Review discovery timing:
 
 ```text
 JOSHBOT_DISCOVERY_INTERVAL > 0
@@ -202,7 +216,7 @@ JOSHBOT_DISCOVERY_PAGE_TIMEOUT > 0
 
 The reference discovery interval is `168h`. Go durations do not accept `7d`.
 
-Review the per-source crawl budget:
+Review crawl budgets:
 
 ```text
 JOSHBOT_CRAWL_MAX_DEPTH >= 0
@@ -212,9 +226,9 @@ JOSHBOT_CRAWL_REQUEST_DELAY >= 0
 JOSHBOT_CRAWL_REDIRECT_LIMIT > 0
 ```
 
-The checked-in deployment values are:
+The defaults are:
 
-```text
+```dotenv
 JOSHBOT_CRAWL_MAX_DEPTH=4
 JOSHBOT_CRAWL_MAX_PAGES=32
 JOSHBOT_CRAWL_MAX_PAGE_BYTES=1048576
@@ -222,7 +236,8 @@ JOSHBOT_CRAWL_REQUEST_DELAY=1s
 JOSHBOT_CRAWL_REDIRECT_LIMIT=5
 ```
 
-`MaxDepth` counts the root as depth 0. `MaxPages` counts each frontier page selected for a guarded fetch; redirect hops for that page do not consume another frontier slot. Requests within one source crawl are sequential, and the request delay is applied between page requests without sleeping after the final request. These are operating limits, not Joshternet protocol rules.
+The root page is depth zero. Redirect hops do not consume additional frontier
+slots. Requests within one source crawl are sequential.
 
 ## Database secrets
 
@@ -257,76 +272,60 @@ Do not:
 
 ## Publication repository
 
-The publication target must be a dedicated data repository and branch controlled entirely by JoshBot.
+The publication target must be a dedicated data repository and branch
+controlled entirely by JoshBot.
 
-Do not point the publisher at:
+Do not point it at:
 
 ```text
 joshternet/joshbot
 joshternet/joshternet.github.io
 ```
 
-A small dedicated public repository such as `joshternet/index-data` is the intended shape, but the final repository name is an operator decision.
+A dedicated repository such as `joshternet/index-data` is the intended shape.
+The exact target is an operator decision.
 
-The machine-managed branch is replaced with an exact generated tree. Do not manually store README files, workflows, or anything else on that branch.
+The machine-managed branch is replaced with an exact generated tree. Do not
+store manually maintained files on that branch.
 
-Before the first publication, the target branch must already exist and contain this root file:
+Before the first publication, the target branch must exist and contain:
 
 ```text
 .joshbot-registry-target
 ```
 
-Its exact contents must be:
+Its exact contents, including the final newline, must be:
 
 ```text
 joshbot-registry-v1
 ```
 
-That text includes one final newline.
-
-The publisher will not:
-
-- create a repository;
-- create an organization;
-- create a token;
-- change Pages settings;
-- change repository settings;
-- create a workflow;
-- force-update a Git reference.
+The publisher does not create repositories, tokens, branches, workflows, or
+Pages configuration. It does not force-update Git references.
 
 ## GitHub token
 
 Use a fine-grained token restricted to the dedicated publication repository.
 
-The required repository permission is:
+Required repository permission:
 
 ```text
 Contents: Read and write
 ```
 
-Do not grant Administration, Actions, Workflows, Issues, Pull requests, Secrets, or unrelated permissions.
+Do not grant unrelated Administration, Actions, Workflows, Issues, Pull
+requests, or Secrets permissions.
 
-Store the token only in the configured file:
+Store the token only in the configured secret file:
 
 ```text
 /srv/joshbot/secrets/joshbot_github_token
 ```
 
-Do not put it in:
-
-- `compose.yaml`;
-- `deploy/.env`;
-- command arguments;
-- logs;
-- PostgreSQL;
-- registry output;
-- chat.
-
-The publisher container receives the token file but no database credential. Database services do not receive the token.
+Do not put the token in environment configuration, command arguments, logs,
+PostgreSQL, registry output, or chat.
 
 ## Validate Compose
-
-Run:
 
 ```bash
 docker compose \
@@ -338,11 +337,9 @@ docker compose \
   --quiet
 ```
 
-Fix missing paths or variables before starting anything.
+Fix missing paths and variables before starting services.
 
-## Build the image
-
-Run:
+## Build
 
 ```bash
 docker compose \
@@ -361,18 +358,15 @@ All JoshBot services use the same minimal image.
 The final image:
 
 - contains one statically linked JoshBot binary;
-- contains the CA certificate bundle;
+- contains CA certificates;
 - runs as UID/GID `65532:65532`;
-- has no shell;
-- has no Go compiler;
-- has no Git client;
-- has no `gh`;
-- has no curl or wget;
-- has no PostgreSQL client tools.
+- contains no shell;
+- contains no Go compiler;
+- contains no Git or GitHub CLI;
+- contains no curl or wget;
+- contains no PostgreSQL client.
 
-## Start the normal runtime
-
-Run:
+## Start the runtime
 
 ```bash
 docker compose \
@@ -383,9 +377,10 @@ docker compose \
   --wait
 ```
 
-This starts PostgreSQL, applies migrations, and starts the worker and discovery services. The publisher is profile-controlled and is not a daemon.
+This starts PostgreSQL, applies migrations, and starts verification and
+discovery.
 
-Check the state:
+Check state:
 
 ```bash
 docker compose \
@@ -394,7 +389,8 @@ docker compose \
   --all
 ```
 
-The migration container should exit with code zero. PostgreSQL, worker, and discovery should be healthy.
+The migration container should exit zero. PostgreSQL, worker, and discovery
+should be healthy.
 
 ## Migrations
 
@@ -404,9 +400,9 @@ Migrations are embedded from:
 internal/store/migrations/
 ```
 
-Applied migrations must never be edited. Add a new forward migration instead.
+Never edit an applied migration. Add a forward migration.
 
-Run them manually with:
+Run migrations manually:
 
 ```bash
 docker compose \
@@ -450,15 +446,15 @@ docker compose \
   https://example.com/path
 ```
 
-The canonical scheduled origin becomes:
+The canonical scheduled origin is:
 
 ```text
 https://example.com
 ```
 
-## Manage curated crawl seeds
+## Manage curated seeds
 
-Add a private crawl seed:
+Add a seed:
 
 ```bash
 docker compose \
@@ -469,16 +465,10 @@ docker compose \
   --no-deps \
   tools \
   seed add \
-  https://directory.example/some/path?q=ignored
+  https://directory.example/some/path
 ```
 
-The stored seed is normalized to its canonical origin:
-
-```text
-https://directory.example
-```
-
-List seeds in canonical order:
+List seeds:
 
 ```bash
 docker compose \
@@ -491,7 +481,7 @@ docker compose \
   seed list
 ```
 
-Remove explicit seed status:
+Remove seed status:
 
 ```bash
 docker compose \
@@ -505,11 +495,30 @@ docker compose \
   https://directory.example
 ```
 
-Adding a seed does not create a declaration observation, verification queue row, or public registry entry. Removing a seed does not delete observations, candidate provenance, or queue state. If the origin is independently verified, it remains crawl-eligible after its explicit seed status is removed.
+Adding a seed does not create a declaration observation, verification queue
+row, or public registry entry.
 
-## Export the public registry
+Removing seed status does not delete observations, candidate provenance, or
+queue state. An independently verified origin remains crawl-eligible.
 
-The output directory must not already exist:
+## Run one discovery attempt
+
+```bash
+docker compose \
+  --env-file deploy/.env \
+  run \
+  --rm \
+  --no-deps \
+  discovery \
+  discover \
+  --once
+```
+
+Long-running discovery normally runs through the `discovery` service.
+
+## Export the registry
+
+The destination must not already exist.
 
 ```bash
 snapshot="registry-$(date -u '+%Y%m%dT%H%M%SZ')"
@@ -525,45 +534,48 @@ docker compose \
   --output "/exports/$snapshot"
 ```
 
-The tools container has database access and a writable export mount. It has no egress and no GitHub token.
+The tools container has database access and writable export storage. It has no
+GitHub token or egress.
 
-## Publish the public registry
+## Publish the registry
 
-`deploy/publish.sh` performs one publication attempt using two separate containers:
+`deploy/publish.sh` performs one attempt:
 
-1. `tools` exports a fresh deterministic snapshot;
-2. `publisher` reads that snapshot and publishes it;
-3. the temporary local snapshot is removed after success or failure.
+1. `tools` exports a fresh deterministic snapshot.
+2. `publisher` reads and publishes the snapshot.
+3. The temporary snapshot is removed after success or failure.
 
-The script expects the deployment variables to already be present in its environment. A service manager can load the reviewed `deploy/.env` as its environment file.
-
-Run:
+Load the reviewed environment through the service manager or shell, then run:
 
 ```bash
+set -a
+. deploy/.env
+set +a
+
 ./deploy/publish.sh
 ```
 
-A changed publication prints:
+Changed output:
 
 ```text
 published COMMIT_SHA
 ```
 
-An identical publication prints:
+Unchanged output:
 
 ```text
 registry unchanged
 ```
 
-The publisher uses the official GitHub API directly. It rejects redirects, ignores HTTP proxy environment variables, requires the target sentinel, creates an exact tree without `base_tree`, and updates the branch without force.
+The publisher uses the GitHub API directly, rejects redirects, ignores proxy
+environment variables, requires the sentinel, creates an exact tree, and
+updates the branch without force.
 
-The temporary snapshot is transport staging. It is not a backup.
+The temporary snapshot is transport staging, not a backup.
 
 ## Manual backup
 
-First prove that the backup directory is on the intended NAS mount.
-
-Then run:
+First prove that the backup directory is mounted correctly.
 
 ```bash
 docker compose \
@@ -580,71 +592,54 @@ The backup service:
 - uses the internal database network;
 - uses the read-only backup role;
 - creates a custom-format PostgreSQL archive;
-- writes a `.partial` file first;
-- validates it with `pg_restore --list`;
+- writes a `.partial` file;
+- validates the archive with `pg_restore --list`;
 - sets mode `0600`;
-- atomically renames it to `.dump`;
-- removes a partial file after failure.
+- atomically renames the file to `.dump`;
+- removes partial output after failure.
 
-Retention is a seperate destructive policy decision and is not automated here.
+Retention is a separate destructive policy decision and is not automated.
 
-## Recovery drill
-
-Run:
+## Recovery validation
 
 ```bash
 ./deploy/smoke.sh
 ```
 
-The recovery smoke test:
+The smoke test creates disposable storage and secrets, initializes PostgreSQL,
+applies migrations, checks role boundaries, creates known state, exports the
+registry, backs up PostgreSQL, restores into a fresh isolated instance,
+verifies restored state, rebuilds byte-identical output, and cleans its
+resources.
 
-- creates disposable directories and secrets;
-- initializes PostgreSQL;
-- applies migrations;
-- checks database role boundaries;
-- runs a no-network discovery attempt with an explicit multi-page budget;
-- verifies canonical, idempotent private seed management;
-- creates known verification and discovery state;
-- exports deterministic registry data;
-- proves private discovery data does not alter public output;
-- creates and validates a backup;
-- restores into a fresh isolated PostgreSQL instance;
-- verifies application connectivity and restored seed, crawl timing, candidate, queue, and migration data;
-- rebuilds byte-identical registry files;
-- cleans containers, networks, images, storage, and secrets.
+It never restores into the configured production database.
 
-It never restores into the reference production database.
-
-## Publication boundary smoke
-
-Run:
+## Publication-boundary validation
 
 ```bash
 ./deploy/publish_test.sh
 ```
 
-This test uses a fake Docker command for host-script execution. It never contacts GitHub and never needs a real token.
+This test uses fake publication infrastructure. It does not contact GitHub or
+require a real token.
 
-It verifies actual container configuration for:
+It verifies:
 
 - non-root execution;
-- read-only root filesystem;
+- read-only root filesystems;
 - dropped capabilities;
 - `no-new-privileges`;
 - no published ports;
 - no Docker socket;
-- egress without the database network;
-- read-only export mount;
-- GitHub secret present only in the publisher;
+- publisher egress without database access;
+- read-only export storage;
+- GitHub credentials only in the publisher;
 - database credentials absent from the publisher;
-- separate exporter and publisher containers;
-- snapshot cleanup after success and failure;
-- preservation of the publisher failure status;
+- snapshot cleanup;
+- failure-status preservation;
 - no token logging.
 
 ## Container inspection
-
-Inspect actual containers with:
 
 ```bash
 docker compose \
@@ -664,7 +659,7 @@ docker compose \
   --quiet
 ```
 
-Then inspect specific container IDs:
+Inspect a specific container:
 
 ```bash
 docker inspect CONTAINER_ID
@@ -673,21 +668,21 @@ docker inspect CONTAINER_ID
 The publisher must have:
 
 - UID/GID `65532:65532`;
-- read-only root filesystem;
+- a read-only root filesystem;
 - all capabilities dropped;
 - `no-new-privileges`;
 - only the egress network;
-- a read-only `/exports`;
+- read-only `/exports`;
 - `/run/secrets/joshbot_github_token`;
 - no database configuration;
 - no database network;
-- no backup or PostgreSQL mount;
+- no PostgreSQL or backup mount;
 - no Docker socket;
-- no published ports.
+- no published port.
 
 ## Graceful shutdown
 
-Stop worker and discovery first:
+Stop network workers first:
 
 ```bash
 docker compose \
@@ -697,7 +692,7 @@ docker compose \
   discovery
 ```
 
-Then stop the remaining services without deleting host data:
+Stop remaining services without deleting host data:
 
 ```bash
 docker compose \
@@ -705,17 +700,18 @@ docker compose \
   down
 ```
 
-Do not delete the PostgreSQL directory unless that destructive operation was explicitly approved.
+Never delete the PostgreSQL directory unless that destructive action has been
+explicitly approved and a verified recovery path exists.
 
 ## Upgrade procedure
 
 Before upgrading:
 
-1. verify the NAS mount;
-2. create and validate a backup;
-3. record the currently deployed image;
-4. review new migrations;
-5. confirm application compatibility.
+1. Verify the backup mount.
+2. Create and validate a backup.
+3. Record the deployed image.
+4. Review new migrations.
+5. Confirm application compatibility.
 
 Build the new image:
 
@@ -742,7 +738,7 @@ docker compose \
   migrate
 ```
 
-Recreate the long-running services:
+Recreate long-running services:
 
 ```bash
 docker compose \
@@ -754,24 +750,9 @@ docker compose \
   discovery
 ```
 
-The publisher remains one-shot.
-
-## Continuous integration
-
-The quality workflow runs:
-
-- formatting, module, vet, PostgreSQL, normal test, both discovery extraction fuzz targets, race, and coverage gates;
-- production image inspection;
-- publication boundary tests;
-- deployment, backup, restore, and cleanup smoke tests.
-
-CI uses fake publication infrastructure. It does not require or receive a real GitHub token.
-
-Both jobs upload reports and add summaries to the Actions run.
+The publisher remains a one-shot operation.
 
 ## Local validation
-
-Run all validation only after every Phase 11 file is in place:
 
 ```bash
 chmod 0755 \
@@ -779,22 +760,28 @@ chmod 0755 \
   deploy/postgres/init/010-joshbot-roles.sh \
   deploy/publish.sh \
   deploy/publish_test.sh \
-  deploy/smoke.sh
+  deploy/smoke.sh \
+  scripts/release-check.sh
 
-bash -n deploy/backup.sh
-bash -n deploy/postgres/init/010-joshbot-roles.sh
-bash -n deploy/publish.sh
-bash -n deploy/publish_test.sh
-bash -n deploy/smoke.sh
+sh -n deploy/backup.sh
+sh -n deploy/postgres/init/010-joshbot-roles.sh
+sh -n deploy/publish.sh
+sh -n deploy/publish_test.sh
+sh -n deploy/smoke.sh
+sh -n scripts/release-check.sh
 
-Psych_command='Psych.parse_file(ARGV.fetch(0))'
-ruby \
-  -rpsych \
-  -e "$Psych_command" \
-  .github/workflows/quality.yml
+docker compose \
+  --env-file deploy/.env.example \
+  --profile tools \
+  --profile backup \
+  --profile publisher \
+  config \
+  --quiet
 
+./scripts/release-check.sh
 ./deploy/publish_test.sh
 ./deploy/smoke.sh
 ```
 
-Then run the Go quality suite described at the end of this phase.
+Run the complete Go quality suite from the repository root as documented in
+[README.md](../README.md).

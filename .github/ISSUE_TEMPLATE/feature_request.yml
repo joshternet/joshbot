@@ -1,0 +1,91 @@
+name: Feature request
+description: Propose a JoshBot improvement
+title: "[Feature]: "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Explain the problem before proposing an implementation. Changes to
+        security policy, protocol behavior, public registry compatibility, or
+        database schema require especially clear justification.
+
+        Joshternet protocol and declaration semantics are defined in the
+        specification repository:
+
+        https://github.com/joshternet/spec
+
+        A JoshBot implementation issue should not silently redefine those
+        semantics.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem should JoshBot solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest observable behavior that would solve the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you consider?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: compatibility
+    attributes:
+      label: Compatibility impact
+      options:
+        - No public compatibility change
+        - Public registry output
+        - Database schema
+        - Command-line interface
+        - Joshternet protocol or declaration behavior
+        - Deployment configuration
+        - Unsure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: Protocol semantics
+      description: Would this request change a Joshternet specification or participation semantics?
+      options:
+        - "No"
+        - "Yes"
+        - Unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Security considerations
+      description: Explain network, credential, privacy, publication, or abuse considerations.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Requester checks
+      options:
+        - label: I searched existing issues for this request.
+          required: true
+        - label: I did not include credentials or private information.
+          required: true
+        - label: I will raise protocol-semantic changes in the Joshternet specification repository.
+          required: true

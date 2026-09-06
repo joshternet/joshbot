@@ -60,6 +60,14 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      - name: Check release readiness
+        id: release
+        shell: bash
+        run: |
+          set -o pipefail
+          ./scripts/release-check.sh \
+            2>&1 | tee "$REPORT_DIR/release-readiness.txt"
+
       - name: Check formatting
         id: formatting
         shell: bash
@@ -210,6 +218,7 @@ jobs:
           | Report preparation | \`${{ steps.prepare.outcome }}\` |
           | Checkout | \`${{ steps.checkout.outcome }}\` |
           | Go setup | \`${{ steps.setup.outcome }}\` |
+          | Release readiness | \`${{ steps.release.outcome }}\` |
           | Formatting | \`${{ steps.formatting.outcome }}\` |
           | Module tidiness | \`${{ steps.tidy.outcome }}\` |
           | Vet | \`${{ steps.vet.outcome }}\` |

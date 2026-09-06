@@ -54,8 +54,8 @@ var (
 		"githubpublish: publisher is invalid",
 	)
 
-	// ErrInvalidSnapshot means the supplied files are not an exact Phase 7
-	// public registry snapshot.
+	// ErrInvalidSnapshot means the supplied files are not an exact public
+	// registry snapshot.
 	ErrInvalidSnapshot = errors.New(
 		"githubpublish: snapshot is invalid",
 	)

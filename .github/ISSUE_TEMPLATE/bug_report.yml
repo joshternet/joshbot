@@ -1,0 +1,85 @@
+name: Bug report
+description: Report a reproducible JoshBot defect
+title: "[Bug]: "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem.
+
+        Do not include passwords, tokens, private keys, private database data,
+        or unredacted production logs. Security vulnerabilities must be
+        reported through GitHub Private Vulnerability Reporting instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: JoshBot version
+      description: Provide the release tag or commit SHA.
+      placeholder: v1.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the operating system, architecture, Go version, PostgreSQL version, and whether Docker is involved.
+      placeholder: macOS arm64, Go 1.27, PostgreSQL 18
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem
+      description: Describe what went wrong.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest safe sequence that reproduces the problem.
+      placeholder: |
+        1. Configure ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted output
+      description: Include only output needed to reproduce the problem. Remove secrets and private information.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Reporter checks
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I removed credentials and private information.
+          required: true
+        - label: This is not an undisclosed security vulnerability.
+          required: true
