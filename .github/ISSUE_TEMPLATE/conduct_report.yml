@@ -1,0 +1,61 @@
+name: Conduct report
+description: Report behavior that may violate the JoshBot Code of Conduct
+title: "[Conduct]: "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue will be public.
+
+        Do not include private messages, home addresses, phone numbers,
+        credentials, medical information, or other sensitive personal data.
+
+        If the behavior cannot be described safely in public and violates
+        GitHub's platform rules, use GitHub's reporting controls on the
+        relevant content or account.
+
+        Do not use this form for security vulnerabilities. Use GitHub Private
+        Vulnerability Reporting for security issues.
+
+  - type: checkboxes
+    id: visibility
+    attributes:
+      label: Public visibility
+      options:
+        - label: I understand that this report and its attachments will be public.
+          required: true
+        - label: I removed private and sensitive personal information.
+          required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: Location
+      description: Link to the public issue, pull request, review, comment, or other project interaction.
+      placeholder: https://github.com/joshternet/joshbot/issues/...
+    validations:
+      required: true
+
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Reported behavior
+      description: Describe the relevant public behavior without including sensitive information.
+    validations:
+      required: true
+
+  - type: textarea
+    id: policy
+    attributes:
+      label: Code of Conduct concern
+      description: Explain which expectation may have been violated.
+    validations:
+      required: true
+
+  - type: textarea
+    id: requested_action
+    attributes:
+      label: Requested action
+      description: Explain what project action you believe would resolve the concern.

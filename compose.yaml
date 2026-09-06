@@ -1,5 +1,5 @@
 x-joshbot-image: &joshbot-image
-  image: ${JOSHBOT_IMAGE:-joshbot:phase11}
+  image: ${JOSHBOT_IMAGE:-joshbot:v1.0.0}
   pull_policy: never
   build:
     context: .
