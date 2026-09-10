@@ -277,7 +277,7 @@ func TestRunOncePreservesVerificationFailure(
 	}
 }
 
-func TestRunOnceDoesNotCompleteTimedOutVerification(
+func TestRunOnceCompletesTimedOutVerificationAsUnavailable(
 	t *testing.T,
 ) {
 	source := mustWorkerOrigin(t)
@@ -327,28 +327,37 @@ func TestRunOnceDoesNotCompleteTimedOutVerification(
 	}
 
 	worked, err := runtime.RunOnce(context.Background())
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf(
-			"RunOnce() error = %v, want context.DeadlineExceeded",
-			err,
-		)
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v, want nil", err)
 	}
 
 	if !worked {
 		t.Error("RunOnce() worked = false, want true")
 	}
 
-	if timeoutCalls != 1 {
+	if timeoutCalls != 2 {
 		t.Errorf(
-			"timeout factory calls = %d, want 1",
+			"timeout factory calls = %d, want 2",
 			timeoutCalls,
 		)
 	}
 
-	if queue.completeCalls != 0 {
+	if queue.completeCalls != 1 {
 		t.Errorf(
-			"CompleteVerification() calls = %d, want 0",
+			"CompleteVerification() calls = %d, want 1",
 			queue.completeCalls,
+		)
+	}
+
+	wantResult := declaration.Result{
+		Outcome: declaration.OutcomeUnavailable,
+		Origin:  source,
+	}
+	if queue.completedResults[0] != wantResult {
+		t.Errorf(
+			"completed result = %#v, want %#v",
+			queue.completedResults[0],
+			wantResult,
 		)
 	}
 }
@@ -735,6 +744,97 @@ func TestRunImmediatelyClaimsAfterSuccessfulWork(
 		t.Errorf(
 			"wait calls = %d, want 0",
 			waitCalls,
+		)
+	}
+}
+
+func TestRunContinuesAfterTimedOutWork(t *testing.T) {
+	first := mustWorkerOrigin(t)
+	second, err := origin.Parse("https://second.example")
+	if err != nil {
+		t.Fatalf("parse second origin: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	queue := &fakeQueue{
+		claims: []fakeClaim{
+			{lease: workerTestLease(first), found: true},
+			{lease: workerTestLease(second), found: true},
+		},
+	}
+	queue.complete = func(
+		_ context.Context,
+		_ store.Lease,
+		_ declaration.Result,
+		_ time.Duration,
+	) error {
+		if queue.completeCalls == 2 {
+			cancel()
+		}
+		return nil
+	}
+
+	verifier := &fakeVerifier{}
+	verifier.verify = func(
+		jobContext context.Context,
+		source origin.Origin,
+	) (declaration.Result, error) {
+		if verifier.calls == 1 {
+			<-jobContext.Done()
+			return declaration.Result{}, jobContext.Err()
+		}
+		return workerTestResult(source), nil
+	}
+
+	timeoutCalls := 0
+	factory := timeoutFactoryFunc(
+		func(
+			parent context.Context,
+			_ time.Duration,
+		) (context.Context, context.CancelFunc) {
+			timeoutCalls++
+			if timeoutCalls == 1 {
+				return context.WithDeadline(parent, time.Unix(0, 0))
+			}
+			return context.WithCancel(parent)
+		},
+	)
+
+	runtime, err := newWorker(
+		queue,
+		verifier,
+		workerTestConfig(),
+		timerWaitStrategy{},
+		factory,
+	)
+	if err != nil {
+		t.Fatalf("newWorker() error = %v, want nil", err)
+	}
+
+	err = runtime.Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	}
+	if verifier.calls != 2 {
+		t.Errorf("Verify() calls = %d, want 2", verifier.calls)
+	}
+	if queue.completeCalls != 2 {
+		t.Errorf(
+			"CompleteVerification() calls = %d, want 2",
+			queue.completeCalls,
+		)
+	}
+	if queue.completedResults[0].Outcome !=
+		declaration.OutcomeUnavailable {
+		t.Errorf(
+			"first outcome = %v, want unavailable",
+			queue.completedResults[0].Outcome,
+		)
+	}
+	if queue.completedResults[1] != workerTestResult(second) {
+		t.Errorf(
+			"second result = %#v, want successful result",
+			queue.completedResults[1],
 		)
 	}
 }

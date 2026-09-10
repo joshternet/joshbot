@@ -3,8 +3,10 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 	"unicode/utf8"
 
@@ -208,19 +210,25 @@ func (w *Worker) RunOnce(
 	jobContextError := jobContext.Err()
 	cancelJob()
 
+	timedOut := false
+
 	if err != nil {
 		if contextError := ctx.Err(); contextError != nil {
 			return true, contextError
 		}
 
 		if jobContextError != nil {
-			return true, jobContextError
+			timedOut = true
+			result = declaration.Result{
+				Outcome: declaration.OutcomeUnavailable,
+				Origin:  lease.Origin,
+			}
+		} else {
+			return true, fmt.Errorf(
+				"worker: verify origin: %w",
+				err,
+			)
 		}
-
-		return true, fmt.Errorf(
-			"worker: verify origin: %w",
-			err,
-		)
 	}
 
 	if contextError := ctx.Err(); contextError != nil {
@@ -241,6 +249,13 @@ func (w *Worker) RunOnce(
 		w.config.RecheckInterval,
 	)
 	if err != nil {
+		if timedOut {
+			logVerificationTimeout(
+				lease.Origin,
+				"abandoned",
+			)
+		}
+
 		if contextError := ctx.Err(); contextError != nil {
 			return true, contextError
 		}
@@ -253,6 +268,13 @@ func (w *Worker) RunOnce(
 		return true, fmt.Errorf(
 			"worker: complete verification: %w",
 			err,
+		)
+	}
+
+	if timedOut {
+		logVerificationTimeout(
+			lease.Origin,
+			"completed",
 		)
 	}
 
@@ -344,6 +366,25 @@ func hasCompletionBudget(
 	return leaseBudget > 0 &&
 		completionGrace < leaseBudget &&
 		jobTimeout < leaseBudget-completionGrace
+}
+
+func logVerificationTimeout(
+	source origin.Origin,
+	leaseAction string,
+) {
+	sum := sha256.Sum256(
+		[]byte(source.String()),
+	)
+
+	slog.Info(
+		"verification timed out",
+		"origin_id",
+		fmt.Sprintf("%x", sum[:8]),
+		"outcome",
+		"unavailable",
+		"lease_action",
+		leaseAction,
+	)
 }
 
 func (timerWaitStrategy) Wait(
