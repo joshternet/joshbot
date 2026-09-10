@@ -214,13 +214,16 @@ func (w *Worker) RunOnce(
 		}
 
 		if jobContextError != nil {
-			return true, jobContextError
+			result = declaration.Result{
+				Outcome: declaration.OutcomeUnavailable,
+				Origin:  lease.Origin,
+			}
+		} else {
+			return true, fmt.Errorf(
+				"worker: verify origin: %w",
+				err,
+			)
 		}
-
-		return true, fmt.Errorf(
-			"worker: verify origin: %w",
-			err,
-		)
 	}
 
 	if contextError := ctx.Err(); contextError != nil {
