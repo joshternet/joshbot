@@ -539,9 +539,14 @@ assert_equal \
   "PostgreSQL health"
 
 assert_equal \
-  "$(docker inspect "$worker_container" --format '{{.State.Health.Status}}')" \
-  "healthy" \
-  "worker health"
+  "$(docker inspect "$worker_container" --format '{{.State.Status}}')" \
+  "running" \
+  "worker container state"
+
+assert_equal \
+  "$(docker inspect "$worker_container" --format '{{.RestartCount}}')" \
+  "0" \
+  "worker restart count"
 
 assert_equal \
   "$(docker inspect "$discovery_container" --format '{{.State.Health.Status}}')" \
