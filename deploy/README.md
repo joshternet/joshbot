@@ -259,7 +259,43 @@ sudo sh -c '
 
   openssl rand -hex 32 \
     > /srv/joshbot/secrets/joshbot_backup_password
+
+  chmod 0444 \
+    /srv/joshbot/secrets/postgres_admin_password \
+    /srv/joshbot/secrets/joshbot_migrator_password \
+    /srv/joshbot/secrets/joshbot_app_password \
+    /srv/joshbot/secrets/joshbot_backup_password
 '
+```
+
+The containing `/srv/joshbot/secrets` directory remains `0700 root:root`.
+The four database password files are `0444 root:root`.
+
+The files must be readable by the non-root users inside the containers that
+receive them. The `0700 root:root` parent directory prevents unrelated host
+users from traversing the secrets directory, while Docker selectively mounts
+only the individual secret files required by each service.
+
+Verify the host-side ownership and modes before starting PostgreSQL:
+
+```bash
+sudo stat \
+  --format='%a %U:%G %n' \
+  /srv/joshbot/secrets \
+  /srv/joshbot/secrets/postgres_admin_password \
+  /srv/joshbot/secrets/joshbot_migrator_password \
+  /srv/joshbot/secrets/joshbot_app_password \
+  /srv/joshbot/secrets/joshbot_backup_password
+```
+
+Expected permissions are:
+
+```text
+700 root:root /srv/joshbot/secrets
+444 root:root /srv/joshbot/secrets/postgres_admin_password
+444 root:root /srv/joshbot/secrets/joshbot_migrator_password
+444 root:root /srv/joshbot/secrets/joshbot_app_password
+444 root:root /srv/joshbot/secrets/joshbot_backup_password
 ```
 
 Do not:
