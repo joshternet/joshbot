@@ -13,6 +13,7 @@ import (
 
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 )
 
 func TestRunOnceLogsCompletedTimeoutWithoutRawOrigin(
@@ -55,7 +56,7 @@ func TestRunOnceLogsCompletedTimeoutWithoutRawOrigin(
 		) (context.Context, context.CancelFunc) {
 			timeoutCalls++
 
-			if timeoutCalls == 1 {
+			if timeoutCalls <= retry.MaxAttemptsPerCycle {
 				return context.WithDeadline(
 					ctx,
 					time.Unix(0, 0),
@@ -160,7 +161,7 @@ func TestRunOnceLogsAbandonedTimeoutWhenCompletionFails(
 		) (context.Context, context.CancelFunc) {
 			timeoutCalls++
 
-			if timeoutCalls == 1 {
+			if timeoutCalls <= retry.MaxAttemptsPerCycle {
 				return context.WithDeadline(
 					ctx,
 					time.Unix(0, 0),

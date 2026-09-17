@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/discovery"
+	"github.com/joshternet/joshbot/internal/netguard"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 )
@@ -37,7 +40,17 @@ type discoveryCandidateStore interface {
 }
 
 type runtimeCandidateSink struct {
-	store discoveryCandidateStore
+	store    discoveryCandidateStore
+	resolver netguard.Resolver
+}
+
+type runDiscoveryCandidateStore interface {
+	RecordDiscoveryForRun(
+		context.Context,
+		discovery.CrawlRunID,
+		origin.Origin,
+		[]discovery.Candidate,
+	) (discovery.RecordResult, error)
 }
 
 func (sink runtimeCandidateSink) RecordCandidates(
@@ -54,14 +67,108 @@ func (sink runtimeCandidateSink) RecordCandidates(
 	return err
 }
 
+// RecordCandidatesForRun preserves evidence and its durable crawl-run
+// attribution before any network admission decision.
+func (sink runtimeCandidateSink) RecordCandidatesForRun(
+	ctx context.Context,
+	runID discovery.CrawlRunID,
+	source origin.Origin,
+	candidates []discovery.Candidate,
+) error {
+	runStore, ok := sink.store.(runDiscoveryCandidateStore)
+	if !ok {
+		return sink.RecordCandidates(ctx, source, candidates)
+	}
+	_, err := runStore.RecordDiscoveryForRun(ctx, runID, source, candidates)
+	return err
+}
+
+type automaticCandidateStore interface {
+	PendingAutomaticCandidates(
+		context.Context,
+		discovery.CrawlRunID,
+	) ([]discovery.Candidate, error)
+	AdmitAutomaticCandidates(
+		context.Context,
+		discovery.CrawlRunID,
+		[]discovery.Candidate,
+	) error
+}
+
+type retryingAutomaticCandidateStore interface {
+	CompleteAutomaticCandidates(
+		context.Context,
+		discovery.CrawlRunID,
+		[]store.AutomaticCandidateResult,
+	) error
+}
+
+// FinalizeCandidates resolves every pending link through netguard immediately
+// before asking PostgreSQL to admit candidates under this crawl run's budgets.
+func (sink runtimeCandidateSink) FinalizeCandidates(
+	ctx context.Context,
+	runID discovery.CrawlRunID,
+) error {
+	admissionStore, ok := sink.store.(automaticCandidateStore)
+	if !ok {
+		return nil
+	}
+	pending, err := admissionStore.PendingAutomaticCandidates(ctx, runID)
+	if err != nil {
+		return err
+	}
+	decisions := make([]store.AutomaticCandidateResult, 0, len(pending))
+	eligible := make([]discovery.Candidate, 0, len(pending))
+	for _, candidate := range pending {
+		category := retry.CategoryNone
+		for range retry.MaxAttemptsPerCycle {
+			_, resolveErr := netguard.Resolve(
+				ctx,
+				candidate.Origin,
+				sink.resolver,
+			)
+			if resolveErr == nil {
+				category = retry.CategoryNone
+				break
+			}
+			category = netguard.FailureCategory(resolveErr)
+			if !category.Transient() {
+				break
+			}
+		}
+		decisions = append(decisions, store.AutomaticCandidateResult{
+			Candidate:       candidate,
+			FailureCategory: category,
+		})
+		if category == retry.CategoryNone {
+			eligible = append(eligible, candidate)
+		}
+	}
+	if retryingStore, ok := sink.store.(retryingAutomaticCandidateStore); ok {
+		return retryingStore.CompleteAutomaticCandidates(ctx, runID, decisions)
+	}
+	return admissionStore.AdmitAutomaticCandidates(ctx, runID, eligible)
+}
+
 func newDiscoveryRuntime(
+	ctx context.Context,
 	pool *pgxpool.Pool,
 	settings crawlRuntimeSettings,
 ) (discoveryRunner, error) {
-	discoveryStore, err := store.NewDiscoveryStore(pool)
+	discoveryStore, err :=
+		store.NewDiscoveryStoreWithAutomaticCrawling(
+			pool,
+			settings.automatic,
+		)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"construct discovery store: %w",
+			err,
+		)
+	}
+	if _, err := discoveryStore.ReconcileAutomaticCrawlPolicy(ctx); err != nil {
+		return nil, fmt.Errorf(
+			"reconcile automatic crawl policy: %w",
 			err,
 		)
 	}
@@ -71,11 +178,13 @@ func newDiscoveryRuntime(
 		&net.Dialer{},
 	)
 
-	crawler, err := discovery.NewMultiPageCrawler(
+	crawler, err := discovery.NewMultiPageCrawlerWithTelemetry(
 		checker,
 		runtimeCandidateSink{
-			store: discoveryStore,
+			store:    discoveryStore,
+			resolver: net.DefaultResolver,
 		},
+		discoveryStore,
 		settings.crawl,
 	)
 	if err != nil {
@@ -113,13 +222,55 @@ func (operations runtimeOperations) discover(
 
 	return operations.withDatabase(
 		ctx,
-		func(connection databaseConnection) error {
-			runner, err := newDiscoveryRuntime(
+		func(connection databaseConnection) (operationErr error) {
+			var heartbeat *serviceHeartbeat
+			if operations.newHeartbeatStore != nil && ctx.Err() == nil {
+				heartbeatStorage, err := operations.newHeartbeatStore(connection.Pool())
+				if err != nil {
+					return fmt.Errorf("construct discovery heartbeat store: %w", err)
+				}
+				if _, err := heartbeatStorage.PurgeCrawlTelemetry(
+					ctx,
+					settings.telemetryRetention,
+				); err != nil {
+					return fmt.Errorf("purge crawl telemetry: %w", err)
+				}
+				instanceID := os.Getenv("HOSTNAME")
+				if instanceID == "" {
+					instanceID = "discovery"
+				}
+				heartbeat, err = startServiceHeartbeatWithReporter(
+					ctx, heartbeatStorage, "discovery", instanceID,
+					serviceHeartbeatInterval,
+					heartbeatErrorReporter(operations.logger),
+				)
+				if err != nil {
+					return err
+				}
+				defer func() {
+					state := "stopping"
+					if operationErr != nil && ctx.Err() == nil {
+						state = "failed"
+					}
+					operationErr = errors.Join(
+						operationErr,
+						heartbeat.stop(ctx, state),
+					)
+				}()
+			}
+
+			runner, err := operations.newDiscoveryRunner(
+				ctx,
 				connection.Pool(),
 				settings,
 			)
 			if err != nil {
 				return err
+			}
+			if observed, ok := runner.(interface {
+				SetLifecycleObserver(discovery.LifecycleObserver)
+			}); ok && heartbeat != nil {
+				observed.SetLifecycleObserver(heartbeat)
 			}
 
 			return executeDiscovery(
@@ -130,6 +281,10 @@ func (operations runtimeOperations) discover(
 			)
 		},
 	)
+}
+
+func newRuntimeHeartbeatStore(pool *pgxpool.Pool) (heartbeatStore, error) {
+	return store.NewDiscoveryStore(pool)
 }
 
 func executeDiscovery(

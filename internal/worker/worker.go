@@ -12,6 +12,7 @@ import (
 
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 	"github.com/joshternet/joshbot/internal/store"
 )
 
@@ -70,6 +71,15 @@ type Verifier interface {
 	) (declaration.Result, error)
 }
 
+// LifecycleObserver receives bounded worker state transitions.
+type LifecycleObserver interface {
+	Observe(string, origin.Origin, string)
+}
+
+type verificationPauseQueue interface {
+	VerificationPaused(context.Context) (bool, error)
+}
+
 // Config contains the operational policy for one worker.
 type Config struct {
 	WorkerID        string
@@ -77,6 +87,7 @@ type Config struct {
 	JobTimeout      time.Duration
 	CompletionGrace time.Duration
 	RecheckInterval time.Duration
+	RetryJitter     retry.Jitter
 }
 
 // Worker claims and processes declaration-verification work.
@@ -89,6 +100,21 @@ type Worker struct {
 	config         Config
 	waiter         waitStrategy
 	timeoutFactory timeoutFactory
+	retryPolicy    retry.Policy
+	observer       LifecycleObserver
+}
+
+// SetLifecycleObserver attaches state observation without changing work.
+func (w *Worker) SetLifecycleObserver(observer LifecycleObserver) {
+	if w != nil {
+		w.observer = observer
+	}
+}
+
+func (w *Worker) observe(state string, source origin.Origin, message string) {
+	if w.observer != nil {
+		w.observer.Observe(state, source, message)
+	}
 }
 
 type waitStrategy interface {
@@ -157,6 +183,7 @@ func newWorker(
 		config:         config,
 		waiter:         waiter,
 		timeoutFactory: timeoutFactory,
+		retryPolicy:    retry.NewPolicy(config.RetryJitter),
 	}, nil
 }
 
@@ -176,6 +203,7 @@ func (w *Worker) RunOnce(
 		w.config.WorkerID,
 	)
 	if err != nil {
+		w.observe("failed", origin.Origin{}, "claim_failed")
 		return false, fmt.Errorf(
 			"worker: claim work: %w",
 			err,
@@ -183,8 +211,21 @@ func (w *Worker) RunOnce(
 	}
 
 	if !found {
+		state := "idle"
+		if queue, ok := w.queue.(verificationPauseQueue); ok {
+			paused, pauseErr := queue.VerificationPaused(ctx)
+			if pauseErr != nil {
+				w.observe("failed", origin.Origin{}, "control_read_failed")
+				return false, pauseErr
+			}
+			if paused {
+				state = "paused"
+			}
+		}
+		w.observe(state, origin.Origin{}, "")
 		return false, nil
 	}
+	w.observe("running", lease.Origin, "")
 
 	leaseBudget := lease.ExpiresAt.Sub(
 		lease.ClaimedAt,
@@ -194,41 +235,14 @@ func (w *Worker) RunOnce(
 		w.config.JobTimeout,
 		w.config.CompletionGrace,
 	) {
+		w.observe("failed", lease.Origin, "insufficient_lease_budget")
 		return true, ErrInsufficientLeaseBudget
 	}
 
-	jobContext, cancelJob :=
-		w.timeoutFactory.WithTimeout(
-			ctx,
-			w.config.JobTimeout,
-		)
-
-	result, err := w.verifier.Verify(
-		jobContext,
-		lease.Origin,
-	)
-	jobContextError := jobContext.Err()
-	cancelJob()
-
-	timedOut := false
-
+	result, timedOut, err := w.verifyWithRetries(ctx, lease.Origin)
 	if err != nil {
-		if contextError := ctx.Err(); contextError != nil {
-			return true, contextError
-		}
-
-		if jobContextError != nil {
-			timedOut = true
-			result = declaration.Result{
-				Outcome: declaration.OutcomeUnavailable,
-				Origin:  lease.Origin,
-			}
-		} else {
-			return true, fmt.Errorf(
-				"worker: verify origin: %w",
-				err,
-			)
-		}
+		w.observe("failed", lease.Origin, "verification_failed")
+		return true, err
 	}
 
 	if contextError := ctx.Err(); contextError != nil {
@@ -249,6 +263,7 @@ func (w *Worker) RunOnce(
 		w.config.RecheckInterval,
 	)
 	if err != nil {
+		w.observe("failed", lease.Origin, "completion_failed")
 		if timedOut {
 			logVerificationTimeout(
 				lease.Origin,
@@ -277,8 +292,57 @@ func (w *Worker) RunOnce(
 			"completed",
 		)
 	}
+	w.observe("idle", origin.Origin{}, "")
 
 	return true, nil
+}
+
+func (w *Worker) verifyWithRetries(
+	ctx context.Context,
+	source origin.Origin,
+) (declaration.Result, bool, error) {
+	anyTimeout := false
+	var lastResult declaration.Result
+	for attempt := 1; attempt <= retry.MaxAttemptsPerCycle; attempt++ {
+		jobContext, cancelJob := w.timeoutFactory.WithTimeout(
+			ctx,
+			w.config.JobTimeout,
+		)
+		result, err := w.verifier.Verify(jobContext, source)
+		jobContextError := jobContext.Err()
+		cancelJob()
+
+		if err != nil {
+			if contextError := ctx.Err(); contextError != nil {
+				return declaration.Result{}, anyTimeout, contextError
+			}
+			if jobContextError == nil {
+				return declaration.Result{}, anyTimeout, fmt.Errorf(
+					"worker: verify origin: %w",
+					err,
+				)
+			}
+			anyTimeout = true
+			result = declaration.Result{
+				Outcome:         declaration.OutcomeUnavailable,
+				Origin:          source,
+				FailureCategory: retry.CategoryTimeout,
+			}
+		}
+
+		category := result.FailureCategory
+		if result.Outcome == declaration.OutcomeUnavailable &&
+			category == retry.CategoryNone {
+			category = retry.CategoryDeclarationUnavailable
+			result.FailureCategory = category
+		}
+		if result.Outcome != declaration.OutcomeUnavailable ||
+			!category.Transient() {
+			return result, anyTimeout, nil
+		}
+		lastResult = result
+	}
+	return lastResult, anyTimeout, nil
 }
 
 // Run processes work until the context is canceled or a fatal operation fails.
@@ -290,11 +354,23 @@ func (w *Worker) Run(ctx context.Context) error {
 		return err
 	}
 
+	consecutiveFailures := 0
 	for {
 		worked, err := w.RunOnce(ctx)
 		if err != nil {
-			return err
+			if contextError := ctx.Err(); contextError != nil {
+				return contextError
+			}
+			consecutiveFailures++
+			if waitErr := w.waiter.Wait(
+				ctx,
+				w.retryPolicy.Delay(consecutiveFailures, 0),
+			); waitErr != nil {
+				return waitErr
+			}
+			continue
 		}
+		consecutiveFailures = 0
 
 		if worked {
 			continue

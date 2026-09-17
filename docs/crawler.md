@@ -61,13 +61,19 @@ participation.
 JoshBot crawls an origin only when it is:
 
 - an independently verified Joshternet participant; or
-- explicitly configured by the operator as a curated seed.
+- explicitly configured by the operator as a curated seed; or
+- a discovered crawl source admitted by the optional automatic
+  expansion policy.
 
 A curated seed grants permission to use that origin as a discovery source. It
 does not assert that the origin participates in the Joshternet.
 
 Removing a seed prevents seed status from making it crawl-eligible. Existing
 verification observations and discovery provenance are not erased.
+
+Automatic sources remain distinct from curated seeds and verified
+participants. Automatic promotion records crawl eligibility only. It does not
+assert trust, ownership, endorsement, identity, or Joshternet participation.
 
 ## How pages are crawled
 
@@ -89,8 +95,8 @@ External HTTP and HTTPS links contribute their canonical origins as
 declaration-verification candidates.
 
 External origins are not followed as pages during the current source crawl.
-They become crawl-eligible only after independent verification or explicit
-operator curation.
+They become crawl-eligible only after independent verification, explicit
+operator curation, or admission by the enabled automatic expansion policy.
 
 Requests within one source crawl are sequential. The configured delay is
 applied between requests, not after the final request.
@@ -141,6 +147,13 @@ It rejects unsafe destinations including:
 
 Redirect destinations pass through the same policy.
 
+Candidate evidence is stored before automatic-admission network checks. When a
+candidate enters a bounded admission batch, JoshBot performs a fresh DNS
+resolution immediately before admission, requires every returned address to be
+public, and connects only through validated IP literals. A transient
+resolution failure is deferred; an unsafe result remains in private evidence
+but is not admitted automatically.
+
 Operators should still enforce outbound firewall policy. Application checks
 are not a substitute for host-level network controls.
 
@@ -163,8 +176,18 @@ Additional discovery controls are:
 | `JOSHBOT_DISCOVERY_INTERVAL` | `168h` | Minimum interval between source attempts |
 | `JOSHBOT_DISCOVERY_POLL_INTERVAL` | `30s` | Idle polling interval |
 | `JOSHBOT_DISCOVERY_PAGE_TIMEOUT` | `30s` | Per-page operation timeout |
+| `JOSHBOT_AUTOMATIC_CRAWL_ENABLED` | `false` | Admit discovered origins as private crawl sources |
+| `JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES` | `1000` | Pause automatic source claims at this pending-probe high-water mark |
+| `JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN` | `100` | Maximum newly promoted automatic sources in one durable crawl-run admission batch |
+| `JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS` | empty | Add emergency domain patterns beyond the durable operator-managed avoid list |
 
 Go duration syntax is used. For example, one week is `168h`, not `7d`.
+
+The durable domain avoid list starts with common hosted publishing and social
+platforms and is editable through the operator control API. Exact domains include their
+subdomains. A public-suffix family such as `blogspot.*` also matches regional
+forms including `blogspot.co.uk` and `blogspot.no`. Avoided origins remain in
+private discovery evidence but are not promoted or probed automatically.
 
 `JOSHBOT_CRAWL_MAX_DEPTH` may be zero, limiting the crawl to its root page.
 
@@ -176,28 +199,85 @@ slots.
 
 These values are operator safety limits, not Joshternet protocol rules.
 
+When automatic expansion is enabled, safe canonical origins discovered through
+eligible public links can enter deterministic, bounded admission batches.
+Every candidate and provenance edge is durable before admission. Attribution
+belongs to the first crawl run that discovered the link origin. Each admission
+run allocates candidates in canonical-origin order up to that run's configured
+promotion limit; overflow remains unbatched and available to a later run.
+Canonical origin deduplication keeps repeated links from creating duplicate
+sources.
+
+Each allocated candidate receives at most three immediate resolution attempts
+when the failure is transient. Capacity, policy, and transient-network
+deferrals are durable outcomes and do not delete evidence. A candidate is
+promoted only after fresh network validation, applicable avoid/block policy,
+probe-queue capacity, and the run promotion budget all permit it.
+Automatic expansion continues across crawl generations until the operator
+disables it, blocks a source, pauses the service, or no eligible source is due.
+When the pending verification probe queue reaches the configured high-water
+mark, JoshBot temporarily delays automatically discovered sources while
+retaining them for later. Curated seeds and verified participants remain
+eligible, and automatic claims resume after the worker drains the probe queue.
+This backpressure bounds active verification work without imposing a lifetime
+limit on discovery.
+
+Operators can inspect and control the private crawl-source inventory without
+changing participation or deleting history:
+
+```text
+joshbot source list
+joshbot source block https://example.org
+joshbot source allow https://example.org
+```
+
+The list reports curated, automatically discovered, verified, and blocked
+status independently. Blocking prevents future discovery claims even when an
+origin is curated or verified. Allowing restores eligibility according to its
+remaining classifications and the automatic-expansion configuration.
+
 ## Content handling
 
 Retrieval and parsing are bounded.
 
-Unsupported media types, invalid content, and oversized bodies do not become
-page frontiers.
+Unsupported media types, invalid content, and oversized bodies do not extend
+the same-origin page frontier.
 
 The crawler canonicalizes external origins before storing or scheduling them.
-Unsupported schemes, invalid URLs, credential-bearing URLs, unsafe
-destinations, and links outside configured limits are rejected.
+Unsupported schemes, invalid URLs, and credential-bearing URLs are discarded.
+Canonical HTTP and HTTPS link evidence can be retained before network
+validation; unsafe destinations are rejected from automatic admission, not
+silently removed from discovery history.
+
+Links to configured shared-hosting and social platform suffixes remain in
+candidate and edge history, but do not receive verification probes and do not
+become automatic crawl sources. Matching includes the named host and its
+subdomains. Curated seeds remain an explicit operator-controlled override.
 
 ## What JoshBot stores
 
 JoshBot retains origin-level semantic and operational data:
 
 - explicit seed status;
+- automatic-source status;
+- operator crawl-block status;
 - source last-attempt time;
 - source-to-candidate origin relationships;
 - first and latest candidate discovery times;
 - declaration observations;
 - effective participant state;
 - verification queue and lease state;
+- durable verification queue transitions;
+- bounded crawl-run summaries and stop reasons;
+- sanitized requested and final page URLs without queries, fragments, or credentials;
+- per-page HTTP status, duration, response size, media type, redirect count,
+  robots decision, link totals, URLs found/enqueued, typed failure category,
+  and bounded outcome;
+- per-run admitted/deferred promotions, blocked/failed pages, URLs
+  found/enqueued, and remaining frontier at stop;
+- worker and discovery service heartbeats with idle, paused, failed,
+  current-origin, and bounded-message state;
+- persistent discovery and verification pause state;
 - migration metadata.
 
 This state supports retries, discovery provenance, politeness, and registry
@@ -215,12 +295,52 @@ JoshBot does not retain:
 - screenshots;
 - headers;
 - cookies;
-- internal page history;
-- page depth;
+- query strings or fragments from page URLs;
+- URL credentials;
 - the in-memory frontier;
 - arbitrary page content.
 
+Operational crawl telemetry is retained for 30 days by default and is removed
+on discovery service startup according to
+`JOSHBOT_CRAWL_TELEMETRY_RETENTION`. Verification observations, queue history,
+origin relationships, and participation state use their existing durable
+retention rules.
+
+Promotion telemetry is attributed to the first crawl run that discovered each
+link candidate. `promotions_admitted` counts candidates eventually promoted
+from that original evidence; `promotions_deferred` counts every other original
+link candidate, including candidates beyond the bounded resolution batch and
+terminal network or policy rejections. Later successful admission moves a
+candidate from deferred to admitted without resolving an unbounded batch.
+
 Private discovery state does not appear in the public registry.
+
+## Retry behavior
+
+Only transient failures are retried. The transient categories are `dns`,
+`transport`, `timeout`, `robots_temporary`, `http_408`, `http_429`, `http_5xx`,
+`declaration_unavailable`, `processor`, and `store`. Other typed categories,
+including unsafe addresses, policy blocks, robots denials, malformed or
+unsupported origins, unsupported or oversized content, and exhausted budgets,
+are terminal for retry scheduling.
+
+Declaration verification, the root page of a source crawl, and
+automatic-admission DNS resolution make at most three immediate attempts in a
+processing cycle. Non-root pages are attempted once. The durable
+consecutive-failure schedule is `5m`, `30m`, `2h`, `12h`, then `24h` for each
+later failure. Valid `Retry-After` values can extend verification and root-page
+delays up to the same `24h` cap.
+
+An exhausted three-attempt cycle is one logical queue claim, one root
+frontier-page attempt, or one admission decision. Verification writes one
+observation, crawling writes one page-attempt row, and admission writes one
+batch outcome. The applicable durable failure streak increments once, not once
+per physical network attempt.
+
+A successful or terminal result clears the durable streak. If at least one
+page parsed successfully, the crawl source is considered successful for retry
+scheduling even when a later page failed; the failed page remains visible in
+telemetry.
 
 ## How to control JoshBot
 

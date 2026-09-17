@@ -112,7 +112,7 @@ func TestDiscoveryMigrationCreatesPrivateTables(
 	t *testing.T,
 ) {
 	ctx := context.Background()
-	pool := newStoreTestPool(t)
+	pool := newSerialStoreTestPool(t)
 
 	var count int
 	err := pool.QueryRow(
@@ -147,7 +147,7 @@ func TestDiscoveryMigrationRejectsInvalidQueueMode(
 	t *testing.T,
 ) {
 	ctx := context.Background()
-	pool := newStoreTestPool(t)
+	pool := newSerialStoreTestPool(t)
 
 	_, err := pool.Exec(
 		ctx,
@@ -173,7 +173,7 @@ func TestDiscoveryMigrationRejectsInvalidQueueMode(
 
 func TestDiscoveryMigrationIsForwardOnly(t *testing.T) {
 	ctx := context.Background()
-	pool := newStoreTestPool(t)
+	pool := newSerialStoreTestPool(t)
 
 	migration, err := os.ReadFile(
 		"migrations/0003_discovery.sql",

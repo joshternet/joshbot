@@ -48,8 +48,11 @@ It exposes:
 - migrations;
 - verification scheduling;
 - curated seed management;
+- private crawl-source controls;
 - verification workers;
 - discovery workers;
+- a read-only operational reporting service;
+- a separately authenticated mutation-only control service;
 - deterministic export;
 - GitHub publication.
 
@@ -86,7 +89,10 @@ Resolves destination hostnames and rejects unsafe addresses before dialing.
 
 The guard rejects loopback, private, link-local, multicast, shared,
 unspecified, and other non-public destinations. Every resolved address must be
-safe. Redirects are retrieved through the same guarded path.
+safe. Connections use validated IP literals, avoiding a second DNS lookup
+between validation and dialing. Redirects are retrieved through the same
+guarded path, and automatic admission performs a fresh all-address resolution
+after evidence is stored and immediately before promotion.
 
 The network guard reduces SSRF risk but does not replace host firewall policy.
 
@@ -132,6 +138,11 @@ Its responsibilities include:
 - transactional completion and rescheduling;
 - discovery-source eligibility;
 - curated crawl seeds;
+- automatic-admission batches and retry state;
+- operator pause, domain-avoid, and exact-origin block state;
+- append-only operator audit events;
+- bounded crawl and page-attempt telemetry;
+- service heartbeats;
 - candidate provenance and discovery timestamps;
 - observation history.
 
@@ -148,6 +159,12 @@ crash or expired lease. Only the current lease owner may commit completion.
 Recording the observation, releasing the lease, and scheduling subsequent work
 occur transactionally.
 
+### `internal/retry`
+
+Defines the shared typed failure categories, three-attempt in-cycle bound,
+`Retry-After` parsing and cap, and durable delay schedule of `5m`, `30m`,
+`2h`, `12h`, then `24h`.
+
 ### `internal/discovery`
 
 Extracts candidate origins and performs bounded multi-page crawling.
@@ -160,6 +177,26 @@ Every request uses the robots-aware guarded HTTP path.
 
 The frontier is intentionally in memory. A stopped crawl starts from the root
 during its next attempt.
+
+Only a transient root-page failure receives up to three immediate attempts.
+Failures after at least one page was parsed remain page telemetry and do not
+turn an otherwise partially successful source crawl into a durable source
+retry.
+
+### `internal/reporting`
+
+Defines the authenticated read-only HTTP contract and PostgreSQL adapter.
+List endpoints return JSON arrays and use route-specific opaque keyset cursors.
+The next cursor is carried in `X-JoshBot-Next-Cursor`, not in a response
+envelope. Retained crawl metrics are gauges over the currently retained rows,
+so telemetry purging can reduce them.
+
+### `internal/control`
+
+Defines the separately authenticated mutation-only HTTP contract. Successful
+mutations commit with their audit row in one transaction. Authenticated
+validation or mutation failures append a rejected audit after rollback.
+Reporting credentials cannot authorize this service.
 
 ### `internal/publicdata`
 
@@ -202,7 +239,15 @@ Manually scheduled work is recurring.
 
 A discovered candidate begins as a one-shot probe. A valid declaration
 promotes it to recurring work. A non-valid result records the observation and
-removes the completed one-shot queue state transactionally.
+removes the completed one-shot queue state transactionally unless the result is
+a transient unavailable outcome, in which case the probe remains queued with
+durable retry state.
+
+Transient work receives at most three immediate verification attempts per
+claim. Consecutive transient failures persist their category and next due time
+using `5m`, `30m`, `2h`, `12h`, and a capped `24h` thereafter. A successful or
+terminal completion clears that state. `Retry-After` may extend the selected
+delay but cannot exceed `24h`.
 
 ### Leases
 
@@ -225,15 +270,39 @@ from bypassing the scheduling rules.
 A crawl source is eligible when it is either:
 
 - an independently verified Joshternet origin; or
-- an operator-curated seed.
+- an operator-curated seed; or
+- admitted by the optional automatic expansion policy.
 
 Curated seeds remain private operational configuration. Adding a seed does not
 create a verification result or public registry entry. Removing seed status
 does not erase existing observations or candidate provenance.
 
-External origins found during crawling are scheduled for declaration
-verification. They are not recursively crawled unless they later verify or an
-operator adds them as seeds.
+External origins found during crawling become durable candidates and provenance
+edges. Crawling, link evidence, and probe scheduling do not establish
+Joshternet participation. An origin becomes a participant only through its own
+effective valid declaration.
+
+When automatic expansion is enabled, candidate evidence is attributed to its
+first durable crawl run before bounded admission. Eligible link candidates are
+allocated in canonical-origin order, up to the admission run's snapshotted
+promotion limit. Overflow remains unbatched durable evidence for a later crawl
+run. Each allocated origin then receives a fresh all-address netguard
+resolution. Transient resolution failures receive up to three immediate
+attempts and a durable due time; unsafe addresses are retained as evidence but
+recorded as network-rejected. Capacity, policy, and transient deferrals do not
+erase the candidate or provenance.
+
+The automatic-source classification remains private operational state, is
+deduplicated by canonical origin, and never changes participant semantics.
+Eligible automatic sources can discover further candidates across later crawl
+generations, but no crawl or discovery relationship implies Joshternet
+membership.
+
+Automatic source claims use verification-queue backpressure. At the configured
+pending-probe high-water mark, automatic sources remain stored but are not
+claimed until workers drain the queue. Curated seeds and verified participants
+remain independently eligible. The high-water mark controls outstanding work;
+it does not drop candidates or limit recursive discovery over time.
 
 ## Publication boundary
 
@@ -269,12 +338,35 @@ with these bytes, including the final newline:
 joshbot-registry-v1
 ```
 
+## Operational API boundaries
+
+The reporting runtime defaults to `127.0.0.1:8788`, reads
+`JOSHBOT_REPORT_TOKEN_FILE`, and uses a read-only `joshbot_reporter` database
+role. The control runtime defaults to `127.0.0.1:8789`, reads the independent
+`JOSHBOT_OPERATOR_TOKEN_FILE`, and uses the narrowly granted
+`joshbot_operator` role. In Compose they are separately profile-gated behind
+the `reporting` and `control` profiles and attach to different internal
+networks.
+
+Only each service's `/healthz` route is unauthenticated. Reporting bearer
+credentials authorize operational reads and metrics only; operator credentials
+authorize control mutations only. Neither service receives crawler egress or
+publication credentials.
+
+Worker and discovery processes persist a heartbeat every five seconds after an
+initial `starting` write. Their lifecycle states are `running`, `idle`,
+`paused`, `failed`, and `stopping` as applicable. Current-origin and failure
+message fields are bounded operational state, and heartbeat persistence
+failures are logged on transition into failure.
+
 ## Deployment boundaries
 
-The Compose deployment defines two networks:
+The Compose deployment defines four networks:
 
 - `database`, which is internal;
-- `egress`, for guarded web retrieval or GitHub publication.
+- `egress`, for guarded web retrieval or GitHub publication;
+- `reporting`, an internal network for the profile-gated reporting service and explicitly attached reporting clients;
+- `control`, an internal network for the profile-gated operator control service and explicitly attached control clients.
 
 PostgreSQL is not published to a host port.
 
@@ -291,6 +383,7 @@ Backups are PostgreSQL custom-format archives created by a dedicated
 read-only role.
 
 The recovery smoke test restores into a fresh isolated PostgreSQL instance,
-checks application access, verifies persisted operational state, and rebuilds
-byte-identical public output. It never restores into the configured production
-database.
+checks role boundaries and migration records, verifies persisted operational
+state, and rebuilds byte-identical public output. The current schema contains
+twelve embedded migrations, numbered `0001` through `0012`. Recovery never
+restores into the configured production database.

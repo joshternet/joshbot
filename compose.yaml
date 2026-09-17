@@ -19,6 +19,8 @@ services:
       - postgres_admin_password
       - joshbot_migrator_password
       - joshbot_app_password
+      - joshbot_reporter_password
+      - joshbot_operator_password
       - joshbot_backup_password
     volumes:
       - type: bind
@@ -119,11 +121,102 @@ services:
       JOSHBOT_CRAWL_MAX_PAGE_BYTES: ${JOSHBOT_CRAWL_MAX_PAGE_BYTES:-1048576}
       JOSHBOT_CRAWL_REQUEST_DELAY: ${JOSHBOT_CRAWL_REQUEST_DELAY:-1s}
       JOSHBOT_CRAWL_REDIRECT_LIMIT: ${JOSHBOT_CRAWL_REDIRECT_LIMIT:-5}
+      JOSHBOT_CRAWL_TELEMETRY_RETENTION: ${JOSHBOT_CRAWL_TELEMETRY_RETENTION:-720h}
+      JOSHBOT_AUTOMATIC_CRAWL_ENABLED: ${JOSHBOT_AUTOMATIC_CRAWL_ENABLED:-false}
+      JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES: ${JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES:-1000}
+      JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN: ${JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN:-100}
+      JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS: ${JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS:-}
     secrets:
       - joshbot_app_password
     networks:
       - database
       - egress
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - /joshbot
+        - health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  report:
+    <<: *joshbot-image
+    profiles:
+      - reporting
+    command:
+      - report
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      JOSHBOT_DATABASE_URL: postgres://joshbot_reporter@postgres:5432/joshbot?sslmode=disable
+      JOSHBOT_DATABASE_PASSWORD_FILE: /run/secrets/joshbot_reporter_password
+      JOSHBOT_REPORT_LISTEN_ADDRESS: ${JOSHBOT_REPORT_LISTEN_ADDRESS:-0.0.0.0:8788}
+      JOSHBOT_REPORT_TOKEN_FILE: /run/secrets/joshbot_report_token
+      JOSHBOT_AUTOMATIC_CRAWL_ENABLED: ${JOSHBOT_AUTOMATIC_CRAWL_ENABLED:-false}
+      JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES: ${JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES:-1000}
+    secrets:
+      - joshbot_reporter_password
+      - joshbot_report_token
+    expose:
+      - "8788"
+    networks:
+      - database
+      - reporting
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - /joshbot
+        - health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  control:
+    <<: *joshbot-image
+    profiles:
+      - control
+    command:
+      - control
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      JOSHBOT_DATABASE_URL: postgres://joshbot_operator@postgres:5432/joshbot?sslmode=disable
+      JOSHBOT_DATABASE_PASSWORD_FILE: /run/secrets/joshbot_operator_password
+      JOSHBOT_CONTROL_LISTEN_ADDRESS: ${JOSHBOT_CONTROL_LISTEN_ADDRESS:-0.0.0.0:8789}
+      JOSHBOT_OPERATOR_TOKEN_FILE: /run/secrets/joshbot_operator_token
+    secrets:
+      - joshbot_operator_password
+      - joshbot_operator_token
+    expose:
+      - "8789"
+    networks:
+      - database
+      - control
     depends_on:
       postgres:
         condition: service_healthy
@@ -164,6 +257,10 @@ services:
       JOSHBOT_CRAWL_MAX_PAGE_BYTES: ${JOSHBOT_CRAWL_MAX_PAGE_BYTES:-1048576}
       JOSHBOT_CRAWL_REQUEST_DELAY: ${JOSHBOT_CRAWL_REQUEST_DELAY:-1s}
       JOSHBOT_CRAWL_REDIRECT_LIMIT: ${JOSHBOT_CRAWL_REDIRECT_LIMIT:-5}
+      JOSHBOT_AUTOMATIC_CRAWL_ENABLED: ${JOSHBOT_AUTOMATIC_CRAWL_ENABLED:-false}
+      JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES: ${JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES:-1000}
+      JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN: ${JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN:-100}
+      JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS: ${JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS:-}
     secrets:
       - joshbot_app_password
     volumes:
@@ -315,12 +412,26 @@ secrets:
     file: ${JOSHBOT_MIGRATOR_PASSWORD_FILE:?set JOSHBOT_MIGRATOR_PASSWORD_FILE}
   joshbot_app_password:
     file: ${JOSHBOT_APP_PASSWORD_FILE:?set JOSHBOT_APP_PASSWORD_FILE}
+  joshbot_reporter_password:
+    file: ${JOSHBOT_REPORTER_PASSWORD_FILE:?set JOSHBOT_REPORTER_PASSWORD_FILE}
+  joshbot_operator_password:
+    file: ${JOSHBOT_OPERATOR_PASSWORD_FILE:?set JOSHBOT_OPERATOR_PASSWORD_FILE}
   joshbot_backup_password:
     file: ${JOSHBOT_BACKUP_PASSWORD_FILE:?set JOSHBOT_BACKUP_PASSWORD_FILE}
   joshbot_github_token:
     file: ${JOSHBOT_GITHUB_TOKEN_FILE:-./deploy/secrets/github-token-not-configured}
+  joshbot_report_token:
+    file: ${JOSHBOT_REPORT_TOKEN_FILE:-./deploy/secrets/report-token-not-configured}
+  joshbot_operator_token:
+    file: ${JOSHBOT_OPERATOR_TOKEN_FILE:-./deploy/secrets/operator-token-not-configured}
 
 networks:
   database:
+    internal: true
+  reporting:
+    name: ${JOSHBOT_REPORT_NETWORK_NAME:-joshbot-reporting}
+    internal: true
+  control:
+    name: ${JOSHBOT_CONTROL_NETWORK_NAME:-joshbot-control}
     internal: true
   egress:

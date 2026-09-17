@@ -50,6 +50,18 @@ app_password="$(
         joshbot_app_password
 )"
 
+reporter_password="$(
+    read_secret \
+        /run/secrets/joshbot_reporter_password \
+        joshbot_reporter_password
+)"
+
+operator_password="$(
+    read_secret \
+        /run/secrets/joshbot_operator_password \
+        joshbot_operator_password
+)"
+
 backup_password="$(
     read_secret \
         /run/secrets/joshbot_backup_password \
@@ -62,6 +74,8 @@ psql \
     --set=database_name="$POSTGRES_DB" \
     --set=migrator_password="$migrator_password" \
     --set=app_password="$app_password" \
+    --set=reporter_password="$reporter_password" \
+    --set=operator_password="$operator_password" \
     --set=backup_password="$backup_password" \
     --set=ON_ERROR_STOP=1 <<'SQL'
 CREATE ROLE joshbot_migrator
@@ -75,6 +89,22 @@ CREATE ROLE joshbot_migrator
 CREATE ROLE joshbot_app
     LOGIN
     PASSWORD :'app_password'
+    NOSUPERUSER
+    NOCREATEDB
+    NOCREATEROLE
+    NOREPLICATION;
+
+CREATE ROLE joshbot_reporter
+    LOGIN
+    PASSWORD :'reporter_password'
+    NOSUPERUSER
+    NOCREATEDB
+    NOCREATEROLE
+    NOREPLICATION;
+
+CREATE ROLE joshbot_operator
+    LOGIN
+    PASSWORD :'operator_password'
     NOSUPERUSER
     NOCREATEDB
     NOCREATEROLE
@@ -96,6 +126,8 @@ GRANT CONNECT
     ON DATABASE :"database_name"
     TO joshbot_migrator,
        joshbot_app,
+       joshbot_reporter,
+       joshbot_operator,
        joshbot_backup;
 
 REVOKE ALL
@@ -112,6 +144,8 @@ GRANT USAGE, CREATE
 GRANT USAGE
     ON SCHEMA public
     TO joshbot_app,
+       joshbot_reporter,
+       joshbot_operator,
        joshbot_backup;
 
 ALTER DEFAULT PRIVILEGES
@@ -133,6 +167,13 @@ ALTER DEFAULT PRIVILEGES
     IN SCHEMA public
     GRANT SELECT
     ON TABLES
+    TO joshbot_reporter;
+
+ALTER DEFAULT PRIVILEGES
+    FOR ROLE joshbot_migrator
+    IN SCHEMA public
+    GRANT SELECT
+    ON TABLES
     TO joshbot_backup;
 
 ALTER DEFAULT PRIVILEGES
@@ -148,6 +189,8 @@ ALTER DEFAULT PRIVILEGES
     GRANT USAGE
     ON TYPES
     TO joshbot_app,
+       joshbot_reporter,
+       joshbot_operator,
        joshbot_backup;
 
 ALTER ROLE joshbot_migrator
@@ -156,10 +199,18 @@ ALTER ROLE joshbot_migrator
 ALTER ROLE joshbot_app
     SET search_path TO public;
 
+ALTER ROLE joshbot_reporter
+    SET search_path TO public;
+
+ALTER ROLE joshbot_operator
+    SET search_path TO public;
+
 ALTER ROLE joshbot_backup
     SET search_path TO public;
 SQL
 
 unset migrator_password
 unset app_password
+unset reporter_password
+unset operator_password
 unset backup_password

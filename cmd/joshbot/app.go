@@ -8,6 +8,7 @@ import (
 
 	"github.com/joshternet/joshbot/internal/githubpublish"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/store"
 )
 
 const (
@@ -25,8 +26,13 @@ Usage:
   joshbot seed add <origin>
   joshbot seed remove <origin>
   joshbot seed list
+  joshbot source block <origin>
+  joshbot source allow <origin>
+  joshbot source list
   joshbot worker
   joshbot discover [--once]
+  joshbot report
+  joshbot control
   joshbot export --output <directory>
   joshbot publish --input <directory>
   joshbot help
@@ -36,8 +42,11 @@ Commands:
   migrate    Apply pending database migrations
   schedule   Schedule an origin for recurring verification
   seed       Manage private curated crawl seeds
+  source     Inspect and control private crawl sources
   worker     Process queued verification work
-  discover   Crawl verified origins and curated crawl seeds
+  discover   Crawl eligible private discovery sources
+  report     Serve the private operational reporting API
+  control    Serve the private operator mutation API
   export     Write a deterministic public registry snapshot
   publish    Publish an existing registry snapshot to GitHub
   help       Show this help
@@ -53,6 +62,7 @@ type commandOperations interface {
 	schedule(context.Context, origin.Origin) error
 	worker(context.Context) error
 	discover(context.Context, bool) error
+	report(context.Context) error
 	export(context.Context, string) error
 	publish(
 		context.Context,
@@ -64,6 +74,15 @@ type crawlSeedCommandOperations interface {
 	addCrawlSeed(context.Context, origin.Origin) error
 	removeCrawlSeed(context.Context, origin.Origin) error
 	crawlSeeds(context.Context) ([]origin.Origin, error)
+}
+
+type controlCommandOperations interface {
+	control(context.Context) error
+}
+
+type crawlSourceCommandOperations interface {
+	setCrawlBlocked(context.Context, origin.Origin, bool) error
+	crawlSources(context.Context) ([]store.CrawlSource, error)
 }
 
 func run(
@@ -325,6 +344,106 @@ func runWithOperations(
 			)
 		}
 
+	case "source":
+		sourceOperations, available :=
+			operations.(crawlSourceCommandOperations)
+		if !available {
+			return reportCommandFailure(
+				stderr,
+				command,
+				errOperationsUnavailable,
+			)
+		}
+
+		if len(commandArgs) == 0 {
+			return reportUsage(
+				stderr,
+				"source requires block, allow, or list",
+			)
+		}
+
+		switch commandArgs[0] {
+		case "block", "allow":
+			if len(commandArgs) != 2 {
+				return reportUsage(
+					stderr,
+					"source block and allow require exactly one HTTP or HTTPS URL",
+				)
+			}
+
+			source, err := origin.Parse(
+				commandArgs[1],
+			)
+			if err != nil {
+				return reportUsage(
+					stderr,
+					"source block and allow require a valid HTTP or HTTPS URL",
+				)
+			}
+
+			blocked := commandArgs[0] == "block"
+
+			if err := sourceOperations.setCrawlBlocked(
+				ctx,
+				source,
+				blocked,
+			); err != nil {
+				return reportCommandFailure(
+					stderr,
+					command,
+					err,
+				)
+			}
+
+			state := "allowed"
+			if blocked {
+				state = "blocked"
+			}
+
+			_, _ = fmt.Fprintf(
+				stdout,
+				"source %s %s\n",
+				state,
+				source.String(),
+			)
+
+			return exitSuccess
+
+		case "list":
+			if len(commandArgs) != 1 {
+				return reportUsage(
+					stderr,
+					"source list does not accept arguments",
+				)
+			}
+
+			sources, err := sourceOperations.crawlSources(
+				ctx,
+			)
+			if err != nil {
+				return reportCommandFailure(
+					stderr,
+					command,
+					err,
+				)
+			}
+
+			for _, source := range sources {
+				_, _ = fmt.Fprintln(
+					stdout,
+					formatCrawlSource(source),
+				)
+			}
+
+			return exitSuccess
+
+		default:
+			return reportUsage(
+				stderr,
+				"source requires block, allow, or list",
+			)
+		}
+
 	case "worker":
 		if len(commandArgs) != 0 {
 			return reportUsage(
@@ -373,6 +492,52 @@ func runWithOperations(
 			_, _ = fmt.Fprintln(
 				stdout,
 				"discovery attempt complete",
+			)
+		}
+
+		return exitSuccess
+
+	case "report":
+		if len(commandArgs) != 0 {
+			return reportUsage(
+				stderr,
+				"report does not accept arguments",
+			)
+		}
+
+		if err := operations.report(ctx); err != nil {
+			return reportCommandFailure(
+				stderr,
+				command,
+				err,
+			)
+		}
+
+		return exitSuccess
+
+	case "control":
+		controlOperations, available :=
+			operations.(controlCommandOperations)
+		if !available {
+			return reportCommandFailure(
+				stderr,
+				command,
+				errOperationsUnavailable,
+			)
+		}
+
+		if len(commandArgs) != 0 {
+			return reportUsage(
+				stderr,
+				"control does not accept arguments",
+			)
+		}
+
+		if err := controlOperations.control(ctx); err != nil {
+			return reportCommandFailure(
+				stderr,
+				command,
+				err,
 			)
 		}
 

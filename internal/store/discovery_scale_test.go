@@ -126,6 +126,7 @@ func TestRecordDiscoveryPersistsEveryCandidateFromLargeSeedDirectory(
 		storedCandidateCount int
 		storedEdgeCount      int
 		probeCount           int
+		deferredCount        int
 		nonProbeCount        int
 		observationCount     int
 		originCount          int
@@ -156,6 +157,16 @@ func TestRecordDiscoveryPersistsEveryCandidateFromLargeSeedDirectory(
 				),
 				(
 					SELECT count(*)
+					FROM discovery_candidates AS candidate
+					WHERE candidate.origin = ANY($2::text[])
+						AND NOT EXISTS (
+							SELECT 1
+							FROM verification_queue AS queued
+							WHERE queued.origin = candidate.origin
+						)
+				),
+				(
+					SELECT count(*)
 					FROM verification_queue
 					WHERE origin = ANY($2::text[])
 						AND mode <> 'probe'
@@ -180,6 +191,7 @@ func TestRecordDiscoveryPersistsEveryCandidateFromLargeSeedDirectory(
 		&storedCandidateCount,
 		&storedEdgeCount,
 		&probeCount,
+		&deferredCount,
 		&nonProbeCount,
 		&observationCount,
 		&originCount,
@@ -208,11 +220,21 @@ func TestRecordDiscoveryPersistsEveryCandidateFromLargeSeedDirectory(
 		)
 	}
 
-	if probeCount != candidateCount {
+	if probeCount != defaultAutomaticCrawlMaxPendingProbes {
 		t.Errorf(
 			"probe count = %d, want %d",
 			probeCount,
-			candidateCount,
+			defaultAutomaticCrawlMaxPendingProbes,
+		)
+	}
+
+	wantDeferredCount := candidateCount -
+		defaultAutomaticCrawlMaxPendingProbes
+	if deferredCount != wantDeferredCount {
+		t.Errorf(
+			"durably deferred candidate count = %d, want %d",
+			deferredCount,
+			wantDeferredCount,
 		)
 	}
 

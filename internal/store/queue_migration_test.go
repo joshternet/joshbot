@@ -12,7 +12,7 @@ import (
 
 func TestQueueMigrationCreatesSchemaInOrder(t *testing.T) {
 	ctx := context.Background()
-	pool := newStoreTestPool(t)
+	pool := newSerialStoreTestPool(t)
 
 	var tableCount int
 	err := pool.QueryRow(
@@ -42,7 +42,7 @@ func TestQueueMigrationCreatesSchemaInOrder(t *testing.T) {
 
 func TestQueueMigrationIsForwardOnly(t *testing.T) {
 	ctx := context.Background()
-	pool := newStoreTestPool(t)
+	pool := newSerialStoreTestPool(t)
 
 	migration, err := os.ReadFile(
 		"migrations/0002_verification_queue.sql",
@@ -137,7 +137,7 @@ func TestQueueSchemaRejectsInvalidStates(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
-			pool := newStoreTestPool(t)
+			pool := newSerialStoreTestPool(t)
 
 			_, err := pool.Exec(
 				ctx,
@@ -172,7 +172,7 @@ func TestQueueSchemaHasClaimIndexAndNoOriginForeignKey(
 	t *testing.T,
 ) {
 	ctx := context.Background()
-	pool := newStoreTestPool(t)
+	pool := newSerialStoreTestPool(t)
 
 	var indexDefinition string
 	err := pool.QueryRow(

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 )
 
 // EffectiveState classifies current authoritative knowledge.
@@ -343,10 +344,20 @@ func validVerificationResult(
 
 	if result.Outcome == declaration.OutcomeValid {
 		return result.Declaration.Version == 1 &&
-			validIdentity(result.Declaration.Identity)
+			validIdentity(result.Declaration.Identity) &&
+			result.FailureCategory == "" &&
+			result.RetryAfter == 0
 	}
 
-	return result.Declaration == (declaration.Declaration{})
+	if result.Declaration != (declaration.Declaration{}) {
+		return false
+	}
+	if result.Outcome != declaration.OutcomeUnavailable {
+		return result.FailureCategory == "" && result.RetryAfter == 0
+	}
+	return result.FailureCategory.Valid() &&
+		result.RetryAfter >= 0 &&
+		result.RetryAfter <= retry.MaxDelay
 }
 
 func validIdentity(identity declaration.Identity) bool {

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 )
 
 const maxQueueWorkerIDLength = 128
@@ -35,6 +36,7 @@ var (
 type QueueConfig struct {
 	LeaseDuration     time.Duration
 	MinOriginInterval time.Duration
+	RetryJitter       retry.Jitter
 }
 
 // Lease is temporary authority to process one queued origin.
@@ -55,9 +57,10 @@ type Lease struct {
 // Normal operation needs SELECT, INSERT, UPDATE, and narrowly scoped DELETE
 // access to verification_queue. Schema migrations are intentionally separate.
 type Queue struct {
-	pool   *pgxpool.Pool
-	config QueueConfig
-	clock  queueClock
+	pool        *pgxpool.Pool
+	config      QueueConfig
+	clock       queueClock
+	retryPolicy retry.Policy
 }
 
 type queueClock interface {
@@ -114,9 +117,10 @@ func newQueue(
 	}
 
 	return &Queue{
-		pool:   pool,
-		config: config,
-		clock:  clock,
+		pool:        pool,
+		config:      config,
+		clock:       clock,
+		retryPolicy: retry.NewPolicy(config.RetryJitter),
 	}, nil
 }
 
@@ -170,6 +174,24 @@ func (q *Queue) Schedule(
 						verification_queue.available_at,
 						EXCLUDED.available_at
 					)
+				END,
+				consecutive_failures = CASE
+					WHEN verification_queue.lease_owner IS NOT NULL
+						AND verification_queue.lease_expires_at > $3
+					THEN verification_queue.consecutive_failures
+					ELSE 0
+				END,
+				last_failure_category = CASE
+					WHEN verification_queue.lease_owner IS NOT NULL
+						AND verification_queue.lease_expires_at > $3
+					THEN verification_queue.last_failure_category
+					ELSE NULL
+				END,
+				next_attempt_at = CASE
+					WHEN verification_queue.lease_owner IS NOT NULL
+						AND verification_queue.lease_expires_at > $3
+					THEN verification_queue.next_attempt_at
+					ELSE NULL
 				END
 		`,
 		source.String(),
@@ -191,6 +213,21 @@ func (q *Queue) Schedule(
 // Rows are selected by available_at and canonical origin. Locked rows are
 // skipped so concurrent consumers can claim different work without waiting.
 // A false found result with a nil error means no work is currently eligible.
+// VerificationPaused reports the durable verification processor pause state.
+func (q *Queue) VerificationPaused(ctx context.Context) (bool, error) {
+	if err := q.validate(ctx); err != nil {
+		return false, err
+	}
+	var paused bool
+	if err := q.pool.QueryRow(
+		ctx,
+		"SELECT verification_paused FROM crawl_control WHERE singleton",
+	).Scan(&paused); err != nil {
+		return false, fmt.Errorf("store: read queue control: %w", err)
+	}
+	return paused, nil
+}
+
 func (q *Queue) Claim(
 	ctx context.Context,
 	workerID string,
@@ -224,6 +261,17 @@ func (q *Queue) Claim(
 		ctx,
 		q.pool,
 		func(tx pgx.Tx) error {
+			var paused bool
+			if err := tx.QueryRow(
+				ctx,
+				"SELECT verification_paused FROM crawl_control WHERE singleton",
+			).Scan(&paused); err != nil {
+				return fmt.Errorf("store: read queue control: %w", err)
+			}
+			if paused {
+				return nil
+			}
+
 			var storedOrigin string
 
 			scanErr := tx.QueryRow(
@@ -233,6 +281,10 @@ func (q *Queue) Claim(
 						SELECT origin
 						FROM verification_queue
 						WHERE available_at <= $1
+							AND (
+								next_attempt_at IS NULL
+								OR next_attempt_at <= $1
+							)
 							AND (
 								lease_expires_at IS NULL
 								OR lease_expires_at <= $1
@@ -423,6 +475,9 @@ func (q *Queue) Reschedule(
 						secs => $6::double precision
 					)
 				),
+				consecutive_failures = 0,
+				last_failure_category = NULL,
+				next_attempt_at = NULL,
 				lease_owner = NULL,
 				lease_expires_at = NULL
 			WHERE origin = $1
@@ -488,6 +543,13 @@ func (q *Queue) CompleteVerification(
 	}
 
 	version, identity := storedDeclarationValues(result)
+	failureCategory := result.FailureCategory
+	if result.Outcome == declaration.OutcomeUnavailable &&
+		failureCategory == retry.CategoryNone {
+		failureCategory = retry.CategoryDeclarationUnavailable
+	}
+	transient := result.Outcome == declaration.OutcomeUnavailable &&
+		failureCategory.Transient()
 
 	err := pgx.BeginFunc(
 		ctx,
@@ -499,9 +561,36 @@ func (q *Queue) CompleteVerification(
 				return clockErr
 			}
 
-			requestedAvailableAt := completedAt.Add(
-				recheckAfter,
-			).UTC()
+			var consecutiveFailures int
+			lockErr := tx.QueryRow(ctx, `
+				SELECT consecutive_failures
+				FROM verification_queue
+				WHERE origin = $1
+					AND lease_owner = $2
+					AND lease_generation = $3
+					AND lease_expires_at > $4
+				FOR UPDATE
+			`, lease.Origin.String(), lease.WorkerID, lease.Generation, completedAt).
+				Scan(&consecutiveFailures)
+			if errors.Is(lockErr, pgx.ErrNoRows) {
+				return ErrLeaseLost
+			}
+			if lockErr != nil {
+				return lockErr
+			}
+
+			requestedAvailableAt := completedAt.Add(recheckAfter).UTC()
+			nextFailures := 0
+			if transient {
+				nextFailures = consecutiveFailures + 1
+				requestedAvailableAt = completedAt.Add(
+					q.retryPolicy.Delay(nextFailures, result.RetryAfter),
+				).UTC()
+				politeAt := lease.ClaimedAt.Add(q.config.MinOriginInterval).UTC()
+				if politeAt.After(requestedAvailableAt) {
+					requestedAvailableAt = politeAt
+				}
+			}
 
 			commandTag, execErr := tx.Exec(
 				ctx,
@@ -534,6 +623,20 @@ func (q *Queue) CompleteVerification(
 											$6::double precision
 									)
 							),
+							consecutive_failures = $10,
+							last_failure_category = $11,
+							next_attempt_at = CASE
+								WHEN $12::boolean
+								THEN GREATEST(
+									$5,
+									queued.last_claimed_at +
+										make_interval(
+											secs =>
+												$6::double precision
+										)
+								)
+								ELSE NULL
+							END,
 							lease_owner = NULL,
 							lease_expires_at = NULL
 						FROM leased_queue
@@ -543,6 +646,7 @@ func (q *Queue) CompleteVerification(
 								leased_queue.mode =
 									'recurring'
 								OR $7 = 'valid'
+								OR $12::boolean
 							)
 						RETURNING queued.origin
 					),
@@ -553,6 +657,7 @@ func (q *Queue) CompleteVerification(
 								leased_queue.origin
 							AND leased_queue.mode = 'probe'
 							AND $7 <> 'valid'
+							AND NOT $12::boolean
 						RETURNING verification_queue.origin
 					),
 					completed_queue AS (
@@ -604,6 +709,9 @@ func (q *Queue) CompleteVerification(
 				outcomeToText[result.Outcome],
 				version,
 				identity,
+				nextFailures,
+				nullableFailureCategory(transient, failureCategory),
+				transient,
 			)
 			if execErr != nil {
 				return execErr
@@ -628,6 +736,13 @@ func (q *Queue) CompleteVerification(
 	}
 
 	return nil
+}
+
+func nullableFailureCategory(transient bool, category retry.Category) any {
+	if !transient {
+		return nil
+	}
+	return string(category)
 }
 
 func (q *Queue) validate(ctx context.Context) error {

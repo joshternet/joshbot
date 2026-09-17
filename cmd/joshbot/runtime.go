@@ -83,6 +83,20 @@ type runtimeOperations struct {
 		*pgxpool.Pool,
 	) (crawlSeedStore, error)
 
+	newCrawlSourceStore func(
+		*pgxpool.Pool,
+	) (crawlSourceStore, error)
+
+	newHeartbeatStore func(
+		*pgxpool.Pool,
+	) (heartbeatStore, error)
+
+	newDiscoveryRunner func(
+		context.Context,
+		*pgxpool.Pool,
+		crawlRuntimeSettings,
+	) (discoveryRunner, error)
+
 	buildRegistry func(
 		[]store.VerifiedOrigin,
 	) ([]publicdata.File, error)
@@ -130,6 +144,9 @@ func newRuntimeOperations(
 		newQueue:            newStoreQueue,
 		newStore:            newVerifiedOriginStore,
 		newDiscoveryStore:   newRuntimeCrawlSeedStore,
+		newCrawlSourceStore: newRuntimeCrawlSourceStore,
+		newHeartbeatStore:   newRuntimeHeartbeatStore,
+		newDiscoveryRunner:  newDiscoveryRuntime,
 		buildRegistry:       buildRegistry,
 		writeRegistry:       writeRegistry,
 		loadPublishSettings: loadPublishSettings,
@@ -442,7 +459,33 @@ func (operations runtimeOperations) worker(
 
 	return operations.withDatabase(
 		ctx,
-		func(connection databaseConnection) error {
+		func(connection databaseConnection) (operationErr error) {
+			var heartbeat *serviceHeartbeat
+			if operations.newHeartbeatStore != nil && ctx.Err() == nil {
+				heartbeatStorage, err := operations.newHeartbeatStore(connection.Pool())
+				if err != nil {
+					return fmt.Errorf("construct worker heartbeat store: %w", err)
+				}
+				heartbeat, err = startServiceHeartbeatWithReporter(
+					ctx, heartbeatStorage, "worker", settings.worker.WorkerID,
+					serviceHeartbeatInterval,
+					heartbeatErrorReporter(operations.logger),
+				)
+				if err != nil {
+					return err
+				}
+				defer func() {
+					state := "stopping"
+					if operationErr != nil && ctx.Err() == nil {
+						state = "failed"
+					}
+					operationErr = errors.Join(
+						operationErr,
+						heartbeat.stop(ctx, state),
+					)
+				}()
+			}
+
 			queue, err := operations.newQueue(
 				connection.Pool(),
 				settings.queue,
@@ -473,6 +516,11 @@ func (operations runtimeOperations) worker(
 					"construct worker: %w",
 					err,
 				)
+			}
+			if observed, ok := runtimeWorker.(interface {
+				SetLifecycleObserver(worker.LifecycleObserver)
+			}); ok && heartbeat != nil {
+				observed.SetLifecycleObserver(heartbeat)
 			}
 
 			operations.logger.Info(

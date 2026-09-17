@@ -9,8 +9,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 	"github.com/joshternet/joshbot/internal/robots"
 )
 
@@ -255,6 +257,56 @@ func TestVerifierClassifiesHTTPOutcomes(t *testing.T) {
 		})
 	}
 }
+
+func TestVerifierPreservesTypedTransientHTTPRetryMetadata(t *testing.T) {
+	source := mustDeclarationOrigin(t, "https://example.com")
+	response := declarationTextResponse(http.StatusTooManyRequests, "later")
+	response.Header.Set("Retry-After", "999999")
+	getter := newScriptedDeclarationGetter(t, declarationGetterStep{response: response})
+
+	got, err := NewVerifier(getter).Verify(context.Background(), source)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if got.FailureCategory != retry.CategoryHTTP429 {
+		t.Errorf("failure category = %q, want %q", got.FailureCategory, retry.CategoryHTTP429)
+	}
+	if got.RetryAfter != retry.MaxDelay {
+		t.Errorf("Retry-After = %v, want %v", got.RetryAfter, retry.MaxDelay)
+	}
+}
+
+func TestVerifierUsesInjectedClockForDateRetryAfter(t *testing.T) {
+	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+	source := mustDeclarationOrigin(t, "https://example.com")
+	response := declarationTextResponse(http.StatusServiceUnavailable, "later")
+	response.Header.Set("Retry-After", now.Add(90*time.Minute).Format(http.TimeFormat))
+	getter := newScriptedDeclarationGetter(t, declarationGetterStep{response: response})
+
+	got, err := NewVerifierWithClock(getter, fixedDeclarationClock{now: now}).
+		Verify(context.Background(), source)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if got.RetryAfter != 90*time.Minute {
+		t.Errorf("Retry-After = %v, want 90m", got.RetryAfter)
+	}
+}
+
+func TestVerifierRejectsMissingInjectedClock(t *testing.T) {
+	source := mustDeclarationOrigin(t, "https://example.com")
+	_, err := NewVerifierWithClock(
+		newScriptedDeclarationGetter(t),
+		nil,
+	).Verify(context.Background(), source)
+	if !errors.Is(err, errDeclarationClockUnavailable) {
+		t.Fatalf("Verify() error = %v, want clock unavailable", err)
+	}
+}
+
+type fixedDeclarationClock struct{ now time.Time }
+
+func (clock fixedDeclarationClock) Now() time.Time { return clock.now }
 
 func TestVerifierHandlesDeclarationBodyFailures(t *testing.T) {
 	source := mustDeclarationOrigin(t, "https://example.com")
@@ -1262,7 +1314,9 @@ func assertDeclarationResult(
 ) {
 	t.Helper()
 
-	if got != want {
+	if got.Outcome != want.Outcome ||
+		got.Origin != want.Origin ||
+		got.Declaration != want.Declaration {
 		t.Errorf(
 			"Verify() result = %#v, want %#v",
 			got,

@@ -6,7 +6,26 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
-No unreleased changes.
+### Added
+
+- Private operational reporting HTTP API with bearer authentication, status,
+  sources, crawls, queue, services, audit history, and metrics.
+- Keyset pagination for list endpoints via `X-JoshBot-Next-Cursor`.
+- Source detail reporting with provenance, queue state, latest crawl, and
+  stored robots observations.
+- Operator control API with independent authentication, processor pause and
+  resume, domain-avoid rules, exact-origin block and allow, and append-only
+  audits.
+- Automatic crawl-source admission with per-run promotion budgets, deferred
+  candidates, and pending-probe backpressure.
+- Shared durable retry policy for transient discovery and verification
+  failures.
+- Service heartbeats and expanded crawl-run telemetry.
+
+### Fixed
+
+- Crawl-source transient retry completion updates streak, failure category,
+  and next-attempt timestamp atomically.
 
 ## [1.0.0] - 2026-09-05
 

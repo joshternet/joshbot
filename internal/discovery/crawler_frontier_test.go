@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 	"github.com/joshternet/joshbot/internal/robots"
 )
 
@@ -1400,8 +1401,9 @@ func TestMultiPageCrawlerRootFailureEndsAttempt(
 	}
 
 	want := CrawlResult{
-		Source:         source,
-		PagesAttempted: 1,
+		Source:          source,
+		PagesAttempted:  1,
+		FailureCategory: retry.CategoryTransport,
 	}
 	if result != want {
 		t.Errorf(
@@ -1491,6 +1493,14 @@ func TestMultiPageCrawlerValidatesConfigurationAndDependencies(
 			RedirectLimit: 1,
 			PageTimeout:   0,
 		},
+		{
+			MaxDepth:                     0,
+			MaxPages:                     1,
+			MaxPageBytes:                 1,
+			RedirectLimit:                1,
+			PageTimeout:                  time.Second,
+			MaxAutomaticPromotionsPerRun: -1,
+		},
 	}
 
 	for index, config := range invalidConfigs {
@@ -1515,6 +1525,7 @@ func TestMultiPageCrawlerValidatesConfigurationAndDependencies(
 		validConfig,
 		nil,
 		timeoutFactory,
+		discardCrawlTelemetry{},
 	); err == nil || crawler != nil {
 		t.Errorf(
 			"newMultiPageCrawler(nil waiter) = %#v, %v",
@@ -1529,6 +1540,7 @@ func TestMultiPageCrawlerValidatesConfigurationAndDependencies(
 		validConfig,
 		waiter,
 		nil,
+		discardCrawlTelemetry{},
 	); err == nil || crawler != nil {
 		t.Errorf(
 			"newMultiPageCrawler(nil timeout factory) = %#v, %v",
@@ -1675,6 +1687,12 @@ func TestCrawlResultContainsOnlyEphemeralStatistics(
 		),
 		"BudgetExhausted": reflect.TypeOf(
 			false,
+		),
+		"FailureCategory": reflect.TypeOf(
+			retry.CategoryNone,
+		),
+		"RetryAfter": reflect.TypeOf(
+			time.Duration(0),
 		),
 	}
 
@@ -1975,6 +1993,7 @@ func mustNewMultiPageCrawler(
 		config,
 		waiter,
 		timeoutFactory,
+		discardCrawlTelemetry{},
 	)
 	if err != nil {
 		t.Fatalf(
