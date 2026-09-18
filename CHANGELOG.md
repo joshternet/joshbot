@@ -30,6 +30,9 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 - Cloudflare Web Bot Auth request-signing primitives using Ed25519 HTTP
   Message Signatures, JWK-thumbprint key identifiers, short-lived signatures,
   and per-request nonces.
+- Dedicated Ed25519 Web Bot Auth signing-key configuration using an external
+  PKCS#8 private-key secret, derived public OKP JWK, RFC 7638 thumbprint key
+  identifier, and crawler-startup identity validation.
 
 ### Fixed
 
@@ -40,6 +43,14 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   removed.
 - Retry migration constraint checks look up definitions in the current
   test schema so parallel schema teardown cannot yield stale OIDs.
+
+### Security
+
+- Web Bot Auth private-key material remains outside normal environment values
+  and public JWK output, and signing identity formatting, structured logging,
+  JSON dumps, and validation errors do not expose private key bytes.
+- Worker and discovery containers receive the dedicated Web Bot Auth key only
+  through an individually mounted secret file.
 
 ## [1.0.0] - 2026-09-05
 

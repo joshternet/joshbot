@@ -85,6 +85,9 @@ Compose file is upgraded.
 ## Network and credential separation
 
 - `worker` and `discovery` receive the internal database network and egress.
+- `worker` and `discovery` receive the dedicated Web Bot Auth Ed25519 private
+  key through an individually mounted secret file.
+- No other service receives the Web Bot Auth private key.
 - `report` receives the internal database network and the private reporting
   network. It receives no general egress network.
 - `control` receives the internal database network and its private control
@@ -224,8 +227,9 @@ cp \
 
 Replace example paths and the publication target.
 
-`deploy/.env` is ignored by Git. Passwords, bearer tokens, and the GitHub token
-do not belong inside it.
+`deploy/.env` is ignored by Git. Passwords, bearer-token values, the Web Bot
+Auth private key itself, and the GitHub token do not belong inside it. The
+environment file contains only the path to the Web Bot Auth private-key file.
 
 Review worker timing:
 
@@ -292,9 +296,10 @@ requests made by both the worker and discovery services. An applicable robots
 `Crawl-delay` can increase that interval but cannot reduce it.
 
 The durable domain avoid list is managed through the operator control API and
-starts with the hosted publishing and social-platform defaults. An environment value adds
-emergency rules to that list; dashboard removal cannot override an environment
-rule. Use a family such as `blogspot.*` to cover regional public suffixes.
+starts with the hosted publishing and social-platform defaults. An environment
+value adds emergency rules to that list; dashboard removal cannot override an
+environment rule. Use a family such as `blogspot.*` to cover regional public
+suffixes.
 
 The root page is depth zero. Redirect hops do not consume additional frontier
 slots. Requests within one source crawl are sequential.
@@ -354,6 +359,40 @@ initial `starting` record. Their applicable states are `running`, `idle`,
 `paused`, `failed`, and `stopping`. Current-origin and machine-readable message
 fields are bounded; heartbeat persistence failures are logged when the failure
 first becomes active.
+
+## Web Bot Auth signing identity
+
+JoshBot uses a dedicated Ed25519 key for Web Bot Auth. Do not reuse another
+Joshternet Ed25519 key.
+
+The configured environment value is the host path to the private-key file:
+
+```dotenv
+JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE=/srv/joshbot/secrets/joshbot_web_bot_auth_private_key
+```
+
+The file contains one unencrypted PKCS#8 PEM `PRIVATE KEY` block. JoshBot
+derives the public Ed25519 key from the private key, generates the public OKP
+JWK, and calculates the RFC 7638 SHA-256 JWK thumbprint used as the Web Bot
+Auth key identifier.
+
+The public JWK contains only:
+
+```json
+{
+  "crv": "Ed25519",
+  "kty": "OKP",
+  "x": "PUBLIC_KEY_BASE64URL"
+}
+```
+
+The private `d` member must never be published, logged, placed in configuration
+output, committed to the repository, or copied into the public JWK.
+
+Worker and discovery startup validate the configured signing identity before
+opening their crawler runtime. Invalid PKCS#8, a non-Ed25519 key, inconsistent
+Ed25519 private/public material, or another invalid signing identity causes
+startup to fail instead of deferring the error until the first web request.
 
 ## Reporting configuration
 
@@ -466,8 +505,8 @@ rejections are append-only audited after rollback.
 
 ## Secrets
 
-Generate six different database passwords and separate reporting and operator
-bearer tokens:
+Generate six different database passwords, separate reporting and operator
+bearer tokens, and a dedicated Ed25519 Web Bot Auth private key:
 
 ```bash
 sudo sh -c '
@@ -498,6 +537,10 @@ sudo sh -c '
   openssl rand -hex 32 \
     > /srv/joshbot/secrets/joshbot_operator_token
 
+  openssl genpkey \
+    -algorithm Ed25519 \
+    -out /srv/joshbot/secrets/joshbot_web_bot_auth_private_key
+
   chmod 0444 \
     /srv/joshbot/secrets/postgres_admin_password \
     /srv/joshbot/secrets/joshbot_migrator_password \
@@ -506,7 +549,8 @@ sudo sh -c '
     /srv/joshbot/secrets/joshbot_operator_password \
     /srv/joshbot/secrets/joshbot_backup_password \
     /srv/joshbot/secrets/joshbot_report_token \
-    /srv/joshbot/secrets/joshbot_operator_token
+    /srv/joshbot/secrets/joshbot_operator_token \
+    /srv/joshbot/secrets/joshbot_web_bot_auth_private_key
 '
 ```
 
@@ -516,14 +560,20 @@ The six database password files are `0444 root:root`.
 The bearer-token files are also `0444 root:root` so the non-root API containers
 can read only their individually mounted secret.
 
+The Web Bot Auth private-key file is `0444 root:root` so the non-root worker and
+discovery containers can read only the individually mounted key file. The
+private key remains protected from unrelated host users by the `0700
+root:root` containing directory.
+
 The files must be readable by the non-root users inside the containers that
 receive them. The `0700 root:root` parent directory prevents unrelated host
 users from traversing the secrets directory.
 
-Docker selectively mounts only the individual secret files required by each service.
+Docker selectively mounts only the individual secret files required by each
+service.
 
-Verify the host-side ownership and modes before starting PostgreSQL or the
-reporting service:
+Verify the host-side ownership and modes before starting PostgreSQL, crawler
+services, or the reporting service:
 
 ```bash
 sudo stat \
@@ -536,7 +586,8 @@ sudo stat \
   /srv/joshbot/secrets/joshbot_operator_password \
   /srv/joshbot/secrets/joshbot_backup_password \
   /srv/joshbot/secrets/joshbot_report_token \
-  /srv/joshbot/secrets/joshbot_operator_token
+  /srv/joshbot/secrets/joshbot_operator_token \
+  /srv/joshbot/secrets/joshbot_web_bot_auth_private_key
 ```
 
 Expected permissions are:
@@ -551,19 +602,21 @@ Expected permissions are:
 444 root:root /srv/joshbot/secrets/joshbot_backup_password
 444 root:root /srv/joshbot/secrets/joshbot_report_token
 444 root:root /srv/joshbot/secrets/joshbot_operator_token
+444 root:root /srv/joshbot/secrets/joshbot_web_bot_auth_private_key
 ```
 
-The GitHub publication token is a ninth, separately provisioned secret. It is
-mounted only into the one-shot publisher and is not generated by the database
-and API credential block above.
+The GitHub publication token is a tenth, separately provisioned secret. It is
+mounted only into the one-shot publisher and is not generated by the database,
+API, and Web Bot Auth credential block above.
 
 Do not:
 
 - commit secret files;
-- put passwords or bearer tokens in `compose.yaml`;
-- put passwords or bearer-token values in `deploy/.env`;
+- reuse another Joshternet key as the Web Bot Auth signing key;
+- put passwords, bearer tokens, or private-key material in `compose.yaml`;
+- put passwords, bearer-token values, or private-key material in `deploy/.env`;
 - put passwords in database URLs;
-- print passwords or bearer tokens in logs.
+- print passwords, bearer tokens, or private-key material in logs.
 
 ## Publication repository
 
@@ -700,7 +753,8 @@ docker compose \
   --wait
 ```
 
-This starts PostgreSQL, applies migrations, and starts verification and
+This starts PostgreSQL, applies migrations, validates the configured Web Bot
+Auth signing identity in the crawler services, and starts verification and
 discovery.
 
 Enable the private reporting runtime separately:
@@ -1024,12 +1078,13 @@ Retention is a separate destructive policy decision and is not automated.
 ./deploy/smoke.sh
 ```
 
-The smoke test creates disposable storage and secrets, initializes PostgreSQL,
-applies migrations, checks role boundaries, creates known state, exports the
-registry, backs up PostgreSQL, restores into a fresh isolated instance,
-verifies restored state, rebuilds byte-identical output, and cleans its
-resources. For the current schema, both the source and restored databases must
-contain twelve migration records.
+The smoke test creates disposable storage and secrets, generates a disposable
+dedicated Ed25519 Web Bot Auth signing key, initializes PostgreSQL, applies
+migrations, checks role and secret-mount boundaries, creates known state,
+exports the registry, backs up PostgreSQL, restores into a fresh isolated
+instance, verifies restored state, rebuilds byte-identical output, and cleans
+its resources. For the current schema, both the source and restored databases
+must contain twelve migration records.
 
 It never restores into the configured production database.
 
@@ -1091,6 +1146,21 @@ Inspect a specific container:
 docker inspect CONTAINER_ID
 ```
 
+The worker and discovery services must each have:
+
+- UID/GID `65532:65532`;
+- a read-only root filesystem;
+- all capabilities dropped;
+- `no-new-privileges`;
+- the database network;
+- the egress network;
+- `/run/secrets/joshbot_app_password`;
+- `/run/secrets/joshbot_web_bot_auth_private_key`;
+- no API bearer tokens;
+- no GitHub token;
+- no Docker socket;
+- no published port.
+
 The publisher must have:
 
 - UID/GID `65532:65532`;
@@ -1117,6 +1187,7 @@ The report service must have:
 - no egress network;
 - `/run/secrets/joshbot_reporter_password`;
 - `/run/secrets/joshbot_report_token`;
+- no Web Bot Auth private key;
 - no GitHub token;
 - no export or backup mount;
 - no Docker socket;
@@ -1124,8 +1195,8 @@ The report service must have:
 
 The control service has the same hardening with only the database and private
 control networks, `/run/secrets/joshbot_operator_password`, and
-`/run/secrets/joshbot_operator_token`. It receives no reporting, application,
-publication, export, backup, or host-port access.
+`/run/secrets/joshbot_operator_token`. It receives no Web Bot Auth private key,
+reporting, application, publication, export, backup, or host-port access.
 
 ## Graceful shutdown
 
@@ -1179,6 +1250,8 @@ Before upgrading:
 3. Record the deployed image.
 4. Review new migrations.
 5. Confirm application compatibility.
+6. Confirm the dedicated Web Bot Auth private-key file exists at the configured
+   path and has the expected ownership and mode.
 
 Build the new image:
 

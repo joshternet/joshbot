@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -182,6 +185,101 @@ func TestSignerDoesNotMutateHeadersWhenNonceGenerationFails(t *testing.T) {
 		if got := request.Header.Get(name); got != value {
 			t.Errorf("%s = %q, want %q", name, got, value)
 		}
+	}
+}
+
+func TestSignerFormattingAndLogsDoNotLeakPrivateKey(t *testing.T) {
+	privateKey := testPrivateKey()
+	keyID := testKeyID()
+
+	signer, err := newSigner(
+		privateKey,
+		keyID,
+		bytes.NewReader(make([]byte, nonceSize)),
+		func() time.Time { return time.Unix(100, 0).UTC() },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secretForms := []string{
+		base64.RawURLEncoding.EncodeToString(
+			privateKey[:ed25519.SeedSize],
+		),
+		base64.StdEncoding.EncodeToString(privateKey),
+		fmt.Sprintf("%x", privateKey),
+	}
+
+	rendered := fmt.Sprintf(
+		"%v %+v %#v %s %q",
+		signer,
+		signer,
+		signer,
+		signer,
+		signer,
+	)
+
+	if !strings.Contains(rendered, keyID) {
+		t.Error("formatted signer omitted public key identifier")
+	}
+
+	if !strings.Contains(rendered, "private_key:<redacted>") {
+		t.Error("formatted signer omitted private-key redaction marker")
+	}
+
+	var logBuffer bytes.Buffer
+	logger := slog.New(
+		slog.NewTextHandler(
+			&logBuffer,
+			nil,
+		),
+	)
+
+	logger.Info(
+		"signer",
+		"web_bot_auth_signer",
+		signer,
+	)
+
+	rendered += logBuffer.String()
+
+	for _, secret := range secretForms {
+		if strings.Contains(rendered, secret) {
+			t.Fatal(
+				"formatted or logged signer leaked private key material",
+			)
+		}
+	}
+
+	marshaled, err := json.Marshal(signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, secret := range secretForms {
+		if strings.Contains(string(marshaled), secret) {
+			t.Fatal(
+				"JSON signer dump leaked private key material",
+			)
+		}
+	}
+}
+
+func TestNilSignerFormattingAndLogging(t *testing.T) {
+	var signer *Signer
+
+	if got := fmt.Sprintf("%v", signer); got != "<nil>" {
+		t.Errorf(
+			"nil formatted signer = %q, want <nil>",
+			got,
+		)
+	}
+
+	if got := signer.LogValue().String(); got != "<nil>" {
+		t.Errorf(
+			"nil signer log value = %q, want <nil>",
+			got,
+		)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -54,6 +55,9 @@ var (
 
 // Signer attaches the Cloudflare Web Bot Auth HTTP Message Signature headers
 // to requests.
+//
+// Private signing material is deliberately unexported. Formatting and
+// structured logging expose only the public key identifier.
 type Signer struct {
 	privateKey ed25519.PrivateKey
 	keyID      string
@@ -187,6 +191,43 @@ func (signer *Signer) Sign(
 	)
 
 	return nil
+}
+
+// LogValue deliberately exposes only public signer metadata.
+func (signer *Signer) LogValue() slog.Value {
+	if signer == nil {
+		return slog.StringValue("<nil>")
+	}
+
+	return slog.GroupValue(
+		slog.String(
+			"key_id",
+			signer.keyID,
+		),
+	)
+}
+
+// Format prevents fmt-based debug and configuration dumps from exposing
+// private signing-key bytes or internal signing dependencies.
+func (signer *Signer) Format(
+	state fmt.State,
+	_ rune,
+) {
+	if signer == nil {
+		_, _ = io.WriteString(
+			state,
+			"<nil>",
+		)
+
+		return
+	}
+
+	_, _ = io.WriteString(
+		state,
+		"webbotauth.Signer{keyid:"+
+			signer.keyID+
+			",private_key:<redacted>}",
+	)
 }
 
 func requestAuthority(

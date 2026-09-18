@@ -69,6 +69,7 @@ export JOSHBOT_OPERATOR_PASSWORD_FILE="$smoke_root/secrets/joshbot_operator_pass
 export JOSHBOT_BACKUP_PASSWORD_FILE="$smoke_root/secrets/joshbot_backup_password"
 export JOSHBOT_REPORT_TOKEN_FILE="$smoke_root/secrets/joshbot_report_token"
 export JOSHBOT_OPERATOR_TOKEN_FILE="$smoke_root/secrets/joshbot_operator_token"
+export JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE="$smoke_root/secrets/joshbot_web_bot_auth_private_key"
 
 export JOSHBOT_WORKER_ID="smoke-worker-$smoke_token"
 export JOSHBOT_LEASE_DURATION="5m"
@@ -454,6 +455,13 @@ create_secret "$JOSHBOT_REPORT_TOKEN_FILE"
 create_secret "$JOSHBOT_OPERATOR_TOKEN_FILE"
 create_secret "$restore_password_file"
 
+openssl genpkey \
+  -algorithm Ed25519 \
+  -out "$JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE"
+
+chmod 0444 \
+  "$JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE"
+
 mkdir -p "$expected_root/nodes/10"
 
 cat >"$expected_root/registry.json" <<'JSON'
@@ -576,7 +584,8 @@ for expected_setting in \
   'JOSHBOT_CRAWL_MAX_PAGES=8' \
   'JOSHBOT_CRAWL_MAX_PAGE_BYTES=65536' \
   'JOSHBOT_CRAWL_REQUEST_DELAY=0s' \
-  'JOSHBOT_CRAWL_REDIRECT_LIMIT=3'; do
+  'JOSHBOT_CRAWL_REDIRECT_LIMIT=3' \
+  'JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE=/run/secrets/joshbot_web_bot_auth_private_key'; do
   if ! grep -Fxq \
     "$expected_setting" \
     <<<"$discovery_environment"; then
@@ -1323,14 +1332,21 @@ assert_equal \
   "$expected_database_network" \
   "PostgreSQL network membership"
 
+expected_crawler_mounts="$(
+  printf '%s\n' \
+    '/run/secrets/joshbot_app_password' \
+    '/run/secrets/joshbot_web_bot_auth_private_key' |
+    sort
+)"
+
 assert_equal \
   "$(inspect_mount_destinations "$worker_container")" \
-  '/run/secrets/joshbot_app_password' \
+  "$expected_crawler_mounts" \
   "worker mount boundary"
 
 assert_equal \
   "$(inspect_mount_destinations "$discovery_container")" \
-  '/run/secrets/joshbot_app_password' \
+  "$expected_crawler_mounts" \
   "discovery mount boundary"
 
 expected_migrate_mounts='/run/secrets/joshbot_migrator_password'

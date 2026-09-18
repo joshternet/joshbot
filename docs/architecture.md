@@ -110,6 +110,22 @@ bounds response bodies, and wraps guarded HTTP access.
 Robots permission answers whether JoshBot may retrieve a URI. It does not
 decide whether an origin is a Joshternet participant.
 
+### `internal/webbotauth`
+
+Owns JoshBot's Web Bot Auth signing primitives and dedicated Ed25519 signing
+identity.
+
+The private key is loaded from an external PKCS#8 PEM secret file by the
+runtime. The package derives the public Ed25519 key, exposes only the public
+OKP JWK members `crv`, `kty`, and `x`, and calculates the SHA-256 JWK
+thumbprint used as the Web Bot Auth key identifier.
+
+Private key material is not exposed through the public JWK, normal formatting,
+structured logging, or validation errors. Worker and discovery startup validate
+a configured identity before beginning crawler work.
+
+The signing identity is independent from other Joshternet cryptographic keys.
+
 ### `internal/declaration`
 
 Retrieves the declaration at:

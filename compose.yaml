@@ -81,6 +81,7 @@ services:
     environment:
       JOSHBOT_DATABASE_URL: postgres://joshbot_app@postgres:5432/joshbot?sslmode=disable
       JOSHBOT_DATABASE_PASSWORD_FILE: /run/secrets/joshbot_app_password
+      JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE: /run/secrets/joshbot_web_bot_auth_private_key
       JOSHBOT_LEASE_DURATION: ${JOSHBOT_LEASE_DURATION:-5m}
       JOSHBOT_MIN_ORIGIN_INTERVAL: ${JOSHBOT_MIN_ORIGIN_INTERVAL:-1m}
       JOSHBOT_CRAWL_REQUEST_DELAY: ${JOSHBOT_CRAWL_REQUEST_DELAY:-1s}
@@ -90,6 +91,7 @@ services:
       JOSHBOT_RECHECK_INTERVAL: ${JOSHBOT_RECHECK_INTERVAL:-24h}
     secrets:
       - joshbot_app_password
+      - joshbot_web_bot_auth_private_key
     networks:
       - database
       - egress
@@ -114,6 +116,7 @@ services:
     environment:
       JOSHBOT_DATABASE_URL: postgres://joshbot_app@postgres:5432/joshbot?sslmode=disable
       JOSHBOT_DATABASE_PASSWORD_FILE: /run/secrets/joshbot_app_password
+      JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE: /run/secrets/joshbot_web_bot_auth_private_key
       JOSHBOT_DISCOVERY_INTERVAL: ${JOSHBOT_DISCOVERY_INTERVAL:-168h}
       JOSHBOT_DISCOVERY_POLL_INTERVAL: ${JOSHBOT_DISCOVERY_POLL_INTERVAL:-30s}
       JOSHBOT_DISCOVERY_PAGE_TIMEOUT: ${JOSHBOT_DISCOVERY_PAGE_TIMEOUT:-30s}
@@ -129,6 +132,7 @@ services:
       JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS: ${JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS:-}
     secrets:
       - joshbot_app_password
+      - joshbot_web_bot_auth_private_key
     networks:
       - database
       - egress
@@ -425,6 +429,8 @@ secrets:
     file: ${JOSHBOT_REPORT_TOKEN_FILE:-./deploy/secrets/report-token-not-configured}
   joshbot_operator_token:
     file: ${JOSHBOT_OPERATOR_TOKEN_FILE:-./deploy/secrets/operator-token-not-configured}
+  joshbot_web_bot_auth_private_key:
+    file: ${JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE:?set JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE}
 
 networks:
   database:
