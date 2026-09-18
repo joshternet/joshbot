@@ -295,6 +295,8 @@ cleanup() {
   compose \
     --profile tools \
     --profile backup \
+    --profile reporting \
+    --profile control \
     down \
     --volumes \
     --remove-orphans \

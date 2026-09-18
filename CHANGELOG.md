@@ -26,6 +26,9 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 - Crawl-source transient retry completion updates streak, failure category,
   and next-attempt timestamp atomically.
+- Deployment smoke cleanup tears down the reporting and control Compose
+  profiles so disposable containers and the smoke application image are
+  removed.
 
 ## [1.0.0] - 2026-09-05
 
