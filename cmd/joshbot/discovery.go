@@ -173,9 +173,10 @@ func newDiscoveryRuntime(
 		)
 	}
 
-	checker := robots.NewChecker(
+	checker := robots.NewCheckerWithRequestDelay(
 		net.DefaultResolver,
 		&net.Dialer{},
+		settings.crawl.RequestDelay,
 	)
 
 	crawler, err := discovery.NewMultiPageCrawlerWithTelemetry(

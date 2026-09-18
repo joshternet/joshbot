@@ -24,6 +24,9 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 - Robots policy parsing for `Crawl-delay` with JoshBot-over-wildcard
   precedence, fractional-second support, repeated directives resolving to the
   largest applicable value, and explicit invalid-value reporting.
+- Shared per-origin request scheduling for robots retrieval, declaration
+  verification, discovery pages, and redirects using the greater of the
+  configured request delay and applicable robots `Crawl-delay`.
 
 ### Fixed
 

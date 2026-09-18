@@ -287,6 +287,10 @@ JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN=100
 JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS=
 ```
 
+`JOSHBOT_CRAWL_REQUEST_DELAY` is the operator minimum for per-origin outbound
+requests made by both the worker and discovery services. An applicable robots
+`Crawl-delay` can increase that interval but cannot reduce it.
+
 The durable domain avoid list is managed through the operator control API and
 starts with the hosted publishing and social-platform defaults. An environment value adds
 emergency rules to that list; dashboard removal cannot override an environment

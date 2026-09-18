@@ -457,6 +457,13 @@ func (operations runtimeOperations) worker(
 		return err
 	}
 
+	requestDelay, err := loadWorkerRequestDelay(
+		operations.getenv,
+	)
+	if err != nil {
+		return err
+	}
+
 	return operations.withDatabase(
 		ctx,
 		func(connection databaseConnection) (operationErr error) {
@@ -497,9 +504,10 @@ func (operations runtimeOperations) worker(
 				)
 			}
 
-			checker := robots.NewChecker(
+			checker := robots.NewCheckerWithRequestDelay(
 				net.DefaultResolver,
 				&net.Dialer{},
+				requestDelay,
 			)
 			verifier := declaration.NewVerifier(
 				checker,
