@@ -23,6 +23,8 @@ func TestDeploymentGuideMakesDatabaseSecretsReadableToContainerUsers(
     /srv/joshbot/secrets/postgres_admin_password \
     /srv/joshbot/secrets/joshbot_migrator_password \
     /srv/joshbot/secrets/joshbot_app_password \
+    /srv/joshbot/secrets/joshbot_reporter_password \
+    /srv/joshbot/secrets/joshbot_operator_password \
     /srv/joshbot/secrets/joshbot_backup_password`
 
 	if !strings.Contains(guide, permissionCommand) {
@@ -34,7 +36,7 @@ func TestDeploymentGuideMakesDatabaseSecretsReadableToContainerUsers(
 	normalizedGuide := strings.Join(strings.Fields(guide), " ")
 	requiredExplanation := []string{
 		"The containing `/srv/joshbot/secrets` directory remains `0700 root:root`.",
-		"The four database password files are `0444 root:root`.",
+		"The six database password files are `0444 root:root`.",
 		"The files must be readable by the non-root users inside the containers",
 		"Docker selectively mounts only the individual secret files required by each service.",
 	}

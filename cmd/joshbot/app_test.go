@@ -43,6 +43,15 @@ func TestRunHelp(t *testing.T) {
 				)
 			}
 
+			if !strings.Contains(
+				stdout.String(),
+				"discover   Crawl eligible private discovery sources",
+			) {
+				t.Error(
+					"discover help does not describe all eligible source classes",
+				)
+			}
+
 			if stderr.Len() != 0 {
 				t.Errorf(
 					"stderr = %q, want empty",
@@ -54,8 +63,14 @@ func TestRunHelp(t *testing.T) {
 				"health",
 				"migrate",
 				"schedule",
+				"seed",
+				"source",
 				"worker",
+				"discover",
+				"report",
+				"control",
 				"export",
+				"publish",
 				"help",
 			} {
 				if !strings.Contains(
@@ -114,6 +129,14 @@ func TestRunRejectsInvalidUsage(t *testing.T) {
 		{
 			name: "worker arguments",
 			args: []string{"worker", "extra"},
+		},
+		{
+			name: "report arguments",
+			args: []string{"report", "extra"},
+		},
+		{
+			name: "control arguments",
+			args: []string{"control", "extra"},
 		},
 		{
 			name: "export missing arguments",
@@ -259,6 +282,16 @@ func TestRunDispatchesCommands(t *testing.T) {
 			wantCall: "worker",
 		},
 		{
+			name:     "report",
+			args:     []string{"report"},
+			wantCall: "report",
+		},
+		{
+			name:     "control",
+			args:     []string{"control"},
+			wantCall: "control",
+		},
+		{
 			name: "export",
 			args: []string{
 				"export",
@@ -370,6 +403,16 @@ func TestRunReturnsOperationFailures(t *testing.T) {
 			operation: "worker",
 		},
 		{
+			name:      "report",
+			args:      []string{"report"},
+			operation: "report",
+		},
+		{
+			name:      "control",
+			args:      []string{"control"},
+			operation: "control",
+		},
+		{
 			name: "export",
 			args: []string{
 				"export",
@@ -423,6 +466,26 @@ func TestRunReturnsOperationFailures(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestRunRejectsUnavailableControlOperation(t *testing.T) {
+	base := &fakeCommandOperations{}
+	operations := struct{ commandOperations }{commandOperations: base}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runWithOperations(
+		context.Background(),
+		[]string{"control"},
+		&stdout,
+		&stderr,
+		operations,
+	)
+	if code != exitFailure {
+		t.Errorf("exit code = %d, want %d", code, exitFailure)
+	}
+	if !strings.Contains(stderr.String(), errOperationsUnavailable.Error()) {
+		t.Errorf("stderr = %q", stderr.String())
 	}
 }
 
@@ -518,6 +581,18 @@ func (operations *fakeCommandOperations) worker(
 	context.Context,
 ) error {
 	return operations.result("worker")
+}
+
+func (operations *fakeCommandOperations) report(
+	context.Context,
+) error {
+	return operations.result("report")
+}
+
+func (operations *fakeCommandOperations) control(
+	context.Context,
+) error {
+	return operations.result("control")
 }
 
 func (operations *fakeCommandOperations) export(

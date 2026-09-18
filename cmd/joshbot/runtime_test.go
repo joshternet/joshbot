@@ -822,6 +822,54 @@ func TestRuntimeWorker(t *testing.T) {
 	})
 }
 
+func TestRuntimeWorkerHeartbeatFailures(t *testing.T) {
+	factoryFailure := errors.New("heartbeat factory failure")
+	operations, _ := newTestRuntimeOperations(t)
+	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+		return nil, factoryFailure
+	}
+	if err := operations.worker(context.Background()); !errors.Is(err, factoryFailure) {
+		t.Errorf("worker factory error = %v", err)
+	}
+
+	writeFailure := errors.New("heartbeat write failure")
+	operations, _ = newTestRuntimeOperations(t)
+	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+		return &fakeHeartbeatStore{writeErr: writeFailure}, nil
+	}
+	if err := operations.worker(context.Background()); !errors.Is(err, writeFailure) {
+		t.Errorf("worker heartbeat error = %v", err)
+	}
+
+	primaryFailure := errors.New("worker primary failure")
+	finalFailure := errors.New("worker final heartbeat failure")
+	operations, state := newTestRuntimeOperations(t)
+	state.runner.err = primaryFailure
+	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+		return &fakeHeartbeatStore{writeErrors: []error{nil, finalFailure}}, nil
+	}
+	err := operations.worker(context.Background())
+	if !errors.Is(err, primaryFailure) || !errors.Is(err, finalFailure) {
+		t.Errorf("combined worker error = %v", err)
+	}
+}
+
+func TestRuntimeWorkerRecordsHeartbeatLifecycle(t *testing.T) {
+	operations, _ := newTestRuntimeOperations(t)
+	storage := &fakeHeartbeatStore{}
+	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+		return storage, nil
+	}
+	if err := operations.worker(context.Background()); err != nil {
+		t.Fatalf("worker() error = %v", err)
+	}
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+	if len(storage.writes) != 2 || storage.writes[0].State != "starting" || storage.writes[1].State != "stopping" {
+		t.Errorf("worker heartbeat lifecycle = %#v", storage.writes)
+	}
+}
+
 func TestRuntimeProductionAdapters(t *testing.T) {
 	config, err := pgxpool.ParseConfig(
 		"postgres://localhost:1/joshbot" +
@@ -1020,6 +1068,13 @@ func newTestRuntimeOperations(
 		) verifiedOriginSource {
 			return state.store
 		},
+		newDiscoveryRunner: func(
+			context.Context,
+			*pgxpool.Pool,
+			crawlRuntimeSettings,
+		) (discoveryRunner, error) {
+			return &fakeDiscoveryRunner{}, nil
+		},
 		buildRegistry: func(
 			[]store.VerifiedOrigin,
 		) ([]publicdata.File, error) {
@@ -1149,11 +1204,16 @@ func (source *fakeVerifiedOriginSource) VerifiedOrigins(
 }
 
 type fakeWorkerRunner struct {
-	err error
+	err      error
+	observer worker.LifecycleObserver
 }
 
 func (runner *fakeWorkerRunner) Run(
 	context.Context,
 ) error {
 	return runner.err
+}
+
+func (runner *fakeWorkerRunner) SetLifecycleObserver(observer worker.LifecycleObserver) {
+	runner.observer = observer
 }

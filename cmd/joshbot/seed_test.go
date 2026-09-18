@@ -687,6 +687,12 @@ func (
 
 func (
 	operations *fakeSeedCommandOperations,
+) report(context.Context) error {
+	return nil
+}
+
+func (
+	operations *fakeSeedCommandOperations,
 ) export(
 	context.Context,
 	string,

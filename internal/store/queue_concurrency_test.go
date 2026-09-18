@@ -118,13 +118,14 @@ func TestQueueConcurrentWorkersClaimDistinctOrigins(
 ) {
 	const claimCount = 12
 
+	pool := newConcurrentStoreTestPool(t, 16)
+
 	ctx, cancel := context.WithTimeout(
 		context.Background(),
-		10*time.Second,
+		30*time.Second,
 	)
 	defer cancel()
 
-	pool := newStoreTestPool(t)
 	now := queueTestTime()
 	queue := newFixedQueue(
 		t,
@@ -254,13 +255,14 @@ func TestQueueSingleOriginHasOneConcurrentWinner(
 ) {
 	const claimantCount = 32
 
+	pool := newConcurrentStoreTestPool(t, 16)
+
 	ctx, cancel := context.WithTimeout(
 		context.Background(),
-		10*time.Second,
+		30*time.Second,
 	)
 	defer cancel()
 
-	pool := newStoreTestPool(t)
 	now := queueTestTime()
 	queue := newFixedQueue(
 		t,

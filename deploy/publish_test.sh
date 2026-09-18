@@ -39,6 +39,8 @@ export JOSHBOT_BACKUP_DIR="$backup_directory"
 export JOSHBOT_POSTGRES_ADMIN_PASSWORD_FILE="$secret_directory/postgres_admin_password"
 export JOSHBOT_MIGRATOR_PASSWORD_FILE="$secret_directory/joshbot_migrator_password"
 export JOSHBOT_APP_PASSWORD_FILE="$secret_directory/joshbot_app_password"
+export JOSHBOT_REPORTER_PASSWORD_FILE="$secret_directory/joshbot_reporter_password"
+export JOSHBOT_OPERATOR_PASSWORD_FILE="$secret_directory/joshbot_operator_password"
 export JOSHBOT_BACKUP_PASSWORD_FILE="$secret_directory/joshbot_backup_password"
 export JOSHBOT_GITHUB_TOKEN_FILE="$secret_directory/joshbot_github_token"
 
@@ -473,6 +475,8 @@ chmod 0777 \
 create_secret "$JOSHBOT_POSTGRES_ADMIN_PASSWORD_FILE"
 create_secret "$JOSHBOT_MIGRATOR_PASSWORD_FILE"
 create_secret "$JOSHBOT_APP_PASSWORD_FILE"
+create_secret "$JOSHBOT_REPORTER_PASSWORD_FILE"
+create_secret "$JOSHBOT_OPERATOR_PASSWORD_FILE"
 create_secret "$JOSHBOT_BACKUP_PASSWORD_FILE"
 
 printf '%s\n' \

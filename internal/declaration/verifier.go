@@ -5,8 +5,11 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"time"
 
+	"github.com/joshternet/joshbot/internal/netguard"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 	"github.com/joshternet/joshbot/internal/robots"
 )
 
@@ -23,6 +26,9 @@ var (
 	)
 	errDeclarationGetterUnavailable = errors.New(
 		"declaration: getter unavailable",
+	)
+	errDeclarationClockUnavailable = errors.New(
+		"declaration: clock unavailable",
 	)
 	errInvalidDeclarationContext = errors.New(
 		"declaration: invalid context",
@@ -72,9 +78,11 @@ const (
 // Declaration is populated only when Outcome is OutcomeValid. Raw response
 // bytes and unknown JSON members are not retained.
 type Result struct {
-	Outcome     Outcome
-	Origin      origin.Origin
-	Declaration Declaration
+	Outcome         Outcome
+	Origin          origin.Origin
+	Declaration     Declaration
+	FailureCategory retry.Category
+	RetryAfter      time.Duration
 }
 
 // Getter is the robots-aware guarded retrieval behavior required by Verifier.
@@ -88,6 +96,7 @@ type Getter interface {
 // Verifier retrieves and validates canonical Joshternet declarations.
 type Verifier struct {
 	getter Getter
+	clock  retry.Clock
 }
 
 var _ Getter = (*robots.Checker)(nil)
@@ -96,8 +105,15 @@ var _ Getter = (*robots.Checker)(nil)
 //
 // getter should be a robots.Checker in production.
 func NewVerifier(getter Getter) *Verifier {
+	return NewVerifierWithClock(getter, retry.SystemClock{})
+}
+
+// NewVerifierWithClock constructs a verifier with deterministic Retry-After
+// date parsing.
+func NewVerifierWithClock(getter Getter, clock retry.Clock) *Verifier {
 	return &Verifier{
 		getter: getter,
+		clock:  clock,
 	}
 }
 
@@ -128,6 +144,9 @@ func (v *Verifier) Verify(
 	if v.getter == nil {
 		return Result{}, errDeclarationGetterUnavailable
 	}
+	if v.clock == nil {
+		return Result{}, errDeclarationClockUnavailable
+	}
 
 	current, _ := url.Parse(
 		source.String() + WellKnownPath,
@@ -150,9 +169,17 @@ func (v *Verifier) Verify(
 				}, nil
 			}
 
+			category := retry.CategoryRobotsTemporary
+			if !errors.Is(err, robots.ErrTemporary) {
+				category = netguard.FailureCategory(err)
+				if category == retry.CategoryUnsupportedOrigin {
+					category = retry.CategoryTransport
+				}
+			}
 			return Result{
-				Outcome: OutcomeUnavailable,
-				Origin:  source,
+				Outcome:         OutcomeUnavailable,
+				Origin:          source,
+				FailureCategory: category,
 			}, nil
 		}
 
@@ -160,8 +187,9 @@ func (v *Verifier) Verify(
 			closeDeclarationResponse(response)
 
 			return Result{
-				Outcome: OutcomeUnavailable,
-				Origin:  source,
+				Outcome:         OutcomeUnavailable,
+				Origin:          source,
+				FailureCategory: retry.CategoryTransport,
 			}, nil
 		}
 
@@ -172,8 +200,9 @@ func (v *Verifier) Verify(
 
 			if redirects >= maxDeclarationRedirects {
 				return Result{
-					Outcome: OutcomeUnavailable,
-					Origin:  source,
+					Outcome:         OutcomeUnavailable,
+					Origin:          source,
+					FailureCategory: retry.CategoryUnsupportedOrigin,
 				}, nil
 			}
 
@@ -194,8 +223,9 @@ func (v *Verifier) Verify(
 				}
 
 				return Result{
-					Outcome: OutcomeUnavailable,
-					Origin:  source,
+					Outcome:         OutcomeUnavailable,
+					Origin:          source,
+					FailureCategory: retry.CategoryMalformedOrigin,
 				}, nil
 			}
 
@@ -228,8 +258,9 @@ func (v *Verifier) Verify(
 				}
 
 				return Result{
-					Outcome: OutcomeUnavailable,
-					Origin:  source,
+					Outcome:         OutcomeUnavailable,
+					Origin:          source,
+					FailureCategory: retry.CategoryTransport,
 				}, nil
 			}
 
@@ -263,11 +294,20 @@ func (v *Verifier) Verify(
 			}, nil
 
 		default:
+			category, transient := retry.HTTPStatusCategory(status)
 			_ = response.Body.Close()
 
+			if !transient {
+				category = retry.CategoryUnsupportedOrigin
+			}
 			return Result{
-				Outcome: OutcomeUnavailable,
-				Origin:  source,
+				Outcome:         OutcomeUnavailable,
+				Origin:          source,
+				FailureCategory: category,
+				RetryAfter: retry.ParseRetryAfter(
+					response.Header.Get("Retry-After"),
+					v.clock.Now().UTC(),
+				),
 			}, nil
 		}
 	}

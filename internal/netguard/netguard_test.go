@@ -3,12 +3,14 @@ package netguard
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"slices"
 	"testing"
 
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 )
 
 func TestValidateAddrRejectsUnsafe(t *testing.T) {
@@ -914,5 +916,25 @@ func TestDialContextStopsAfterCancellation(t *testing.T) {
 
 	if len(dialer.calls) != 1 {
 		t.Errorf("dial calls = %d, want 1", len(dialer.calls))
+	}
+}
+
+func TestFailureCategoryUsesTypedNetguardErrors(t *testing.T) {
+	tests := []struct {
+		err  error
+		want retry.Category
+	}{
+		{err: errResolutionFailed, want: retry.CategoryDNS},
+		{err: errNoAddresses, want: retry.CategoryDNS},
+		{err: errUnsafeAddress, want: retry.CategoryUnsafeAddress},
+		{err: errDialFailed, want: retry.CategoryTransport},
+		{err: context.DeadlineExceeded, want: retry.CategoryTimeout},
+		{err: errInvalidOrigin, want: retry.CategoryMalformedOrigin},
+		{err: errors.New("unknown"), want: retry.CategoryUnsupportedOrigin},
+	}
+	for _, test := range tests {
+		if got := FailureCategory(fmt.Errorf("wrapped: %w", test.err)); got != test.want {
+			t.Errorf("FailureCategory(%v) = %q, want %q", test.err, got, test.want)
+		}
 	}
 }

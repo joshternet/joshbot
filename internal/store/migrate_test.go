@@ -239,10 +239,15 @@ func TestMigrateSerializesConcurrentInvocations(
 		t.Fatalf("count migration records: %v", err)
 	}
 
-	if count != 4 {
+	migrations, err := loadMigrations(embeddedMigrations)
+	if err != nil {
+		t.Fatalf("load embedded migrations: %v", err)
+	}
+	if count != len(migrations) {
 		t.Errorf(
-			"migration record count = %d, want 4",
+			"migration record count = %d, want %d",
 			count,
+			len(migrations),
 		)
 	}
 }
@@ -863,33 +868,7 @@ func newEmptyStoreTestPool(
 		)
 	}
 
-	adminConfig, err := pgxpool.ParseConfig(
-		databaseURL,
-	)
-	if err != nil {
-		t.Fatal(
-			"invalid test database configuration",
-		)
-	}
-
-	adminPool, err := pgxpool.NewWithConfig(
-		context.Background(),
-		adminConfig,
-	)
-	if err != nil {
-		t.Fatal(
-			"cannot create test database pool",
-		)
-	}
-	t.Cleanup(adminPool.Close)
-
-	if err := adminPool.Ping(
-		context.Background(),
-	); err != nil {
-		t.Fatal(
-			"cannot reach configured test database",
-		)
-	}
+	adminPool := sharedStoreAdminPool(t, databaseURL)
 
 	schema := fmt.Sprintf(
 		"store_empty_test_%d_%d",
@@ -899,7 +878,7 @@ func newEmptyStoreTestPool(
 			1,
 		),
 	)
-	_, err = adminPool.Exec(
+	_, err := adminPool.Exec(
 		context.Background(),
 		"CREATE SCHEMA "+
 			pgx.Identifier{schema}.Sanitize(),
@@ -910,30 +889,7 @@ func newEmptyStoreTestPool(
 			err,
 		)
 	}
-
-	testConfig, err := pgxpool.ParseConfig(
-		databaseURL,
-	)
-	if err != nil {
-		t.Fatal(
-			"invalid test database configuration",
-		)
-	}
-	testConfig.ConnConfig.RuntimeParams["search_path"] = schema
-
-	testPool, err := pgxpool.NewWithConfig(
-		context.Background(),
-		testConfig,
-	)
-	if err != nil {
-		t.Fatal(
-			"cannot create isolated empty database pool",
-		)
-	}
-
 	t.Cleanup(func() {
-		testPool.Close()
-
 		_, cleanupError := adminPool.Exec(
 			context.Background(),
 			"DROP SCHEMA "+
@@ -947,6 +903,22 @@ func newEmptyStoreTestPool(
 			)
 		}
 	})
+
+	testConfig := adminPool.Config()
+	testConfig.ConnConfig.RuntimeParams["search_path"] = schema
+	testConfig.MaxConns = storeTestMaxConnections
+	testConfig.MinConns = 0
+
+	testPool, err := pgxpool.NewWithConfig(
+		context.Background(),
+		testConfig,
+	)
+	if err != nil {
+		t.Fatal(
+			"cannot create isolated empty database pool",
+		)
+	}
+	t.Cleanup(testPool.Close)
 
 	return testPool
 }

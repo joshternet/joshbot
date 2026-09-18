@@ -706,7 +706,7 @@ func TestPostgreSQLIntegrationConfigured(t *testing.T) {
 }
 
 func TestInitialMigrationIsForwardOnly(t *testing.T) {
-	pool := newStoreTestPool(t)
+	pool := newSerialStoreTestPool(t)
 
 	migration, err := os.ReadFile(
 		"migrations/0001_initial.sql",
@@ -731,7 +731,7 @@ func TestStoreSchemaPersistsOnlySemanticColumns(
 	t *testing.T,
 ) {
 	ctx := context.Background()
-	pool := newStoreTestPool(t)
+	pool := newSerialStoreTestPool(t)
 
 	tests := []struct {
 		table string
@@ -815,7 +815,7 @@ func TestStoreSchemaHasRequiredObservationIndexes(
 	t *testing.T,
 ) {
 	ctx := context.Background()
-	pool := newStoreTestPool(t)
+	pool := newSerialStoreTestPool(t)
 
 	rows, err := pool.Query(
 		ctx,

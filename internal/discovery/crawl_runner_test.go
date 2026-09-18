@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 )
 
 func TestCrawlRunnerProcessesOneSource(t *testing.T) {
@@ -100,6 +101,173 @@ func TestCrawlRunnerProcessesOneSource(t *testing.T) {
 			crawler.sources,
 			source,
 		)
+	}
+}
+
+func TestCrawlRunnerCompletesDurableRetryState(t *testing.T) {
+	source := mustDiscoveryOrigin(t, "https://example.com")
+	crawlError := errors.New("crawl failed")
+	for _, test := range []struct {
+		name          string
+		crawlError    error
+		completeError error
+		wantCategory  retry.Category
+	}{
+		{name: "success", wantCategory: retry.CategoryNone},
+		{name: "crawl failure", crawlError: crawlError, wantCategory: retry.CategoryProcessor},
+		{name: "completion failure", completeError: errors.New("complete failed"), wantCategory: retry.CategoryNone},
+		{
+			name:          "failed crawl completion failure",
+			crawlError:    crawlError,
+			completeError: errors.New("complete failed"),
+			wantCategory:  retry.CategoryProcessor,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := &fakeCrawlSourceStore{claims: []fakeCrawlSourceClaim{{
+				source: source, found: true,
+			}}}
+			store := &retryingCrawlSourceStore{
+				fakeCrawlSourceStore: base,
+				completeError:        test.completeError,
+			}
+			crawler := &fakeSourceCrawler{results: []fakeSourceCrawlResult{{
+				result: CrawlResult{Source: source}, err: test.crawlError,
+			}}}
+			runner, err := NewCrawlRunner(store, crawler, testCrawlRunnerConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = runner.RunOnce(context.Background())
+			if test.crawlError == nil && test.completeError == nil && err != nil {
+				t.Fatalf("RunOnce() error = %v", err)
+			}
+			if (test.crawlError != nil || test.completeError != nil) && err == nil {
+				t.Fatal("RunOnce() error = nil")
+			}
+			if len(store.categories) != 1 || store.categories[0] != test.wantCategory {
+				t.Fatalf("completion categories = %#v", store.categories)
+			}
+		})
+	}
+}
+
+func TestCrawlRunnerPersistsTypedCrawlResultFailure(t *testing.T) {
+	source := mustDiscoveryOrigin(t, "https://example.com")
+	base := &fakeCrawlSourceStore{claims: []fakeCrawlSourceClaim{{
+		source: source, found: true,
+	}}}
+	store := &retryingCrawlSourceStore{fakeCrawlSourceStore: base}
+	crawler := &fakeSourceCrawler{results: []fakeSourceCrawlResult{{
+		result: CrawlResult{
+			Source:          source,
+			PagesAttempted:  1,
+			FailureCategory: retry.CategoryHTTP429,
+			RetryAfter:      time.Hour,
+		},
+	}}}
+	runner, err := NewCrawlRunner(store, crawler, testCrawlRunnerConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.categories) != 1 ||
+		store.categories[0] != retry.CategoryHTTP429 ||
+		len(store.retryAfter) != 1 ||
+		store.retryAfter[0] != time.Hour {
+		t.Fatalf("completion = %#v, %#v", store.categories, store.retryAfter)
+	}
+}
+
+func TestCrawlRunnerDoesNotPersistTransientFailureAfterPartialSuccess(t *testing.T) {
+	source := mustDiscoveryOrigin(t, "https://example.com")
+	base := &fakeCrawlSourceStore{claims: []fakeCrawlSourceClaim{{
+		source: source, found: true,
+	}}}
+	store := &retryingCrawlSourceStore{fakeCrawlSourceStore: base}
+	crawler := &fakeSourceCrawler{results: []fakeSourceCrawlResult{{
+		result: CrawlResult{
+			Source:          source,
+			PagesAttempted:  2,
+			PagesParsed:     1,
+			FailureCategory: retry.CategoryHTTP5xx,
+		},
+		err: errors.New("late persistence failure"),
+	}}}
+	runner, err := NewCrawlRunner(store, crawler, testCrawlRunnerConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce() error = nil")
+	}
+	if len(store.categories) != 1 || store.categories[0] != retry.CategoryNone {
+		t.Fatalf("completion categories = %#v", store.categories)
+	}
+}
+
+func TestCrawlRunnerSupportsLegacyCompletionStore(t *testing.T) {
+	source := mustDiscoveryOrigin(t, "https://example.com")
+	base := &fakeCrawlSourceStore{claims: []fakeCrawlSourceClaim{{
+		source: source, found: true,
+	}}}
+	store := &legacyCompletionStore{fakeCrawlSourceStore: base}
+	runner, err := NewCrawlRunner(store, &fakeSourceCrawler{}, testCrawlRunnerConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.categories) != 1 || store.categories[0] != retry.CategoryNone {
+		t.Fatalf("completion categories = %#v", store.categories)
+	}
+}
+
+func TestCrawlRunnerContinuesAfterBackedOffFailure(t *testing.T) {
+	stopError := errors.New("stop")
+	waiter := &sequenceCrawlRunnerWaiter{errors: []error{nil, stopError}}
+	runner, err := newCrawlRunner(
+		&fakeCrawlSourceStore{claims: []fakeCrawlSourceClaim{{
+			err: errors.New("temporary store failure"),
+		}}},
+		&fakeSourceCrawler{},
+		testCrawlRunnerConfig(),
+		waiter,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background()); !errors.Is(err, stopError) {
+		t.Fatalf("Run() error = %v", err)
+	}
+	want := []time.Duration{5 * time.Minute, testCrawlRunnerConfig().PollInterval}
+	if !reflect.DeepEqual(waiter.durations, want) {
+		t.Fatalf("wait durations = %v, want %v", waiter.durations, want)
+	}
+}
+
+func TestCrawlRunnerRunReturnsParentCancellationFromFailure(t *testing.T) {
+	source := mustDiscoveryOrigin(t, "https://example.com")
+	ctx, cancel := context.WithCancel(context.Background())
+	crawler := sourceCrawlerFunc(func(context.Context, origin.Origin) (CrawlResult, error) {
+		cancel()
+		return CrawlResult{}, errors.New("canceled")
+	})
+	runner, err := NewCrawlRunner(
+		&fakeCrawlSourceStore{claims: []fakeCrawlSourceClaim{{
+			source: source, found: true,
+		}}},
+		crawler,
+		testCrawlRunnerConfig(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want canceled", err)
 	}
 }
 
@@ -425,7 +593,9 @@ func TestCrawlRunnerRunReturnsRunOnceFailure(
 		"test claim failure",
 	)
 
-	runner, err := NewCrawlRunner(
+	stopErr := errors.New("stop")
+	waiter := &fakeCrawlRunnerWaiter{err: stopErr}
+	runner, err := newCrawlRunner(
 		&fakeCrawlSourceStore{
 			claims: []fakeCrawlSourceClaim{
 				{err: claimErr},
@@ -433,6 +603,7 @@ func TestCrawlRunnerRunReturnsRunOnceFailure(
 		},
 		&fakeSourceCrawler{},
 		testCrawlRunnerConfig(),
+		waiter,
 	)
 	if err != nil {
 		t.Fatalf(
@@ -442,12 +613,15 @@ func TestCrawlRunnerRunReturnsRunOnceFailure(
 	}
 
 	err = runner.Run(context.Background())
-	if !errors.Is(err, claimErr) {
+	if !errors.Is(err, stopErr) {
 		t.Errorf(
 			"Run() error = %v, want %v",
 			err,
-			claimErr,
+			stopErr,
 		)
+	}
+	if !reflect.DeepEqual(waiter.durations, []time.Duration{5 * time.Minute}) {
+		t.Errorf("retry durations = %v, want [5m]", waiter.durations)
 	}
 }
 
@@ -733,9 +907,136 @@ type fakeCrawlSourceClaim struct {
 	err    error
 }
 
+type recordingLifecycleObserver struct {
+	states  []string
+	sources []origin.Origin
+}
+
+func (observer *recordingLifecycleObserver) Observe(
+	state string,
+	source origin.Origin,
+	_ string,
+) {
+	observer.states = append(observer.states, state)
+	observer.sources = append(observer.sources, source)
+}
+
+func TestCrawlRunnerObservesClaimedLifecycle(t *testing.T) {
+	source := mustDiscoveryOrigin(t, "https://example.com")
+	store := &fakeCrawlSourceStore{claims: []fakeCrawlSourceClaim{{
+		source: source, found: true,
+	}}}
+	runner, err := NewCrawlRunner(store, &fakeSourceCrawler{}, CrawlRunnerConfig{
+		DiscoveryInterval: time.Minute,
+		PollInterval:      time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingLifecycleObserver{}
+	runner.SetLifecycleObserver(observer)
+	report, err := runner.RunOnce(context.Background())
+	if err != nil || !report.Worked {
+		t.Fatalf("RunOnce() = %#v, %v", report, err)
+	}
+	if len(observer.states) != 2 || observer.states[0] != "running" ||
+		observer.states[1] != "idle" ||
+		observer.sources[0] != source {
+		t.Errorf("observations = %#v %#v", observer.states, observer.sources)
+	}
+	var missing *CrawlRunner
+	missing.SetLifecycleObserver(observer)
+}
+
+type pausableCrawlSourceStore struct {
+	*fakeCrawlSourceStore
+	paused bool
+	err    error
+}
+
+func (store *pausableCrawlSourceStore) DiscoveryPaused(context.Context) (bool, error) {
+	return store.paused, store.err
+}
+
+func TestCrawlRunnerObservesPausedAndControlFailure(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		paused    bool
+		err       error
+		wantState string
+		wantErr   bool
+	}{
+		{name: "paused", paused: true, wantState: "paused"},
+		{name: "idle", wantState: "idle"},
+		{name: "control failure", err: errors.New("control unavailable"), wantState: "failed", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			storage := &pausableCrawlSourceStore{
+				fakeCrawlSourceStore: &fakeCrawlSourceStore{},
+				paused:               test.paused,
+				err:                  test.err,
+			}
+			runner, err := NewCrawlRunner(storage, &fakeSourceCrawler{}, testCrawlRunnerConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			observer := &recordingLifecycleObserver{}
+			runner.SetLifecycleObserver(observer)
+			_, runErr := runner.RunOnce(context.Background())
+			if (runErr != nil) != test.wantErr {
+				t.Errorf("RunOnce() error = %v, wantErr %v", runErr, test.wantErr)
+			}
+			if len(observer.states) != 1 || observer.states[0] != test.wantState {
+				t.Errorf("states = %#v, want %q", observer.states, test.wantState)
+			}
+		})
+	}
+}
+
 type fakeCrawlSourceStore struct {
 	claims    []fakeCrawlSourceClaim
 	intervals []time.Duration
+}
+
+type retryingCrawlSourceStore struct {
+	*fakeCrawlSourceStore
+	completeError error
+	categories    []retry.Category
+	retryAfter    []time.Duration
+}
+
+type legacyCompletionStore struct {
+	*fakeCrawlSourceStore
+	categories []retry.Category
+}
+
+func (store *legacyCompletionStore) CompleteDiscoverySource(
+	_ context.Context,
+	_ origin.Origin,
+	category retry.Category,
+) error {
+	store.categories = append(store.categories, category)
+	return nil
+}
+
+func (store *retryingCrawlSourceStore) CompleteDiscoverySource(
+	_ context.Context,
+	_ origin.Origin,
+	category retry.Category,
+) error {
+	store.categories = append(store.categories, category)
+	return store.completeError
+}
+
+func (store *retryingCrawlSourceStore) CompleteDiscoverySourceRetry(
+	_ context.Context,
+	_ origin.Origin,
+	category retry.Category,
+	retryAfter time.Duration,
+) error {
+	store.categories = append(store.categories, category)
+	store.retryAfter = append(store.retryAfter, retryAfter)
+	return store.completeError
 }
 
 func (store *fakeCrawlSourceStore) ClaimDiscoverySource(
@@ -803,6 +1104,21 @@ func (function sourceCrawlerFunc) Crawl(
 type fakeCrawlRunnerWaiter struct {
 	durations []time.Duration
 	err       error
+}
+
+type sequenceCrawlRunnerWaiter struct {
+	durations []time.Duration
+	errors    []error
+}
+
+func (waiter *sequenceCrawlRunnerWaiter) Wait(
+	_ context.Context,
+	duration time.Duration,
+) error {
+	waiter.durations = append(waiter.durations, duration)
+	err := waiter.errors[0]
+	waiter.errors = waiter.errors[1:]
+	return err
 }
 
 func (waiter *fakeCrawlRunnerWaiter) Wait(

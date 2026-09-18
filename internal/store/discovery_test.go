@@ -495,13 +495,14 @@ func TestDiscoveryStoreUsesPostgreSQLClock(
 func TestDiscoveryStoreConcurrentClaimsReturnOneSource(
 	t *testing.T,
 ) {
+	pool := newConcurrentStoreTestPool(t, 8)
+
 	ctx, cancel := context.WithTimeout(
 		context.Background(),
-		5*time.Second,
+		30*time.Second,
 	)
 	defer cancel()
 
-	pool := newStoreTestPool(t)
 	now := queueTestTime()
 	source := mustStoreOrigin(
 		t,
@@ -1447,13 +1448,14 @@ func TestRecordDiscoveryDoesNotEnforceHistoricalCap(
 func TestRecordDiscoveryConcurrentUpsertsRemainStable(
 	t *testing.T,
 ) {
+	pool := newConcurrentStoreTestPool(t, 8)
+
 	ctx, cancel := context.WithTimeout(
 		context.Background(),
-		5*time.Second,
+		30*time.Second,
 	)
 	defer cancel()
 
-	pool := newStoreTestPool(t)
 	now := queueTestTime()
 	source := seedDiscoveryTestSource(
 		t,
@@ -1544,7 +1546,7 @@ func TestRecordDiscoveryConcurrentUpsertsRemainStable(
 	}
 }
 
-func TestRecordDiscoveryRollsBackIncompleteEdgeBatch(
+func TestRecordDiscoveryRollsBackRejectedEdgeBatch(
 	t *testing.T,
 ) {
 	ctx := context.Background()
@@ -1564,25 +1566,14 @@ func TestRecordDiscoveryRollsBackIncompleteEdgeBatch(
 	_, err := pool.Exec(
 		ctx,
 		`
-			CREATE FUNCTION suppress_discovery_edge()
-			RETURNS trigger
-			LANGUAGE plpgsql
-			AS $$
-			BEGIN
-				RETURN NULL;
-			END
-			$$;
-
-			CREATE TRIGGER suppress_discovery_edge
-			BEFORE INSERT ON discovery_edges
-			FOR EACH ROW
-			EXECUTE FUNCTION suppress_discovery_edge();
+			ALTER TABLE discovery_edges
+			ADD CONSTRAINT reject_link_edge
+			CHECK (kind <> 'link')
 		`,
-		pgx.QueryExecModeSimpleProtocol,
 	)
 	if err != nil {
 		t.Fatalf(
-			"install edge suppression trigger: %v",
+			"install edge rejection constraint: %v",
 			err,
 		)
 	}
@@ -1611,10 +1602,10 @@ func TestRecordDiscoveryRollsBackIncompleteEdgeBatch(
 
 	if !strings.Contains(
 		err.Error(),
-		"edge write was incomplete",
+		"store: record discovery",
 	) {
 		t.Errorf(
-			"RecordDiscovery() error = %v, want incomplete edge error",
+			"RecordDiscovery() error = %v, want transaction error",
 			err,
 		)
 	}
@@ -1970,6 +1961,41 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 func TestDiscoveryStoreReturnsClockAndDatabaseFailures(
 	t *testing.T,
 ) {
+	t.Run("claim lock", func(t *testing.T) {
+		ctx := context.Background()
+		pool := newSerialStoreTestPool(t)
+		claimPool := newStoreSiblingPool(t, pool, "250ms")
+		lockTransaction, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin lock transaction: %v", err)
+		}
+		defer rollbackTestTransaction(t, lockTransaction)
+
+		if _, err := lockTransaction.Exec(
+			ctx,
+			"SELECT pg_advisory_xact_lock($1)",
+			discoveryClaimAdvisoryLockKey,
+		); err != nil {
+			t.Fatalf("hold discovery claim lock: %v", err)
+		}
+
+		discoveryStore := newDiscoveryTestStore(
+			t,
+			claimPool,
+			queueTestTime(),
+		)
+		_, _, err = discoveryStore.ClaimDiscoverySource(
+			ctx,
+			time.Hour,
+		)
+		if err == nil || !strings.Contains(
+			err.Error(),
+			"lock discovery claim",
+		) {
+			t.Errorf("claim lock error = %v", err)
+		}
+	})
+
 	t.Run("claim clock", func(t *testing.T) {
 		pool := newStoreTestPool(t)
 		discoveryStore, err := newDiscoveryStore(

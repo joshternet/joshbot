@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 )
 
 var (
@@ -24,6 +25,24 @@ var (
 	errInvalidDestination = errors.New("netguard: invalid destination")
 	errDialFailed         = errors.New("netguard: dial failed")
 )
+
+// FailureCategory maps typed netguard failures to retry-domain categories.
+func FailureCategory(err error) retry.Category {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return retry.CategoryTimeout
+	case errors.Is(err, errResolutionFailed), errors.Is(err, errNoAddresses):
+		return retry.CategoryDNS
+	case errors.Is(err, errUnsafeAddress):
+		return retry.CategoryUnsafeAddress
+	case errors.Is(err, errDialFailed):
+		return retry.CategoryTransport
+	case errors.Is(err, errInvalidOrigin):
+		return retry.CategoryMalformedOrigin
+	default:
+		return retry.CategoryUnsupportedOrigin
+	}
+}
 
 // blockedIPv4Prefixes follows the IANA IPv4 Special-Purpose Address Space
 // registry and the protocol-reserved multicast and future-use ranges.

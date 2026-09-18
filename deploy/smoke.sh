@@ -54,6 +54,8 @@ readonly expected_node_path
 
 export COMPOSE_PROJECT_NAME="joshbot-smoke-$smoke_token"
 export JOSHBOT_IMAGE="joshbot-smoke:$smoke_token"
+export JOSHBOT_REPORT_NETWORK_NAME="$COMPOSE_PROJECT_NAME-reporting"
+export JOSHBOT_CONTROL_NETWORK_NAME="$COMPOSE_PROJECT_NAME-control"
 
 export JOSHBOT_POSTGRES_DATA_DIR="$smoke_root/postgres"
 export JOSHBOT_EXPORT_DIR="$smoke_root/exports"
@@ -62,7 +64,11 @@ export JOSHBOT_BACKUP_DIR="$smoke_root/backups"
 export JOSHBOT_POSTGRES_ADMIN_PASSWORD_FILE="$smoke_root/secrets/postgres_admin_password"
 export JOSHBOT_MIGRATOR_PASSWORD_FILE="$smoke_root/secrets/joshbot_migrator_password"
 export JOSHBOT_APP_PASSWORD_FILE="$smoke_root/secrets/joshbot_app_password"
+export JOSHBOT_REPORTER_PASSWORD_FILE="$smoke_root/secrets/joshbot_reporter_password"
+export JOSHBOT_OPERATOR_PASSWORD_FILE="$smoke_root/secrets/joshbot_operator_password"
 export JOSHBOT_BACKUP_PASSWORD_FILE="$smoke_root/secrets/joshbot_backup_password"
+export JOSHBOT_REPORT_TOKEN_FILE="$smoke_root/secrets/joshbot_report_token"
+export JOSHBOT_OPERATOR_TOKEN_FILE="$smoke_root/secrets/joshbot_operator_token"
 
 export JOSHBOT_WORKER_ID="smoke-worker-$smoke_token"
 export JOSHBOT_LEASE_DURATION="5m"
@@ -289,6 +295,8 @@ cleanup() {
   compose \
     --profile tools \
     --profile backup \
+    --profile reporting \
+    --profile control \
     down \
     --volumes \
     --remove-orphans \
@@ -439,7 +447,11 @@ chmod 0777 \
 create_secret "$JOSHBOT_POSTGRES_ADMIN_PASSWORD_FILE"
 create_secret "$JOSHBOT_MIGRATOR_PASSWORD_FILE"
 create_secret "$JOSHBOT_APP_PASSWORD_FILE"
+create_secret "$JOSHBOT_REPORTER_PASSWORD_FILE"
+create_secret "$JOSHBOT_OPERATOR_PASSWORD_FILE"
 create_secret "$JOSHBOT_BACKUP_PASSWORD_FILE"
+create_secret "$JOSHBOT_REPORT_TOKEN_FILE"
+create_secret "$JOSHBOT_OPERATOR_TOKEN_FILE"
 create_secret "$restore_password_file"
 
 mkdir -p "$expected_root/nodes/10"
@@ -810,7 +822,7 @@ migration_count="$(
 
 assert_equal \
   "$migration_count" \
-  "4" \
+  "12" \
   "source migration count"
 
 pass "known observation, effective state, queue state, and migrations exist"
@@ -1090,12 +1102,46 @@ expect_role_failure \
   "UPDATE verification_queue SET available_at = clock_timestamp() WHERE origin = 'https://example.com';" \
   'backup role queue update'
 
+expect_role_failure \
+  joshbot_reporter \
+  'UPDATE crawl_control SET discovery_paused = true WHERE singleton;' \
+  'reporter role control mutation'
+
+expect_role_failure \
+  joshbot_reporter \
+  "INSERT INTO operator_audit_events (action, target, caller, actor, result) VALUES ('origin.block', '', 'local', 'test', 'rejected');" \
+  'reporter role audit insertion'
+
+expect_role_failure \
+  joshbot_operator \
+  'SELECT * FROM origins;' \
+  'operator role publication data read'
+
+expect_role_failure \
+  joshbot_operator \
+  "INSERT INTO verification_observations (origin, observed_at, outcome) VALUES ('https://example.com', statement_timestamp(), 'absent');" \
+  'operator role verification mutation'
+
+expect_role_failure \
+  joshbot_operator \
+  'UPDATE discovery_source_state SET seeded = true;' \
+  'operator role curated source mutation'
+
+expect_role_failure \
+  joshbot_operator \
+  'DELETE FROM operator_audit_events;' \
+  'operator role audit deletion'
+
 compose \
   --profile tools \
   --profile backup \
+  --profile reporting \
+  --profile control \
   create \
   tools \
-  backup
+  backup \
+  report \
+  control
 
 migrate_container="$(
   compose ps \
@@ -1118,6 +1164,20 @@ backup_container="$(
     backup
 )"
 
+report_container="$(
+  compose ps \
+    --all \
+    --quiet \
+    report
+)"
+
+control_container="$(
+  compose ps \
+    --all \
+    --quiet \
+    control
+)"
+
 assert_nonempty \
   "$migrate_container" \
   "migration container was not recreated"
@@ -1129,6 +1189,14 @@ assert_nonempty \
 assert_nonempty \
   "$backup_container" \
   "backup container was not created"
+
+assert_nonempty \
+  "$report_container" \
+  "report container was not created"
+
+assert_nonempty \
+  "$control_container" \
+  "control container was not created"
 
 assert_hardened_container \
   "$worker_container" \
@@ -1155,8 +1223,20 @@ assert_hardened_container \
   'postgres' \
   'backup container'
 
+assert_hardened_container \
+  "$report_container" \
+  '65532:65532' \
+  'report container'
+
+assert_hardened_container \
+  "$control_container" \
+  '65532:65532' \
+  'control container'
+
 database_network="${COMPOSE_PROJECT_NAME}_database"
 egress_network="${COMPOSE_PROJECT_NAME}_egress"
+reporting_network="$JOSHBOT_REPORT_NETWORK_NAME"
+control_network="$JOSHBOT_CONTROL_NETWORK_NAME"
 
 assert_equal \
   "$(docker network inspect "$database_network" --format '{{.Internal}}')" \
@@ -1167,6 +1247,16 @@ assert_equal \
   "$(docker network inspect "$egress_network" --format '{{.Internal}}')" \
   "false" \
   "egress network internal state"
+
+assert_equal \
+  "$(docker network inspect "$reporting_network" --format '{{.Internal}}')" \
+  "true" \
+  "reporting network internal state"
+
+assert_equal \
+  "$(docker network inspect "$control_network" --format '{{.Internal}}')" \
+  "true" \
+  "control network internal state"
 
 expected_worker_networks="$(
   printf '%s\n' \
@@ -1203,6 +1293,30 @@ assert_equal \
   "$(inspect_network_names "$backup_container")" \
   "$expected_database_network" \
   "backup network membership"
+
+expected_report_networks="$(
+  printf '%s\n' \
+    "$database_network" \
+    "$reporting_network" |
+    sort
+)"
+
+expected_control_networks="$(
+  printf '%s\n' \
+    "$control_network" \
+    "$database_network" |
+    sort
+)"
+
+assert_equal \
+  "$(inspect_network_names "$report_container")" \
+  "$expected_report_networks" \
+  "report network membership"
+
+assert_equal \
+  "$(inspect_network_names "$control_container")" \
+  "$expected_control_networks" \
+  "control network membership"
 
 assert_equal \
   "$(inspect_network_names "$postgres_container")" \
@@ -1252,6 +1366,30 @@ assert_equal \
   "$expected_backup_mounts" \
   "backup mount boundary"
 
+expected_report_mounts="$(
+  printf '%s\n' \
+    '/run/secrets/joshbot_report_token' \
+    '/run/secrets/joshbot_reporter_password' |
+    sort
+)"
+
+assert_equal \
+  "$(inspect_mount_destinations "$report_container")" \
+  "$expected_report_mounts" \
+  "report mount boundary"
+
+expected_control_mounts="$(
+  printf '%s\n' \
+    '/run/secrets/joshbot_operator_password' \
+    '/run/secrets/joshbot_operator_token' |
+    sort
+)"
+
+assert_equal \
+  "$(inspect_mount_destinations "$control_container")" \
+  "$expected_control_mounts" \
+  "control mount boundary"
+
 backup_pgdata_mount="$(
   docker inspect \
     "$backup_container" \
@@ -1270,6 +1408,8 @@ expected_postgres_mounts="$(
     '/run/secrets/joshbot_app_password' \
     '/run/secrets/joshbot_backup_password' \
     '/run/secrets/joshbot_migrator_password' \
+    '/run/secrets/joshbot_operator_password' \
+    '/run/secrets/joshbot_reporter_password' \
     '/var/lib/postgresql' |
     sort
 )"
@@ -1607,7 +1747,7 @@ restored_migration_count="$(
 
 assert_equal \
   "$restored_migration_count" \
-  "4" \
+  "12" \
   "restored migration count"
 
 pass "known observation, discovery provenance, queue modes, and migration metadata survived restore"

@@ -646,6 +646,42 @@ func TestReadDirectoryRejectsFileChangedBeforeRead(
 	)
 }
 
+func TestReadDirectoryRejectsSymlinkSnapshotEntry(t *testing.T) {
+	directory := newTestSnapshotDirectory(map[string][]byte{"registry.json": []byte("{}\n")})
+	fileSystem := directory.fileSystem.(fstest.MapFS)
+	fileSystem["registry.json"].Mode = fs.ModeSymlink | 0o777
+
+	got, err := readDirectory(
+		context.Background(),
+		"snapshot",
+		readerLimits{maxFiles: 1, maxFileBytes: 16, maxTotalBytes: 16},
+		func(string) (snapshotDirectory, error) { return directory, nil },
+	)
+	assertReaderError(t, got, err, ErrInvalidSnapshotEntry)
+}
+
+func TestReadDirectoryRejectsNonRegularLstatEntry(t *testing.T) {
+	directory := newTestSnapshotDirectory(
+		map[string][]byte{"registry.json": []byte("{}\n")},
+	)
+	info, err := fs.Stat(directory.fileSystem, "registry.json")
+	if err != nil {
+		t.Fatalf("stat test registry: %v", err)
+	}
+	directory.lstatInfo = modeFileInfo{
+		FileInfo: info,
+		mode:     fs.ModeNamedPipe | 0o644,
+	}
+
+	got, err := readDirectory(
+		context.Background(),
+		"snapshot",
+		readerLimits{maxFiles: 1, maxFileBytes: 16, maxTotalBytes: 16},
+		func(string) (snapshotDirectory, error) { return directory, nil },
+	)
+	assertReaderError(t, got, err, ErrInvalidSnapshotEntry)
+}
+
 func TestReadDirectoryPropagatesFilesystemFailures(
 	t *testing.T,
 ) {
@@ -872,6 +908,7 @@ type testSnapshotDirectory struct {
 	fileSystem fs.FS
 
 	lstatError  error
+	lstatInfo   fs.FileInfo
 	openError   error
 	fileFactory func(snapshotFile) snapshotFile
 }
@@ -902,6 +939,9 @@ func (directory *testSnapshotDirectory) Lstat(
 ) (fs.FileInfo, error) {
 	if directory.lstatError != nil {
 		return nil, directory.lstatError
+	}
+	if directory.lstatInfo != nil {
+		return directory.lstatInfo, nil
 	}
 
 	return fs.Stat(directory.fileSystem, name)

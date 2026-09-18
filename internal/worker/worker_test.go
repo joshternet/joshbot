@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -10,8 +11,21 @@ import (
 
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 	"github.com/joshternet/joshbot/internal/store"
 )
+
+type recordingWorkerObserver struct {
+	states []string
+}
+
+func (observer *recordingWorkerObserver) Observe(
+	state string,
+	_ origin.Origin,
+	_ string,
+) {
+	observer.states = append(observer.states, state)
+}
 
 func TestRunOnceProcessesOneVerification(t *testing.T) {
 	source := mustWorkerOrigin(t)
@@ -35,6 +49,8 @@ func TestRunOnceProcessesOneVerification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v, want nil", err)
 	}
+	observer := &recordingWorkerObserver{}
+	runtime.SetLifecycleObserver(observer)
 
 	worked, err := runtime.RunOnce(context.Background())
 	if err != nil {
@@ -44,6 +60,11 @@ func TestRunOnceProcessesOneVerification(t *testing.T) {
 	if !worked {
 		t.Error("RunOnce() worked = false, want true")
 	}
+	if !reflect.DeepEqual(observer.states, []string{"running", "idle"}) {
+		t.Errorf("worker lifecycle = %#v", observer.states)
+	}
+	var missing *Worker
+	missing.SetLifecycleObserver(observer)
 
 	if queue.claimCalls != 1 {
 		t.Errorf(
@@ -105,6 +126,79 @@ func TestRunOnceProcessesOneVerification(t *testing.T) {
 			queue.recheckIntervals[0],
 			config.RecheckInterval,
 		)
+	}
+}
+
+func TestRunOnceObservesPausedAndControlFailure(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		paused    bool
+		err       error
+		wantState string
+		wantErr   bool
+	}{
+		{name: "paused", paused: true, wantState: "paused"},
+		{name: "idle", wantState: "idle"},
+		{name: "control failure", err: errors.New("control unavailable"), wantState: "failed", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := &pausableQueue{fakeQueue: &fakeQueue{}, paused: test.paused, err: test.err}
+			runtime, err := New(queue, &fakeVerifier{}, workerTestConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			observer := &recordingWorkerObserver{}
+			runtime.SetLifecycleObserver(observer)
+			_, runErr := runtime.RunOnce(context.Background())
+			if (runErr != nil) != test.wantErr {
+				t.Errorf("RunOnce() error = %v, wantErr %v", runErr, test.wantErr)
+			}
+			if !reflect.DeepEqual(observer.states, []string{test.wantState}) {
+				t.Errorf("states = %#v, want %q", observer.states, test.wantState)
+			}
+		})
+	}
+}
+
+func TestRunOnceRetriesUnavailableWithinCycle(t *testing.T) {
+	source := mustWorkerOrigin(t)
+	queue := &fakeQueue{claims: []fakeClaim{{
+		lease: workerTestLease(source), found: true,
+	}}}
+	verifier := &fakeVerifier{}
+	verifier.verify = func(context.Context, origin.Origin) (declaration.Result, error) {
+		if verifier.calls < retry.MaxAttemptsPerCycle {
+			return declaration.Result{
+				Outcome: declaration.OutcomeUnavailable, Origin: source,
+			}, nil
+		}
+		return workerTestResult(source), nil
+	}
+	runtime := newWorkerForTest(t, queue, verifier, workerTestConfig())
+	if worked, err := runtime.RunOnce(context.Background()); err != nil || !worked {
+		t.Fatalf("RunOnce() = %v, %v", worked, err)
+	}
+	if verifier.calls != retry.MaxAttemptsPerCycle ||
+		queue.completedResults[0].Outcome != declaration.OutcomeValid {
+		t.Fatalf("calls = %d, result = %#v", verifier.calls, queue.completedResults[0])
+	}
+}
+
+func TestRunOnceDoesNotRetryPermanentUnavailableCategory(t *testing.T) {
+	source := mustWorkerOrigin(t)
+	queue := &fakeQueue{claims: []fakeClaim{{
+		lease: workerTestLease(source), found: true,
+	}}}
+	verifier := &fakeVerifier{result: declaration.Result{
+		Outcome: declaration.OutcomeUnavailable, Origin: source,
+		FailureCategory: retry.CategoryMalformedOrigin,
+	}}
+	runtime := newWorkerForTest(t, queue, verifier, workerTestConfig())
+	if worked, err := runtime.RunOnce(context.Background()); err != nil || !worked {
+		t.Fatalf("RunOnce() = %v, %v", worked, err)
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("Verify() calls = %d, want 1", verifier.calls)
 	}
 }
 
@@ -308,10 +402,10 @@ func TestRunOnceCompletesTimedOutVerificationAsUnavailable(
 		) (context.Context, context.CancelFunc) {
 			timeoutCalls++
 
-			return context.WithDeadline(
-				ctx,
-				time.Unix(0, 0),
-			)
+			if timeoutCalls <= retry.MaxAttemptsPerCycle {
+				return context.WithDeadline(ctx, time.Unix(0, 0))
+			}
+			return context.WithCancel(ctx)
 		},
 	)
 
@@ -335,10 +429,11 @@ func TestRunOnceCompletesTimedOutVerificationAsUnavailable(
 		t.Error("RunOnce() worked = false, want true")
 	}
 
-	if timeoutCalls != 2 {
+	if timeoutCalls != retry.MaxAttemptsPerCycle+1 {
 		t.Errorf(
-			"timeout factory calls = %d, want 2",
+			"timeout factory calls = %d, want %d",
 			timeoutCalls,
+			retry.MaxAttemptsPerCycle+1,
 		)
 	}
 
@@ -350,8 +445,9 @@ func TestRunOnceCompletesTimedOutVerificationAsUnavailable(
 	}
 
 	wantResult := declaration.Result{
-		Outcome: declaration.OutcomeUnavailable,
-		Origin:  source,
+		Outcome:         declaration.OutcomeUnavailable,
+		Origin:          source,
+		FailureCategory: retry.CategoryTimeout,
 	}
 	if queue.completedResults[0] != wantResult {
 		t.Errorf(
@@ -651,7 +747,9 @@ func TestRunWaitsOnlyWhenIdle(t *testing.T) {
 			time.Duration,
 		) error {
 			waitCalls++
-
+			if waitCalls == 2 {
+				return stopError
+			}
 			return nil
 		},
 	)
@@ -675,11 +773,41 @@ func TestRunWaitsOnlyWhenIdle(t *testing.T) {
 		)
 	}
 
-	if waitCalls != 1 {
+	if waitCalls != 2 {
 		t.Errorf(
-			"wait calls = %d, want 1",
+			"wait calls = %d, want 2",
 			waitCalls,
 		)
+	}
+}
+
+func TestRunBacksOffConsecutiveProcessorFailures(t *testing.T) {
+	processorError := errors.New("store unavailable")
+	stopError := errors.New("stop")
+	queue := &fakeQueue{claims: []fakeClaim{
+		{err: processorError},
+		{err: processorError},
+	}}
+	var delays []time.Duration
+	waiter := waitStrategyFunc(func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		if len(delays) == 2 {
+			return stopError
+		}
+		return nil
+	})
+	runtime, err := newWorker(
+		queue, &fakeVerifier{}, workerTestConfig(), waiter, contextTimeoutFactory{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Run(context.Background()); !errors.Is(err, stopError) {
+		t.Fatalf("Run() error = %v, want stop", err)
+	}
+	want := []time.Duration{5 * time.Minute, 30 * time.Minute}
+	if !reflect.DeepEqual(delays, want) {
+		t.Fatalf("backoff delays = %v, want %v", delays, want)
 	}
 }
 
@@ -709,8 +837,7 @@ func TestRunImmediatelyClaimsAfterSuccessfulWork(
 			time.Duration,
 		) error {
 			waitCalls++
-
-			return nil
+			return stopError
 		},
 	)
 
@@ -740,9 +867,9 @@ func TestRunImmediatelyClaimsAfterSuccessfulWork(
 		)
 	}
 
-	if waitCalls != 0 {
+	if waitCalls != 1 {
 		t.Errorf(
-			"wait calls = %d, want 0",
+			"wait calls = %d, want 1",
 			waitCalls,
 		)
 	}
@@ -779,7 +906,7 @@ func TestRunContinuesAfterTimedOutWork(t *testing.T) {
 		jobContext context.Context,
 		source origin.Origin,
 	) (declaration.Result, error) {
-		if verifier.calls == 1 {
+		if verifier.calls <= retry.MaxAttemptsPerCycle {
 			<-jobContext.Done()
 			return declaration.Result{}, jobContext.Err()
 		}
@@ -793,7 +920,7 @@ func TestRunContinuesAfterTimedOutWork(t *testing.T) {
 			_ time.Duration,
 		) (context.Context, context.CancelFunc) {
 			timeoutCalls++
-			if timeoutCalls == 1 {
+			if timeoutCalls <= retry.MaxAttemptsPerCycle {
 				return context.WithDeadline(parent, time.Unix(0, 0))
 			}
 			return context.WithCancel(parent)
@@ -815,8 +942,8 @@ func TestRunContinuesAfterTimedOutWork(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run() error = %v, want context.Canceled", err)
 	}
-	if verifier.calls != 2 {
-		t.Errorf("Verify() calls = %d, want 2", verifier.calls)
+	if verifier.calls != retry.MaxAttemptsPerCycle+1 {
+		t.Errorf("Verify() calls = %d, want %d", verifier.calls, retry.MaxAttemptsPerCycle+1)
 	}
 	if queue.completeCalls != 2 {
 		t.Errorf(
@@ -1266,6 +1393,16 @@ type fakeQueue struct {
 		declaration.Result,
 		time.Duration,
 	) error
+}
+
+type pausableQueue struct {
+	*fakeQueue
+	paused bool
+	err    error
+}
+
+func (queue *pausableQueue) VerificationPaused(context.Context) (bool, error) {
+	return queue.paused, queue.err
 }
 
 func (queue *fakeQueue) Claim(

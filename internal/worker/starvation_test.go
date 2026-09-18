@@ -8,6 +8,7 @@ import (
 
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 	"github.com/joshternet/joshbot/internal/store"
 )
 
@@ -93,7 +94,7 @@ func TestRunRepeatedTimeoutsDoNotStarveLaterWork(
 			timeoutCalls++
 
 			switch timeoutCalls {
-			case 1, 3, 5:
+			case 1, 2, 3, 5, 6, 7, 9, 10, 11:
 				return context.WithDeadline(
 					parent,
 					time.Unix(0, 0),
@@ -139,11 +140,12 @@ func TestRunRepeatedTimeoutsDoNotStarveLaterWork(
 		)
 	}
 
-	if verifier.calls != len(origins) {
+	wantVerifierCalls := (len(origins)-1)*retry.MaxAttemptsPerCycle + 1
+	if verifier.calls != wantVerifierCalls {
 		t.Errorf(
 			"Verify() calls = %d, want %d",
 			verifier.calls,
-			len(origins),
+			wantVerifierCalls,
 		)
 	}
 

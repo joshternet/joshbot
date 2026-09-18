@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 )
 
 type completionFixture struct {
@@ -21,11 +22,14 @@ type completionFixture struct {
 }
 
 type completionQueueState struct {
-	availableAt    time.Time
-	generation     int64
-	leaseOwner     *string
-	leaseExpiresAt *time.Time
-	lastClaimedAt  time.Time
+	availableAt         time.Time
+	generation          int64
+	leaseOwner          *string
+	leaseExpiresAt      *time.Time
+	lastClaimedAt       time.Time
+	consecutiveFailures int
+	lastFailureCategory *string
+	nextAttemptAt       *time.Time
 }
 
 func TestQueueCompletesVerificationAtomically(
@@ -838,6 +842,48 @@ func TestQueueCompletionPreservesAuthoritativeStateForTemporaryOutcomes(
 	}
 }
 
+func TestUnavailableProbePersistsRetryAndSuccessResetsStreak(t *testing.T) {
+	fixture := newCompletionFixture(t, QueueConfig{
+		LeaseDuration: 10 * time.Minute, MinOriginInterval: time.Minute,
+	}, queueTestTime())
+	completedAt := fixture.claimed.Add(time.Minute)
+	fixture.queue.clock = fixedQueueClock{now: completedAt}
+
+	err := fixture.queue.CompleteVerification(fixture.ctx, fixture.lease, declaration.Result{
+		Outcome: declaration.OutcomeUnavailable, Origin: fixture.source,
+		FailureCategory: retry.CategoryHTTP429, RetryAfter: 10 * time.Minute,
+	}, time.Hour)
+	if err != nil {
+		t.Fatalf("CompleteVerification(unavailable) error = %v", err)
+	}
+	state := readCompletionQueueState(t, fixture)
+	if state.consecutiveFailures != 1 ||
+		state.lastFailureCategory == nil ||
+		*state.lastFailureCategory != string(retry.CategoryHTTP429) ||
+		state.nextAttemptAt == nil ||
+		!state.nextAttemptAt.Equal(completedAt.Add(10*time.Minute)) {
+		t.Fatalf("retry state = %#v", state)
+	}
+
+	fixture.queue.clock = fixedQueueClock{now: *state.nextAttemptAt}
+	lease, found, err := fixture.queue.Claim(fixture.ctx, "worker-b")
+	if err != nil || !found {
+		t.Fatalf("Claim() = %#v, %v, %v", lease, found, err)
+	}
+	fixture.queue.clock = fixedQueueClock{now: lease.ClaimedAt.Add(time.Minute)}
+	if err := fixture.queue.CompleteVerification(
+		fixture.ctx, lease, validCompletionResult(fixture.source), time.Hour,
+	); err != nil {
+		t.Fatalf("CompleteVerification(success) error = %v", err)
+	}
+	state = readCompletionQueueState(t, fixture)
+	if state.consecutiveFailures != 0 ||
+		state.lastFailureCategory != nil ||
+		state.nextAttemptAt != nil {
+		t.Fatalf("reset retry state = %#v", state)
+	}
+}
+
 func TestQueueCompletionUsesPostgreSQLClockInsideTransaction(
 	t *testing.T,
 ) {
@@ -977,8 +1023,19 @@ func newCompletionFixture(
 ) completionFixture {
 	t.Helper()
 
-	ctx := context.Background()
 	pool := newStoreTestPool(t)
+	return newCompletionFixtureInPool(t, pool, config, claimedAt)
+}
+
+func newCompletionFixtureInPool(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	config QueueConfig,
+	claimedAt time.Time,
+) completionFixture {
+	t.Helper()
+
+	ctx := context.Background()
 	queue := newFixedQueue(
 		t,
 		pool,
@@ -1055,6 +1112,9 @@ func readCompletionQueueState(
 				lease_owner,
 				lease_expires_at,
 				last_claimed_at
+				, consecutive_failures
+				, last_failure_category
+				, next_attempt_at
 			FROM verification_queue
 			WHERE origin = $1
 		`,
@@ -1065,6 +1125,9 @@ func readCompletionQueueState(
 		&state.leaseOwner,
 		&state.leaseExpiresAt,
 		&state.lastClaimedAt,
+		&state.consecutiveFailures,
+		&state.lastFailureCategory,
+		&state.nextAttemptAt,
 	)
 	if err != nil {
 		t.Fatalf(
@@ -1127,6 +1190,11 @@ func assertCompletionQueueState(
 			got.lastClaimedAt,
 			want.lastClaimedAt,
 		)
+	}
+	if got.consecutiveFailures != want.consecutiveFailures ||
+		!equalCompletionStrings(got.lastFailureCategory, want.lastFailureCategory) ||
+		!equalCompletionTimes(got.nextAttemptAt, want.nextAttemptAt) {
+		t.Errorf("retry state = %#v, want %#v", got, want)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 )
 
 var (
@@ -36,6 +37,32 @@ type CrawlSourceStore interface {
 	) (origin.Origin, bool, error)
 }
 
+// LifecycleObserver receives bounded operational state transitions.
+type LifecycleObserver interface {
+	Observe(string, origin.Origin, string)
+}
+
+type discoveryPauseStore interface {
+	DiscoveryPaused(context.Context) (bool, error)
+}
+
+type crawlSourceCompletionStore interface {
+	CompleteDiscoverySource(
+		context.Context,
+		origin.Origin,
+		retry.Category,
+	) error
+}
+
+type crawlSourceRetryCompletionStore interface {
+	CompleteDiscoverySourceRetry(
+		context.Context,
+		origin.Origin,
+		retry.Category,
+		time.Duration,
+	) error
+}
+
 // SourceCrawler performs one complete bounded crawl of an origin.
 type SourceCrawler interface {
 	Crawl(
@@ -48,6 +75,7 @@ type SourceCrawler interface {
 type CrawlRunnerConfig struct {
 	DiscoveryInterval time.Duration
 	PollInterval      time.Duration
+	RetryJitter       retry.Jitter
 }
 
 // CrawlReport describes one attempt to claim and crawl a source.
@@ -63,10 +91,30 @@ type CrawlReport struct {
 // CrawlRunner coordinates durable source claiming with bounded multi-page
 // crawling.
 type CrawlRunner struct {
-	store   CrawlSourceStore
-	crawler SourceCrawler
-	config  CrawlRunnerConfig
-	waiter  crawlRunnerWaiter
+	store       CrawlSourceStore
+	crawler     SourceCrawler
+	config      CrawlRunnerConfig
+	waiter      crawlRunnerWaiter
+	retryPolicy retry.Policy
+	observer    LifecycleObserver
+}
+
+// SetLifecycleObserver attaches process-state observation without changing
+// crawl decisions.
+func (runner *CrawlRunner) SetLifecycleObserver(observer LifecycleObserver) {
+	if runner != nil {
+		runner.observer = observer
+	}
+}
+
+func (runner *CrawlRunner) observe(
+	state string,
+	source origin.Origin,
+	message string,
+) {
+	if runner.observer != nil {
+		runner.observer.Observe(state, source, message)
+	}
 }
 
 type crawlRunnerWaiter interface {
@@ -115,10 +163,11 @@ func newCrawlRunner(
 	}
 
 	return &CrawlRunner{
-		store:   store,
-		crawler: crawler,
-		config:  config,
-		waiter:  waiter,
+		store:       store,
+		crawler:     crawler,
+		config:      config,
+		waiter:      waiter,
+		retryPolicy: retry.NewPolicy(config.RetryJitter),
 	}, nil
 }
 
@@ -139,6 +188,7 @@ func (runner *CrawlRunner) RunOnce(
 			runner.config.DiscoveryInterval,
 		)
 	if err != nil {
+		runner.observe("failed", origin.Origin{}, "claim_failed")
 		return CrawlReport{}, fmt.Errorf(
 			"discovery: claim crawl source: %w",
 			err,
@@ -146,8 +196,21 @@ func (runner *CrawlRunner) RunOnce(
 	}
 
 	if !found {
+		state := "idle"
+		if store, ok := runner.store.(discoveryPauseStore); ok {
+			paused, pauseErr := store.DiscoveryPaused(ctx)
+			if pauseErr != nil {
+				runner.observe("failed", origin.Origin{}, "control_read_failed")
+				return CrawlReport{}, pauseErr
+			}
+			if paused {
+				state = "paused"
+			}
+		}
+		runner.observe(state, origin.Origin{}, "")
 		return CrawlReport{}, nil
 	}
+	runner.observe("running", source, "")
 
 	report := CrawlReport{
 		Worked: true,
@@ -164,6 +227,24 @@ func (runner *CrawlRunner) RunOnce(
 	}
 
 	if err != nil {
+		category := result.FailureCategory
+		retryAfter := result.RetryAfter
+		if result.PagesParsed > 0 {
+			category = retry.CategoryNone
+			retryAfter = 0
+		} else if category == retry.CategoryNone {
+			category = retry.CategoryProcessor
+		}
+		if completionErr := runner.completeSource(
+			ctx, source, category, retryAfter,
+		); completionErr != nil {
+			runner.observe("failed", source, "completion_failed")
+			return report, fmt.Errorf(
+				"discovery: complete failed crawl source: %w",
+				completionErr,
+			)
+		}
+		runner.observe("failed", source, "crawl_failed")
 		return report, fmt.Errorf(
 			"discovery: crawl source: %w",
 			err,
@@ -175,8 +256,38 @@ func (runner *CrawlRunner) RunOnce(
 	report.CandidatesDiscovered =
 		result.CandidatesDiscovered
 	report.BudgetExhausted = result.BudgetExhausted
+	if err := runner.completeSource(
+		ctx,
+		source,
+		result.FailureCategory,
+		result.RetryAfter,
+	); err != nil {
+		runner.observe("failed", source, "completion_failed")
+		return report, fmt.Errorf(
+			"discovery: complete crawl source: %w",
+			err,
+		)
+	}
+	runner.observe("idle", origin.Origin{}, "")
 
 	return report, nil
+}
+
+func (runner *CrawlRunner) completeSource(
+	ctx context.Context,
+	source origin.Origin,
+	category retry.Category,
+	retryAfter time.Duration,
+) error {
+	if store, ok := runner.store.(crawlSourceRetryCompletionStore); ok {
+		return store.CompleteDiscoverySourceRetry(
+			ctx, source, category, retryAfter,
+		)
+	}
+	if store, ok := runner.store.(crawlSourceCompletionStore); ok {
+		return store.CompleteDiscoverySource(ctx, source, category)
+	}
+	return nil
 }
 
 // Run processes due crawl sources until cancellation or a fatal store,
@@ -188,11 +299,23 @@ func (runner *CrawlRunner) Run(
 		return err
 	}
 
+	consecutiveFailures := 0
 	for {
 		report, err := runner.RunOnce(ctx)
 		if err != nil {
-			return err
+			if contextError := ctx.Err(); contextError != nil {
+				return contextError
+			}
+			consecutiveFailures++
+			if waitErr := runner.waiter.Wait(
+				ctx,
+				runner.retryPolicy.Delay(consecutiveFailures, 0),
+			); waitErr != nil {
+				return waitErr
+			}
+			continue
 		}
+		consecutiveFailures = 0
 
 		if report.Worked {
 			continue

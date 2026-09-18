@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/joshternet/joshbot/internal/discovery"
+	"github.com/joshternet/joshbot/internal/store"
 )
 
 func TestCrawlRuntimeConfigurationUsesExplicitBudgets(
@@ -23,17 +24,23 @@ func TestCrawlRuntimeConfigurationUsesExplicitBudgets(
 	}
 
 	want := crawlRuntimeSettings{
+		telemetryRetention: defaultCrawlTelemetryRetention,
+		automatic: store.AutomaticCrawlConfig{
+			MaxAutomaticPromotionsPerRun: defaultAutomaticCrawlMaxPromotionsPerRun,
+			ExcludedHostSuffixes:         defaultAutomaticCrawlExcludedHosts,
+		},
 		runner: discovery.CrawlRunnerConfig{
 			DiscoveryInterval: defaultDiscoveryInterval,
 			PollInterval:      defaultDiscoveryPollInterval,
 		},
 		crawl: discovery.CrawlConfig{
-			MaxDepth:      2,
-			MaxPages:      32,
-			MaxPageBytes:  1048576,
-			RequestDelay:  250 * time.Millisecond,
-			RedirectLimit: 5,
-			PageTimeout:   defaultDiscoveryPageTimeout,
+			MaxDepth:                     2,
+			MaxPages:                     32,
+			MaxPageBytes:                 1048576,
+			RequestDelay:                 250 * time.Millisecond,
+			RedirectLimit:                5,
+			PageTimeout:                  defaultDiscoveryPageTimeout,
+			MaxAutomaticPromotionsPerRun: defaultAutomaticCrawlMaxPromotionsPerRun,
 		},
 	}
 
@@ -58,6 +65,11 @@ func TestCrawlRuntimeConfigurationOverridesEverySetting(
 	environment[crawlMaxPageBytesEnvironment] = "2097152"
 	environment[crawlRequestDelayEnvironment] = "1.5s"
 	environment[crawlRedirectLimitEnvironment] = "8"
+	environment[automaticCrawlEnabledEnvironment] = "true"
+	environment[automaticCrawlMaxPendingProbesEnvironment] = "250"
+	environment[automaticCrawlMaxPromotionsPerRunEnvironment] = "17"
+	environment[automaticCrawlExcludedHostsEnvironment] = "hosted.example,social.example"
+	environment[crawlTelemetryRetentionEnvironment] = "168h"
 
 	settings, err := loadCrawlRuntimeSettings(
 		environment.get,
@@ -70,17 +82,25 @@ func TestCrawlRuntimeConfigurationOverridesEverySetting(
 	}
 
 	want := crawlRuntimeSettings{
+		telemetryRetention: 7 * 24 * time.Hour,
 		runner: discovery.CrawlRunnerConfig{
 			DiscoveryInterval: 336 * time.Hour,
 			PollInterval:      10 * time.Second,
 		},
 		crawl: discovery.CrawlConfig{
-			MaxDepth:      4,
-			MaxPages:      128,
-			MaxPageBytes:  2097152,
-			RequestDelay:  1500 * time.Millisecond,
-			RedirectLimit: 8,
-			PageTimeout:   15 * time.Second,
+			MaxDepth:                     4,
+			MaxPages:                     128,
+			MaxPageBytes:                 2097152,
+			RequestDelay:                 1500 * time.Millisecond,
+			RedirectLimit:                8,
+			PageTimeout:                  15 * time.Second,
+			MaxAutomaticPromotionsPerRun: 17,
+		},
+		automatic: store.AutomaticCrawlConfig{
+			Enabled:                      true,
+			MaxPendingProbes:             250,
+			MaxAutomaticPromotionsPerRun: 17,
+			ExcludedHostSuffixes:         "hosted.example,social.example",
 		},
 	}
 
@@ -203,6 +223,16 @@ func TestCrawlRuntimeConfigurationRejectsInvalidValues(
 			key:   crawlRedirectLimitEnvironment,
 			value: stringPointer("0"),
 		},
+		{
+			name:  "invalid telemetry retention",
+			key:   crawlTelemetryRetentionEnvironment,
+			value: stringPointer("forever"),
+		},
+		{
+			name:  "zero telemetry retention",
+			key:   crawlTelemetryRetentionEnvironment,
+			value: stringPointer("0s"),
+		},
 	}
 
 	for _, test := range tests {
@@ -240,6 +270,88 @@ func TestCrawlRuntimeConfigurationRejectsInvalidValues(
 				)
 			}
 		})
+	}
+}
+
+func TestCrawlRuntimeConfigurationRejectsInvalidAutomaticExpansion(
+	t *testing.T,
+) {
+	tests := []mapEnvironment{
+		{
+			automaticCrawlEnabledEnvironment: "sometimes",
+		},
+		{
+			automaticCrawlEnabledEnvironment:          "true",
+			automaticCrawlMaxPendingProbesEnvironment: "0",
+		},
+		{
+			automaticCrawlEnabledEnvironment:          "true",
+			automaticCrawlMaxPendingProbesEnvironment: "many",
+		},
+		{
+			automaticCrawlEnabledEnvironment:             "true",
+			automaticCrawlMaxPromotionsPerRunEnvironment: "0",
+		},
+		{
+			automaticCrawlEnabledEnvironment:             "true",
+			automaticCrawlMaxPromotionsPerRunEnvironment: "many",
+		},
+	}
+
+	for _, overrides := range tests {
+		environment := validCrawlRuntimeEnvironment()
+		for key, value := range overrides {
+			environment[key] = value
+		}
+
+		settings, err := loadCrawlRuntimeSettings(environment.get)
+		if !errors.Is(err, errInvalidRuntimeConfiguration) {
+			t.Errorf(
+				"configuration error = %v, want invalid configuration",
+				err,
+			)
+		}
+
+		if settings != (crawlRuntimeSettings{}) {
+			t.Errorf("settings = %#v, want zero", settings)
+		}
+	}
+}
+
+func TestCrawlRuntimeConfigurationDefaultsAutomaticBackpressure(
+	t *testing.T,
+) {
+	environment := validCrawlRuntimeEnvironment()
+	environment[automaticCrawlEnabledEnvironment] = "true"
+
+	settings, err := loadCrawlRuntimeSettings(environment.get)
+	if err != nil {
+		t.Fatalf("load crawl settings: %v", err)
+	}
+
+	if settings.automatic.MaxPendingProbes !=
+		defaultAutomaticCrawlMaxPendingProbes {
+		t.Errorf(
+			"MaxPendingProbes = %d, want %d",
+			settings.automatic.MaxPendingProbes,
+			defaultAutomaticCrawlMaxPendingProbes,
+		)
+	}
+	if settings.automatic.MaxAutomaticPromotionsPerRun !=
+		defaultAutomaticCrawlMaxPromotionsPerRun {
+		t.Errorf(
+			"MaxAutomaticPromotionsPerRun = %d, want %d",
+			settings.automatic.MaxAutomaticPromotionsPerRun,
+			defaultAutomaticCrawlMaxPromotionsPerRun,
+		)
+	}
+	if settings.crawl.MaxAutomaticPromotionsPerRun !=
+		defaultAutomaticCrawlMaxPromotionsPerRun {
+		t.Errorf(
+			"crawl MaxAutomaticPromotionsPerRun = %d, want %d",
+			settings.crawl.MaxAutomaticPromotionsPerRun,
+			defaultAutomaticCrawlMaxPromotionsPerRun,
+		)
 	}
 }
 

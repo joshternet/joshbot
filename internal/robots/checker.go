@@ -18,6 +18,9 @@ const maxCacheLifetime = 24 * time.Hour
 // ErrDisallowed reports that the current robots policy denies the target.
 var ErrDisallowed = errors.New("robots: target disallowed")
 
+// ErrTemporary reports a failure while obtaining robots policy.
+var ErrTemporary = errors.New("robots: policy temporarily unavailable")
+
 var (
 	errCheckerUnavailable = errors.New(
 		"robots: checker unavailable",
@@ -115,7 +118,7 @@ func (c *Checker) Allowed(
 
 	policy, err := obtainPolicy(ctx, initial, c.getter)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("%w: %w", ErrTemporary, err)
 	}
 
 	c.cache[initial] = cacheEntry{

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -44,6 +45,7 @@ func TestNewDiscoveryRuntimeReturnsConstructionFailure(
 			test.mutate(&settings)
 
 			runner, err := newDiscoveryRuntime(
+				context.Background(),
 				pool,
 				settings,
 			)
@@ -71,5 +73,19 @@ func TestNewDiscoveryRuntimeReturnsConstructionFailure(
 				)
 			}
 		})
+	}
+}
+
+func TestNewDiscoveryRuntimeReturnsPolicyReconciliationFailure(t *testing.T) {
+	ctx := context.Background()
+	_, pool := newCLIIntegrationEnvironment(t)
+	settings := testCrawlRuntimeSettings(t)
+	settings.automatic.Enabled = true
+	runner, err := newDiscoveryRuntime(ctx, pool, settings)
+	if err == nil || !strings.Contains(err.Error(), "reconcile automatic crawl policy") {
+		t.Fatalf("newDiscoveryRuntime() error = %v, want reconciliation failure", err)
+	}
+	if runner != nil {
+		t.Fatalf("newDiscoveryRuntime() runner = %#v, want nil", runner)
 	}
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/declaration"
+	"github.com/joshternet/joshbot/internal/retry"
 )
 
 func TestManualScheduleCreatesRecurringWork(t *testing.T) {
@@ -251,7 +252,7 @@ func TestValidProbePromotesToRecurring(t *testing.T) {
 	}
 }
 
-func TestEveryNonValidProbeEnds(t *testing.T) {
+func TestEveryNonValidProbeEndsOrRetries(t *testing.T) {
 	outcomes := []declaration.Outcome{
 		declaration.OutcomeAbsent,
 		declaration.OutcomeInvalid,
@@ -306,11 +307,34 @@ func TestEveryNonValidProbeEnds(t *testing.T) {
 					)
 				}
 
-				if queueCount != 0 {
+				wantQueueCount := 0
+				if outcome == declaration.OutcomeUnavailable {
+					wantQueueCount = 1
+				}
+				if queueCount != wantQueueCount {
 					t.Errorf(
-						"queue row count = %d, want 0",
+						"queue row count = %d, want %d",
 						queueCount,
+						wantQueueCount,
 					)
+				}
+
+				if outcome == declaration.OutcomeUnavailable {
+					state := readCompletionQueueState(
+						t,
+						fixture,
+					)
+					if state.consecutiveFailures != 1 ||
+						state.lastFailureCategory == nil ||
+						*state.lastFailureCategory !=
+							string(retry.CategoryDeclarationUnavailable) ||
+						state.nextAttemptAt == nil ||
+						!state.nextAttemptAt.Equal(state.availableAt) {
+						t.Errorf(
+							"unavailable retry state = %#v",
+							state,
+						)
+					}
 				}
 
 				if got := completionObservationCount(
