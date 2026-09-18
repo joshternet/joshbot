@@ -27,6 +27,9 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 - Shared per-origin request scheduling for robots retrieval, declaration
   verification, discovery pages, and redirects using the greater of the
   configured request delay and applicable robots `Crawl-delay`.
+- Cloudflare Web Bot Auth request-signing primitives using Ed25519 HTTP
+  Message Signatures, JWK-thumbprint key identifiers, short-lived signatures,
+  and per-request nonces.
 
 ### Fixed
 
