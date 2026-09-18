@@ -98,8 +98,15 @@ External origins are not followed as pages during the current source crawl.
 They become crawl-eligible only after independent verification, explicit
 operator curation, or admission by the enabled automatic expansion policy.
 
-Requests within one source crawl are sequential. The configured delay is
-applied between requests, not after the final request.
+Outbound robots-aware requests use a shared per-origin schedule. The effective
+delay for an origin is the greater of `JOSHBOT_CRAWL_REQUEST_DELAY` and the
+applicable robots `Crawl-delay`. Before an origin's robots policy is known, the
+configured request delay is used as the minimum for retrieving that policy.
+
+The same scheduling boundary covers robots retrieval, declaration
+verification, discovery pages, and redirect hops. Requests to different
+origins use independent schedules. Requests within one source crawl remain
+sequential.
 
 JoshBot parses supported response content for links. It does not run a browser,
 execute JavaScript, save screenshots, or render pages.
@@ -166,7 +173,7 @@ The runtime exposes these controls:
 | `JOSHBOT_CRAWL_MAX_DEPTH` | `4` | Deepest same-origin page depth, with the root at zero |
 | `JOSHBOT_CRAWL_MAX_PAGES` | `32` | Maximum frontier pages selected for guarded retrieval |
 | `JOSHBOT_CRAWL_MAX_PAGE_BYTES` | `1048576` | Maximum accepted page body size |
-| `JOSHBOT_CRAWL_REQUEST_DELAY` | `1s` | Delay between sequential page requests |
+| `JOSHBOT_CRAWL_REQUEST_DELAY` | `1s` | Minimum per-origin delay for robots, verification, and discovery requests |
 | `JOSHBOT_CRAWL_REDIRECT_LIMIT` | `5` | Maximum redirects for a page request |
 
 Additional discovery controls are:
@@ -193,6 +200,10 @@ private discovery evidence but are not promoted or probed automatically.
 
 Maximum pages, maximum page bytes, and redirect limit must be positive.
 Request delay may be zero.
+
+An applicable robots `Crawl-delay` may increase the effective per-origin delay
+but cannot reduce the configured minimum. Malformed applicable `Crawl-delay`
+values fail closed rather than silently disabling request spacing.
 
 Redirect hops for a selected page do not consume additional frontier-page
 slots.

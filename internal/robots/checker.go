@@ -35,25 +35,49 @@ type cacheEntry struct {
 	expiresAt time.Time
 }
 
-// Checker obtains, caches, and evaluates robots policies.
+// Checker obtains, caches, evaluates, and schedules robots-aware requests.
 type Checker struct {
-	mu     sync.Mutex
-	getter hopGetter
-	now    func() time.Time
-	cache  map[origin.Origin]cacheEntry
+	mu        sync.Mutex
+	getter    hopGetter
+	now       func() time.Time
+	cache     map[origin.Origin]cacheEntry
+	scheduler *originRequestScheduler
 }
 
 // NewChecker constructs a checker using guarded network access.
+//
+// The default constructor does not impose an operator minimum request delay.
+// Production runtimes that have JOSHBOT_CRAWL_REQUEST_DELAY configured should
+// use NewCheckerWithRequestDelay.
 func NewChecker(
 	resolver netguard.Resolver,
 	dialer netguard.Dialer,
 ) *Checker {
-	return newChecker(
+	return NewCheckerWithRequestDelay(
+		resolver,
+		dialer,
+		0,
+	)
+}
+
+// NewCheckerWithRequestDelay constructs a checker using guarded network access
+// and a minimum per-origin delay between outbound requests.
+//
+// An applicable robots Crawl-delay can increase this minimum but never reduce
+// it.
+func NewCheckerWithRequestDelay(
+	resolver netguard.Resolver,
+	dialer netguard.Dialer,
+	requestDelay time.Duration,
+) *Checker {
+	return newCheckerWithRequestDelay(
 		&guardedHTTP{
 			resolver: resolver,
 			dialer:   dialer,
 		},
 		time.Now,
+		requestDelay,
+		timerRequestDelayWaiter{},
 	)
 }
 
@@ -61,10 +85,39 @@ func newChecker(
 	getter hopGetter,
 	now func() time.Time,
 ) *Checker {
+	return newCheckerWithRequestDelay(
+		getter,
+		now,
+		0,
+		timerRequestDelayWaiter{},
+	)
+}
+
+func newCheckerWithRequestDelay(
+	getter hopGetter,
+	now func() time.Time,
+	requestDelay time.Duration,
+	waiter requestDelayWaiter,
+) *Checker {
+	scheduler := newOriginRequestScheduler(
+		now,
+		waiter,
+		requestDelay,
+	)
+
+	scheduledGetter := getter
+	if getter != nil {
+		scheduledGetter = scheduledHopGetter{
+			getter:    getter,
+			scheduler: scheduler,
+		}
+	}
+
 	return &Checker{
-		getter: getter,
-		now:    now,
-		cache:  make(map[origin.Origin]cacheEntry),
+		getter:    scheduledGetter,
+		now:       now,
+		cache:     make(map[origin.Origin]cacheEntry),
+		scheduler: scheduler,
 	}
 }
 
@@ -121,6 +174,20 @@ func (c *Checker) Allowed(
 		return false, fmt.Errorf("%w: %w", ErrTemporary, err)
 	}
 
+	crawlDelay, err := policy.CrawlDelay()
+	if err != nil {
+		return false, fmt.Errorf(
+			"%w: %w",
+			ErrTemporary,
+			err,
+		)
+	}
+
+	c.scheduler.setCrawlDelay(
+		initial,
+		crawlDelay,
+	)
+
 	c.cache[initial] = cacheEntry{
 		policy:    policy,
 		expiresAt: now.Add(maxCacheLifetime),
@@ -131,8 +198,8 @@ func (c *Checker) Allowed(
 
 // Get requests target only when the current robots policy permits it.
 //
-// Robots acquisition and the protected request use the same guarded HTTP
-// implementation and JoshBot User-Agent.
+// Robots acquisition and the protected request use the same guarded,
+// per-origin scheduled HTTP implementation and JoshBot User-Agent.
 func (c *Checker) Get(
 	ctx context.Context,
 	target *url.URL,
