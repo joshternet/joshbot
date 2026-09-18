@@ -221,6 +221,12 @@ func (operations runtimeOperations) discover(
 		return err
 	}
 
+	if err := validateWebBotAuthIdentity(
+		operations.getenv,
+	); err != nil {
+		return err
+	}
+
 	return operations.withDatabase(
 		ctx,
 		func(connection databaseConnection) (operationErr error) {

@@ -174,6 +174,7 @@ func testDocumentedArchitecture(t *testing.T) {
 		"internal/origin",
 		"internal/netguard",
 		"internal/robots",
+		"internal/webbotauth",
 		"internal/declaration",
 		"internal/store",
 		"internal/worker",

@@ -43,6 +43,7 @@ export JOSHBOT_REPORTER_PASSWORD_FILE="$secret_directory/joshbot_reporter_passwo
 export JOSHBOT_OPERATOR_PASSWORD_FILE="$secret_directory/joshbot_operator_password"
 export JOSHBOT_BACKUP_PASSWORD_FILE="$secret_directory/joshbot_backup_password"
 export JOSHBOT_GITHUB_TOKEN_FILE="$secret_directory/joshbot_github_token"
+export JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE="$secret_directory/joshbot_web_bot_auth_private_key"
 
 export JOSHBOT_PUBLISH_GITHUB_OWNER="joshternet"
 export JOSHBOT_PUBLISH_GITHUB_REPOSITORY="index-data"
@@ -478,6 +479,12 @@ create_secret "$JOSHBOT_APP_PASSWORD_FILE"
 create_secret "$JOSHBOT_REPORTER_PASSWORD_FILE"
 create_secret "$JOSHBOT_OPERATOR_PASSWORD_FILE"
 create_secret "$JOSHBOT_BACKUP_PASSWORD_FILE"
+
+openssl genpkey \
+  -algorithm Ed25519 \
+  -out "$JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE"
+
+chmod 0444 "$JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE"
 
 printf '%s\n' \
   'github-token-for-publication-boundary-test' \
