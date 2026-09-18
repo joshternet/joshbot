@@ -21,6 +21,9 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 - Shared durable retry policy for transient discovery and verification
   failures.
 - Service heartbeats and expanded crawl-run telemetry.
+- Robots policy parsing for `Crawl-delay` with JoshBot-over-wildcard
+  precedence, fractional-second support, repeated directives resolving to the
+  largest applicable value, and explicit invalid-value reporting.
 
 ### Fixed
 
