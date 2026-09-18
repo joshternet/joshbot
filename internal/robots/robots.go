@@ -2,13 +2,19 @@
 package robots
 
 import (
+	"errors"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
 // ProductToken is JoshBot's stable RFC 9309 product token.
 const ProductToken = "Joshternet-Joshbot"
+
+// ErrInvalidCrawlDelay reports an invalid applicable Crawl-delay directive.
+var ErrInvalidCrawlDelay = errors.New("robots: invalid crawl-delay")
 
 type rule struct {
 	pattern     string
@@ -17,14 +23,16 @@ type rule struct {
 }
 
 type group struct {
-	userAgents []string
-	rules      []rule
-	hasRules   bool
+	userAgents    []string
+	rules         []rule
+	crawlDelays   []string
+	hasDirectives bool
 }
 
 // Policy is the robots exclusion policy applicable to JoshBot.
 type Policy struct {
-	rules []rule
+	rules       []rule
+	crawlDelays []string
 }
 
 // Parse interprets robots exclusion rules applicable to JoshBot.
@@ -32,7 +40,9 @@ func Parse(data []byte) Policy {
 	groups := parseGroups(data)
 
 	var exactRules []rule
+	var exactCrawlDelays []string
 	var wildcardRules []rule
+	var wildcardCrawlDelays []string
 	exactMatched := false
 
 	for _, candidate := range groups {
@@ -51,19 +61,33 @@ func Parse(data []byte) Policy {
 		if exact {
 			exactMatched = true
 			exactRules = append(exactRules, candidate.rules...)
+			exactCrawlDelays = append(
+				exactCrawlDelays,
+				candidate.crawlDelays...,
+			)
 		} else if wildcard {
 			wildcardRules = append(
 				wildcardRules,
 				candidate.rules...,
 			)
+			wildcardCrawlDelays = append(
+				wildcardCrawlDelays,
+				candidate.crawlDelays...,
+			)
 		}
 	}
 
 	if exactMatched {
-		return Policy{rules: exactRules}
+		return Policy{
+			rules:       exactRules,
+			crawlDelays: exactCrawlDelays,
+		}
 	}
 
-	return Policy{rules: wildcardRules}
+	return Policy{
+		rules:       wildcardRules,
+		crawlDelays: wildcardCrawlDelays,
+	}
 }
 
 func parseGroups(data []byte) []group {
@@ -79,7 +103,7 @@ func parseGroups(data []byte) []group {
 		switch {
 		case strings.EqualFold(field, "user-agent"):
 			if validProductToken(value) {
-				if current == nil || current.hasRules {
+				if current == nil || current.hasDirectives {
 					groups = append(groups, group{})
 					current = &groups[len(groups)-1]
 				}
@@ -92,7 +116,7 @@ func parseGroups(data []byte) []group {
 		case strings.EqualFold(field, "allow") ||
 			strings.EqualFold(field, "disallow"):
 			if current != nil {
-				current.hasRules = true
+				current.hasDirectives = true
 
 				parsedRule, valid := makeRule(
 					strings.EqualFold(field, "allow"),
@@ -104,6 +128,14 @@ func parseGroups(data []byte) []group {
 						parsedRule,
 					)
 				}
+			}
+		case strings.EqualFold(field, "crawl-delay"):
+			if current != nil {
+				current.hasDirectives = true
+				current.crawlDelays = append(
+					current.crawlDelays,
+					value,
+				)
 			}
 		}
 	}
@@ -175,6 +207,92 @@ func validProductToken(token string) bool {
 	}
 
 	return token != ""
+}
+
+// CrawlDelay reports the crawl delay applicable to JoshBot.
+//
+// A nil error means every applicable Crawl-delay directive was valid. Zero
+// means either no applicable delay was present or the applicable delay
+// resolves to zero. Malformed applicable directives return
+// ErrInvalidCrawlDelay instead of being treated as zero.
+func (p Policy) CrawlDelay() (time.Duration, error) {
+	var delay time.Duration
+
+	for _, value := range p.crawlDelays {
+		parsed, err := parseCrawlDelay(value)
+		if err != nil {
+			return 0, err
+		}
+
+		if parsed > delay {
+			delay = parsed
+		}
+	}
+
+	return delay, nil
+}
+
+// parseCrawlDelay accepts non-negative decimal seconds with an optional
+// fractional component precise to nanoseconds. Go duration syntax, signs,
+// exponents, and values that cannot fit in time.Duration are rejected.
+func parseCrawlDelay(value string) (time.Duration, error) {
+	secondsValue, fractionalValue, hasFraction := strings.Cut(value, ".")
+
+	if secondsValue == "" || !decimalDigits(secondsValue) {
+		return 0, ErrInvalidCrawlDelay
+	}
+
+	if hasFraction {
+		if fractionalValue == "" ||
+			len(fractionalValue) > 9 ||
+			!decimalDigits(fractionalValue) {
+			return 0, ErrInvalidCrawlDelay
+		}
+	}
+
+	seconds, err := strconv.ParseUint(secondsValue, 10, 64)
+	if err != nil {
+		return 0, ErrInvalidCrawlDelay
+	}
+
+	const maxDurationNanoseconds = uint64(1<<63 - 1)
+	const nanosecondsPerSecond = uint64(time.Second)
+
+	if seconds > maxDurationNanoseconds/nanosecondsPerSecond {
+		return 0, ErrInvalidCrawlDelay
+	}
+
+	totalNanoseconds := seconds * nanosecondsPerSecond
+
+	if hasFraction {
+		var fractionalNanoseconds uint64
+		for index := 0; index < len(fractionalValue); index++ {
+			fractionalNanoseconds = fractionalNanoseconds*10 +
+				uint64(fractionalValue[index]-'0')
+		}
+		for digits := len(fractionalValue); digits < 9; digits++ {
+			fractionalNanoseconds *= 10
+		}
+
+		if fractionalNanoseconds >
+			maxDurationNanoseconds-totalNanoseconds {
+			return 0, ErrInvalidCrawlDelay
+		}
+
+		totalNanoseconds += fractionalNanoseconds
+	}
+
+	return time.Duration(totalNanoseconds), nil
+}
+
+func decimalDigits(value string) bool {
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+
+	return true
 }
 
 // Allowed reports whether target is allowed by the policy.

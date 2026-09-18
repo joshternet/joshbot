@@ -235,7 +235,6 @@ func TestParseUsesParseableRecords(t *testing.T) {
 				"User-agent: Joshternet-Joshbot\n" +
 					"Disallow: /before\n" +
 					"Sitemap: https://example.com/sitemap.xml\n" +
-					"Crawl-delay: 10\n" +
 					"Host: example.com\n" +
 					"Something-Else: value\n" +
 					"Disallow: /after\n",
