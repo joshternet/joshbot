@@ -29,6 +29,8 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 - Deployment smoke cleanup tears down the reporting and control Compose
   profiles so disposable containers and the smoke application image are
   removed.
+- Retry migration constraint checks look up definitions in the current
+  test schema so parallel schema teardown cannot yield stale OIDs.
 
 ## [1.0.0] - 2026-09-05
 

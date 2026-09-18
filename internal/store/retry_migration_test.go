@@ -19,9 +19,11 @@ func TestRetryMigrationRejectsUnknownCategoriesAndDivergentQueueDueTime(t *testi
 	} {
 		var definition string
 		if err := pool.QueryRow(ctx, `
-			SELECT pg_get_constraintdef(oid)
-			FROM pg_constraint
-			WHERE conname = $1
+			SELECT pg_get_constraintdef(c.oid)
+			FROM pg_constraint AS c
+			JOIN pg_namespace AS n ON n.oid = c.connamespace
+			WHERE c.conname = $1
+				AND n.nspname = current_schema()
 		`, constraint).Scan(&definition); err != nil {
 			t.Fatal(err)
 		}
