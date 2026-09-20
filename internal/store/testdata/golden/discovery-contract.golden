@@ -1,0 +1,38 @@
+=== automatic defaults ===
+pending=1000
+promotions=100
+
+=== exclusion patterns ===
+pattern=example.com
+pattern=blogspot.*
+pattern=foo.test
+
+=== exclusion syntax ===
+""=true
+"example.com"=true
+"example.com,blogspot.*"=true
+"Example.com"=false
+".example.com"=false
+"example.com."=false
+"*"=false
+"blogspot.*.example"=false
+
+=== exclusion matching ===
+example.com=true
+www.example.com=true
+other.test=false
+blogspot.com=true
+foo.blogspot.co.uk=true
+
+=== discovery kinds ===
+1="link",true
+2="redirect",true
+255="",false
+
+=== admission order ===
+https://example.com link
+https://example.org redirect
+
+=== discovery order ===
+https://example.com link
+https://example.org redirect

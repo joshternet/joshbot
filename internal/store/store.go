@@ -1,4 +1,3 @@
-// Package store persists declaration verification observations.
 package store
 
 import (
@@ -9,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joshternet/joshbot/internal/database"
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/retry"
@@ -68,7 +68,7 @@ type OriginState struct {
 // Normal operation needs SELECT, INSERT, and UPDATE privileges. Schema
 // migrations are intentionally separate and require their own DDL privileges.
 type Store struct {
-	pool *pgxpool.Pool
+	pool database.Postgres
 }
 
 var outcomeToText = map[declaration.Outcome]string{
@@ -105,6 +105,16 @@ var identityFromText = map[string]declaration.Identity{
 
 // New constructs a store using a caller-owned PostgreSQL pool.
 func New(pool *pgxpool.Pool) *Store {
+	if pool == nil {
+		return newStore(nil)
+	}
+
+	return newStore(pool)
+}
+
+func newStore(
+	pool database.Postgres,
+) *Store {
 	return &Store{
 		pool: pool,
 	}

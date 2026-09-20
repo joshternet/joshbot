@@ -107,6 +107,15 @@ Joshternet-Joshbot (+https://joshternet.org/joshbot)
 It retrieves and evaluates `robots.txt`, applies the selected JoshBot policy,
 bounds response bodies, and wraps guarded HTTP access.
 
+This package is also the shared outbound HTTP boundary for crawler web traffic.
+Robots retrieval, declaration verification, discovery page requests, and their
+redirect hops all pass through the same guarded request path.
+
+The stable JoshBot User-Agent is applied before the optional Web Bot Auth
+signer runs. Each request is signed immediately before it is sent. Redirects
+are handled as new requests, so a redirect to another authority gets a new
+signature for the authority JoshBot is actually contacting.
+
 Robots permission answers whether JoshBot may retrieve a URI. It does not
 decide whether an origin is a Joshternet participant.
 
@@ -119,6 +128,11 @@ The private key is loaded from an external PKCS#8 PEM secret file by the
 runtime. The package derives the public Ed25519 key, exposes only the public
 OKP JWK members `crv`, `kty`, and `x`, and calculates the SHA-256 JWK
 thumbprint used as the Web Bot Auth key identifier.
+
+Worker and discovery runtimes load the same configured signing identity and
+pass its signer into the shared crawler HTTP boundary. This keeps the crawler
+User-Agent and Web Bot Auth identity together instead of giving each crawler
+feature its own signing path.
 
 Private key material is not exposed through the public JWK, normal formatting,
 structured logging, or validation errors. Worker and discovery startup validate
@@ -246,6 +260,30 @@ The publisher:
 - avoids a commit when the tree is unchanged.
 
 The publisher receives no PostgreSQL configuration.
+
+GitHub publication is intentionally outside the crawler Web Bot Auth boundary.
+It is not web discovery or verification traffic. It talks only to the GitHub
+API and authenticates with its dedicated GitHub bearer token. JoshBot does not
+attach its Web Bot Auth identity to these requests.
+
+Keeping this separate prevents crawler credentials from being sent to GitHub
+and keeps publication authentication independent from crawler identity.
+
+## Outbound HTTP boundary
+
+JoshBot has two approved production outbound HTTP paths.
+
+Crawler web traffic uses `internal/robots/http.go`. This is the shared boundary
+for requests made while crawling or verifying the web. It owns guarded network
+access, the JoshBot User-Agent, Web Bot Auth signing, and redirect handling.
+
+GitHub publication uses `internal/githubpublish/publisher.go`. It is an
+intentional exception because it is a dedicated GitHub API client with its own
+authentication and security boundary.
+
+Production code should not create another raw outbound HTTP client without an
+explicit architecture decision. The repository test suite enforces these two
+approved paths so a new client cannot quietly bypass the crawler boundary.
 
 ## PostgreSQL execution model
 

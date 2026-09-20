@@ -250,7 +250,7 @@ func TestIdentityFormattingAndErrorsDoNotLeakPrivateMaterial(
 	}
 
 	marshaled, err := json.Marshal(
-		identity,
+		map[string]any{"identity": identity},
 	)
 	if err != nil {
 		t.Fatal(err)

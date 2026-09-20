@@ -79,7 +79,14 @@ func (sink runtimeCandidateSink) RecordCandidatesForRun(
 	if !ok {
 		return sink.RecordCandidates(ctx, source, candidates)
 	}
-	_, err := runStore.RecordDiscoveryForRun(ctx, runID, source, candidates)
+
+	_, err := runStore.RecordDiscoveryForRun(
+		ctx,
+		runID,
+		source,
+		candidates,
+	)
+
 	return err
 }
 
@@ -113,14 +120,29 @@ func (sink runtimeCandidateSink) FinalizeCandidates(
 	if !ok {
 		return nil
 	}
-	pending, err := admissionStore.PendingAutomaticCandidates(ctx, runID)
+
+	pending, err := admissionStore.PendingAutomaticCandidates(
+		ctx,
+		runID,
+	)
 	if err != nil {
 		return err
 	}
-	decisions := make([]store.AutomaticCandidateResult, 0, len(pending))
-	eligible := make([]discovery.Candidate, 0, len(pending))
+
+	decisions := make(
+		[]store.AutomaticCandidateResult,
+		0,
+		len(pending),
+	)
+	eligible := make(
+		[]discovery.Candidate,
+		0,
+		len(pending),
+	)
+
 	for _, candidate := range pending {
 		category := retry.CategoryNone
+
 		for range retry.MaxAttemptsPerCycle {
 			_, resolveErr := netguard.Resolve(
 				ctx,
@@ -129,25 +151,73 @@ func (sink runtimeCandidateSink) FinalizeCandidates(
 			)
 			if resolveErr == nil {
 				category = retry.CategoryNone
+
 				break
 			}
-			category = netguard.FailureCategory(resolveErr)
+
+			category = netguard.FailureCategory(
+				resolveErr,
+			)
 			if !category.Transient() {
 				break
 			}
 		}
-		decisions = append(decisions, store.AutomaticCandidateResult{
-			Candidate:       candidate,
-			FailureCategory: category,
-		})
+
+		decisions = append(
+			decisions,
+			store.AutomaticCandidateResult{
+				Candidate:       candidate,
+				FailureCategory: category,
+			},
+		)
+
 		if category == retry.CategoryNone {
-			eligible = append(eligible, candidate)
+			eligible = append(
+				eligible,
+				candidate,
+			)
 		}
 	}
-	if retryingStore, ok := sink.store.(retryingAutomaticCandidateStore); ok {
-		return retryingStore.CompleteAutomaticCandidates(ctx, runID, decisions)
+
+	if retryingStore, ok :=
+		sink.store.(retryingAutomaticCandidateStore); ok {
+		return retryingStore.CompleteAutomaticCandidates(
+			ctx,
+			runID,
+			decisions,
+		)
 	}
-	return admissionStore.AdmitAutomaticCandidates(ctx, runID, eligible)
+
+	return admissionStore.AdmitAutomaticCandidates(
+		ctx,
+		runID,
+		eligible,
+	)
+}
+
+type discoveryRuntimeStore interface {
+	discoveryCandidateStore
+	discovery.CrawlSourceStore
+	discovery.CrawlTelemetry
+
+	ReconcileAutomaticCrawlPolicy(
+		context.Context,
+	) (int, error)
+}
+
+type discoveryRuntimeStoreFactory func(
+	*pgxpool.Pool,
+	store.AutomaticCrawlConfig,
+) (discoveryRuntimeStore, error)
+
+func newRuntimeDiscoveryStore(
+	pool *pgxpool.Pool,
+	config store.AutomaticCrawlConfig,
+) (discoveryRuntimeStore, error) {
+	return store.NewDiscoveryStoreWithAutomaticCrawling(
+		pool,
+		config,
+	)
 }
 
 func newDiscoveryRuntime(
@@ -155,28 +225,45 @@ func newDiscoveryRuntime(
 	pool *pgxpool.Pool,
 	settings crawlRuntimeSettings,
 ) (discoveryRunner, error) {
-	discoveryStore, err :=
-		store.NewDiscoveryStoreWithAutomaticCrawling(
-			pool,
-			settings.automatic,
-		)
+	return newDiscoveryRuntimeWithStoreFactory(
+		ctx,
+		pool,
+		settings,
+		newRuntimeDiscoveryStore,
+	)
+}
+
+func newDiscoveryRuntimeWithStoreFactory(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	settings crawlRuntimeSettings,
+	newStore discoveryRuntimeStoreFactory,
+) (discoveryRunner, error) {
+	discoveryStore, err := newStore(
+		pool,
+		settings.automatic,
+	)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"construct discovery store: %w",
 			err,
 		)
 	}
-	if _, err := discoveryStore.ReconcileAutomaticCrawlPolicy(ctx); err != nil {
+
+	if _, err := discoveryStore.ReconcileAutomaticCrawlPolicy(
+		ctx,
+	); err != nil {
 		return nil, fmt.Errorf(
 			"reconcile automatic crawl policy: %w",
 			err,
 		)
 	}
 
-	checker := robots.NewCheckerWithRequestDelay(
+	checker := robots.NewCheckerWithRequestDelayAndSigner(
 		net.DefaultResolver,
 		&net.Dialer{},
 		settings.crawl.RequestDelay,
+		settings.signer,
 	)
 
 	crawler, err := discovery.NewMultiPageCrawlerWithTelemetry(
@@ -221,63 +308,100 @@ func (operations runtimeOperations) discover(
 		return err
 	}
 
-	if err := validateWebBotAuthIdentity(
+	signer, err := loadWebBotAuthSigner(
 		operations.getenv,
-	); err != nil {
+	)
+	if err != nil {
 		return err
 	}
+	settings.signer = signer
 
 	return operations.withDatabase(
 		ctx,
 		func(connection databaseConnection) (operationErr error) {
 			var heartbeat *serviceHeartbeat
-			if operations.newHeartbeatStore != nil && ctx.Err() == nil {
-				heartbeatStorage, err := operations.newHeartbeatStore(connection.Pool())
+
+			if operations.newHeartbeatStore != nil &&
+				ctx.Err() == nil {
+				heartbeatStorage, err :=
+					operations.newHeartbeatStore(
+						connection.Pool(),
+					)
 				if err != nil {
-					return fmt.Errorf("construct discovery heartbeat store: %w", err)
+					return fmt.Errorf(
+						"construct discovery heartbeat store: %w",
+						err,
+					)
 				}
+
 				if _, err := heartbeatStorage.PurgeCrawlTelemetry(
 					ctx,
 					settings.telemetryRetention,
 				); err != nil {
-					return fmt.Errorf("purge crawl telemetry: %w", err)
+					return fmt.Errorf(
+						"purge crawl telemetry: %w",
+						err,
+					)
 				}
-				instanceID := os.Getenv("HOSTNAME")
+
+				instanceID := os.Getenv(
+					"HOSTNAME",
+				)
 				if instanceID == "" {
 					instanceID = "discovery"
 				}
-				heartbeat, err = startServiceHeartbeatWithReporter(
-					ctx, heartbeatStorage, "discovery", instanceID,
-					serviceHeartbeatInterval,
-					heartbeatErrorReporter(operations.logger),
-				)
+
+				heartbeat, err =
+					startServiceHeartbeatWithReporter(
+						ctx,
+						heartbeatStorage,
+						"discovery",
+						instanceID,
+						serviceHeartbeatInterval,
+						heartbeatErrorReporter(
+							operations.logger,
+						),
+					)
 				if err != nil {
 					return err
 				}
+
 				defer func() {
 					state := "stopping"
-					if operationErr != nil && ctx.Err() == nil {
+
+					if operationErr != nil &&
+						ctx.Err() == nil {
 						state = "failed"
 					}
+
 					operationErr = errors.Join(
 						operationErr,
-						heartbeat.stop(ctx, state),
+						heartbeat.stop(
+							ctx,
+							state,
+						),
 					)
 				}()
 			}
 
-			runner, err := operations.newDiscoveryRunner(
-				ctx,
-				connection.Pool(),
-				settings,
-			)
+			runner, err :=
+				operations.newDiscoveryRunner(
+					ctx,
+					connection.Pool(),
+					settings,
+				)
 			if err != nil {
 				return err
 			}
+
 			if observed, ok := runner.(interface {
-				SetLifecycleObserver(discovery.LifecycleObserver)
+				SetLifecycleObserver(
+					discovery.LifecycleObserver,
+				)
 			}); ok && heartbeat != nil {
-				observed.SetLifecycleObserver(heartbeat)
+				observed.SetLifecycleObserver(
+					heartbeat,
+				)
 			}
 
 			return executeDiscovery(
@@ -290,8 +414,12 @@ func (operations runtimeOperations) discover(
 	)
 }
 
-func newRuntimeHeartbeatStore(pool *pgxpool.Pool) (heartbeatStore, error) {
-	return store.NewDiscoveryStore(pool)
+func newRuntimeHeartbeatStore(
+	pool *pgxpool.Pool,
+) (heartbeatStore, error) {
+	return store.NewDiscoveryStore(
+		pool,
+	)
 }
 
 func executeDiscovery(
@@ -309,7 +437,9 @@ func executeDiscovery(
 	}
 
 	if once {
-		_, err := runner.RunOnce(ctx)
+		_, err := runner.RunOnce(
+			ctx,
+		)
 		if err != nil {
 			return fmt.Errorf(
 				"run one discovery attempt: %w",
@@ -320,18 +450,29 @@ func executeDiscovery(
 		return nil
 	}
 
-	logger.Info("discovery started")
+	logger.Info(
+		"discovery started",
+	)
 
-	err := runner.Run(ctx)
+	err := runner.Run(
+		ctx,
+	)
 	if err == nil {
-		logger.Info("discovery stopped")
+		logger.Info(
+			"discovery stopped",
+		)
 
 		return nil
 	}
 
 	if contextErr := ctx.Err(); contextErr != nil &&
-		errors.Is(err, contextErr) {
-		logger.Info("discovery stopped")
+		errors.Is(
+			err,
+			contextErr,
+		) {
+		logger.Info(
+			"discovery stopped",
+		)
 
 		return nil
 	}

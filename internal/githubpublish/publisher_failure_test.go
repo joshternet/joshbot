@@ -2,9 +2,7 @@ package githubpublish
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"testing"
 
@@ -727,21 +725,4 @@ func (reader *testFailingReadCloser) Read(
 
 func (reader *testFailingReadCloser) Close() error {
 	return nil
-}
-
-func decodeFailureTestJSON(
-	t *testing.T,
-	reader io.Reader,
-	output any,
-) {
-	t.Helper()
-
-	if err := json.NewDecoder(reader).Decode(
-		output,
-	); err != nil {
-		t.Errorf(
-			"decode test JSON: %v",
-			err,
-		)
-	}
 }

@@ -1,0 +1,62 @@
+=== promotion budget ===
+explicit=7
+default=100
+automatic-config=23
+
+=== telemetry config ===
+valid=true
+zero-redirect-limit=true
+negative-redirect-limit=false
+
+=== stored page URLs ===
+https://example.com/path=true
+http://example.com/path=true
+https://example.com/?secret=yes=false
+https://example.com/#fragment=false
+https://user@example.com/=false
+ftp://example.com/file=false
+/relative=false
+
+=== robots decisions ===
+allowed=true
+denied=true
+unknown=true
+invalid=false
+
+=== page outcomes ===
+complete=true
+redirected=true
+robots_denied=true
+unsupported_content=true
+too_large=true
+http_error=true
+timeout=true
+network_error=true
+invalid_response=true
+invalid=false
+
+=== run outcomes ===
+complete=true
+budget_exhausted=true
+canceled=true
+failed=true
+invalid=false
+
+=== status codes ===
+nil=true
+100=true
+599=true
+99=false
+600=false
+
+=== failure category storage ===
+none=none
+dns=dns
+
+=== page attempt ===
+valid=true
+query-bearing-url=false
+
+=== heartbeat ===
+valid=true
+unknown-state=false

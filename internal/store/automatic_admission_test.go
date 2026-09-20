@@ -137,8 +137,7 @@ func TestAutomaticAdmissionTransientFailurePersistsAcrossStoreRestart(t *testing
 	}); err != nil {
 		t.Fatal(err)
 	}
-	pending, err := first.PendingAutomaticCandidates(ctx, runID)
-	if err != nil {
+	if _, err := first.PendingAutomaticCandidates(ctx, runID); err != nil {
 		t.Fatal(err)
 	}
 	if err := first.CompleteAutomaticCandidates(ctx, runID, []AutomaticCandidateResult{
@@ -184,7 +183,7 @@ func TestAutomaticAdmissionTransientFailurePersistsAcrossStoreRestart(t *testing
 		t.Fatalf("early pending = %#v, %v", pending, err)
 	}
 	restarted.clock = staticDiscoveryClock{now: now.Add(5 * time.Minute)}
-	pending, err = restarted.PendingAutomaticCandidates(ctx, secondRun)
+	pending, err := restarted.PendingAutomaticCandidates(ctx, secondRun)
 	if err != nil || !reflect.DeepEqual(pending, []discovery.Candidate{{
 		Origin: candidate, Kind: discovery.KindLink,
 	}}) {

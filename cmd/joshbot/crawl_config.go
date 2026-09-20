@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/joshternet/joshbot/internal/discovery"
+	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 )
 
@@ -38,6 +39,7 @@ type crawlRuntimeSettings struct {
 	crawl              discovery.CrawlConfig
 	automatic          store.AutomaticCrawlConfig
 	telemetryRetention time.Duration
+	signer             robots.RequestSigner
 }
 
 func loadCrawlRuntimeSettings(

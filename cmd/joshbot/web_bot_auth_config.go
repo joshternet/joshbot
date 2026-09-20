@@ -13,7 +13,7 @@ const webBotAuthPrivateKeyFileEnvironment = "JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FI
 
 var (
 	errInvalidWebBotAuthConfiguration = errors.New(
-		"Web Bot Auth configuration is invalid",
+		"web bot auth configuration is invalid",
 	)
 
 	errOpenWebBotAuthPrivateKeyFile = errors.New(
@@ -21,7 +21,7 @@ var (
 	)
 
 	errInvalidWebBotAuthPrivateKey = errors.New(
-		"Web Bot Auth private key is invalid",
+		"web bot auth private key is invalid",
 	)
 )
 
@@ -52,10 +52,27 @@ func loadWebBotAuthIdentity(
 	return readWebBotAuthIdentityFile(path)
 }
 
+func loadWebBotAuthSigner(
+	getenv environmentGetter,
+) (*webbotauth.Signer, error) {
+	identity, err := loadWebBotAuthIdentity(
+		getenv,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if identity == nil {
+		return nil, nil
+	}
+
+	return identity.Signer()
+}
+
 func validateWebBotAuthIdentity(
 	getenv environmentGetter,
 ) error {
-	_, err := loadWebBotAuthIdentity(
+	_, err := loadWebBotAuthSigner(
 		getenv,
 	)
 
