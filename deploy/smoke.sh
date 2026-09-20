@@ -69,7 +69,8 @@ export JOSHBOT_OPERATOR_PASSWORD_FILE="$smoke_root/secrets/joshbot_operator_pass
 export JOSHBOT_BACKUP_PASSWORD_FILE="$smoke_root/secrets/joshbot_backup_password"
 export JOSHBOT_REPORT_TOKEN_FILE="$smoke_root/secrets/joshbot_report_token"
 export JOSHBOT_OPERATOR_TOKEN_FILE="$smoke_root/secrets/joshbot_operator_token"
-export JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE="$smoke_root/secrets/joshbot_web_bot_auth_private_key"
+export JOSHBOT_WEB_BOT_AUTH_MODE=required
+export JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE="$smoke_root/secrets/joshbot_web_bot_auth_active_private_key"
 
 export JOSHBOT_WORKER_ID="smoke-worker-$smoke_token"
 export JOSHBOT_LEASE_DURATION="5m"
@@ -457,10 +458,10 @@ create_secret "$restore_password_file"
 
 openssl genpkey \
   -algorithm Ed25519 \
-  -out "$JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE"
+  -out "$JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE"
 
 chmod 0444 \
-  "$JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE"
+  "$JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE"
 
 mkdir -p "$expected_root/nodes/10"
 
@@ -579,13 +580,30 @@ discovery_environment="$(
     --format '{{range .Config.Env}}{{println .}}{{end}}'
 )"
 
+worker_environment="$(
+  docker inspect \
+    "$worker_container" \
+    --format '{{range .Config.Env}}{{println .}}{{end}}'
+)"
+
+for expected_setting in \
+  'JOSHBOT_WEB_BOT_AUTH_MODE=required' \
+  'JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE=/run/secrets/joshbot_web_bot_auth_active_private_key'; do
+  if ! grep -Fxq \
+    "$expected_setting" \
+    <<<"$worker_environment"; then
+    fail "worker environment is missing $expected_setting"
+  fi
+done
+
 for expected_setting in \
   'JOSHBOT_CRAWL_MAX_DEPTH=2' \
   'JOSHBOT_CRAWL_MAX_PAGES=8' \
   'JOSHBOT_CRAWL_MAX_PAGE_BYTES=65536' \
   'JOSHBOT_CRAWL_REQUEST_DELAY=0s' \
   'JOSHBOT_CRAWL_REDIRECT_LIMIT=3' \
-  'JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE=/run/secrets/joshbot_web_bot_auth_private_key'; do
+  'JOSHBOT_WEB_BOT_AUTH_MODE=required' \
+  'JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE=/run/secrets/joshbot_web_bot_auth_active_private_key'; do
   if ! grep -Fxq \
     "$expected_setting" \
     <<<"$discovery_environment"; then
@@ -602,11 +620,10 @@ fi
 pass "discovery received the explicit smoke crawl budget without publication credentials"
 
 compose \
-  --profile tools \
   run \
   --rm \
   --no-deps \
-  tools \
+  discovery \
   discover \
   --once
 
@@ -1335,7 +1352,7 @@ assert_equal \
 expected_crawler_mounts="$(
   printf '%s\n' \
     '/run/secrets/joshbot_app_password' \
-    '/run/secrets/joshbot_web_bot_auth_private_key' |
+    '/run/secrets/joshbot_web_bot_auth_active_private_key' |
     sort
 )"
 

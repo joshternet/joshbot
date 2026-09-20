@@ -85,14 +85,17 @@ Compose file is upgraded.
 ## Network and credential separation
 
 - `worker` and `discovery` receive the internal database network and egress.
-- `worker` and `discovery` receive the dedicated Web Bot Auth Ed25519 private
-  key through an individually mounted secret file.
+- `worker` and `discovery` receive the dedicated Web Bot Auth Ed25519 active
+  private key through an individually mounted secret file.
 - No other service receives the Web Bot Auth private key.
 - `report` receives the internal database network and the private reporting
   network. It receives no general egress network.
 - `control` receives the internal database network and its private control
   network. It receives no general egress network.
 - `tools` receives the database network and writable export storage.
+- The `tools` service does not receive the Web Bot Auth private key. Use the
+  `worker` or `discovery` services for crawler commands that require outbound
+  Web Bot Auth signing.
 - `publisher` receives egress, a read-only export mount, and the GitHub token.
 - `migrate`, `postgres`, `backup`, and `restore` receive the database network.
 - Database services never receive the GitHub token.
@@ -229,7 +232,8 @@ Replace example paths and the publication target.
 
 `deploy/.env` is ignored by Git. Passwords, bearer-token values, the Web Bot
 Auth private key itself, and the GitHub token do not belong inside it. The
-environment file contains only the path to the Web Bot Auth private-key file.
+environment file contains only the Web Bot Auth mode and the path to the
+active private-key file (plus an optional transition path during rotation).
 
 Review worker timing:
 
@@ -362,19 +366,42 @@ first becomes active.
 
 ## Web Bot Auth signing identity
 
-JoshBot uses a dedicated Ed25519 key for Web Bot Auth. Do not reuse another
-Joshternet Ed25519 key.
+JoshBot uses a dedicated Ed25519 key for Cloudflare Web Bot Auth / BotBase
+Request Signature identity. Do not reuse another Joshternet Ed25519 key.
 
-The configured environment value is the host path to the private-key file:
+Production Compose always sets fail-closed mode and the active key path:
 
 ```dotenv
-JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE=/srv/joshbot/secrets/joshbot_web_bot_auth_private_key
+JOSHBOT_WEB_BOT_AUTH_MODE=required
+JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE=/srv/joshbot/secrets/joshbot_web_bot_auth_active_private_key
 ```
 
-The file contains one unencrypted PKCS#8 PEM `PRIVATE KEY` block. JoshBot
-derives the public Ed25519 key from the private key, generates the public OKP
-JWK, and calculates the RFC 7638 SHA-256 JWK thumbprint used as the Web Bot
-Auth key identifier.
+`JOSHBOT_WEB_BOT_AUTH_MODE` must be `required` or `unsigned`. Empty mode
+defaults to `required`. Use `unsigned` only for deliberate local development
+or tests; it disables authenticated crawler identity even if key files exist
+in the environment. Never set `unsigned` in production Compose.
+
+Only the active identity signs crawler requests. During an intentional key
+rotation, an optional transition private key may also be configured:
+
+```dotenv
+JOSHBOT_WEB_BOT_AUTH_TRANSITION_PRIVATE_KEY_FILE=/srv/joshbot/secrets/joshbot_web_bot_auth_transition_private_key
+```
+
+The transition identity is validated at startup (including rejecting a
+duplicate thumbprint with the active identity) and is never used to sign
+outbound crawler requests. Leave the transition variable unset when no
+rotation is underway.
+
+For one release, `JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE` remains accepted as a
+legacy alias for the active path when
+`JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE` is unset. Setting both is a
+startup error.
+
+Each private-key file contains one unencrypted PKCS#8 PEM `PRIVATE KEY`
+block. JoshBot derives the public Ed25519 key, generates the public OKP JWK,
+and calculates the RFC 7638 SHA-256 JWK thumbprint used as the Web Bot Auth
+`keyid`.
 
 The public JWK contains only:
 
@@ -386,13 +413,94 @@ The public JWK contains only:
 }
 ```
 
-The private `d` member must never be published, logged, placed in configuration
-output, committed to the repository, or copied into the public JWK.
+The private `d` member must never be published, logged, placed in
+configuration output, committed to the repository, or copied into the public
+JWK.
 
-Worker and discovery startup validate the configured signing identity before
-opening their crawler runtime. Invalid PKCS#8, a non-Ed25519 key, inconsistent
-Ed25519 private/public material, or another invalid signing identity causes
-startup to fail instead of deferring the error until the first web request.
+Worker and discovery startup validate required Web Bot Auth configuration
+before opening their crawler runtime. Missing active key, unreadable file,
+invalid PKCS#8, a non-Ed25519 key, inconsistent Ed25519 material, duplicate
+active/transition identities, or signer construction failure causes startup
+to fail. A request-signing failure aborts that request; JoshBot does not
+retry the same request unsigned.
+
+The public signature directory is served separately at:
+
+```text
+https://joshternet.org/.well-known/http-message-signatures-directory
+```
+
+Cloudflare accepts all valid Ed25519 keys published in that directory.
+JoshBot's `Signature-Agent` points at that URL on every signed crawler
+request.
+
+### BotBase meet-or-exceed checklist
+
+Before submitting JoshBot to Cloudflare BotBase as a Direct bot with
+Verification Method Request Signature:
+
+- Directory URL:
+  `https://joshternet.org/.well-known/http-message-signatures-directory`
+- Stable User-Agent:
+  `Joshternet-Joshbot (+https://joshternet.org/joshbot)`
+- Production `JOSHBOT_WEB_BOT_AUTH_MODE=required`
+- Active signing `keyid` always matches a public JWK currently published in
+  the directory
+- Robots and Crawl-delay enforcement remain enabled on the shared crawler
+  HTTP boundary
+- Disclosed purpose matches traffic: Joshternet participant discovery and
+  verification, not model training
+
+### Signing-key rotation runbook
+
+Rotate without taking authenticated crawler identity offline. Never switch
+JoshBot to a new active key before that public key is live in the directory.
+Never remove the old public key from the directory while production may still
+need it for verification or rollback.
+
+Steady state uses one key, called **A** below. The replacement key is **B**.
+
+1. Generate and install the new Ed25519 private key **B** on the host (same
+   OpenSSL and permission pattern as the active key). Do not commit the PEM.
+2. Install **B** as the signature-directory Worker transition secret
+   (`WEB_BOT_AUTH_TRANSITION_PRIVATE_KEY_PEM`) while the directory active
+   secret remains **A**. Deploy the Worker.
+3. Verify the live directory publishes both public JWKs and that both
+   directory signatures validate (Worker verifier /
+   `http-signature-directory`).
+4. Configure JoshBot so the active signer is **B** and, optionally, the
+   transition identity is **A** for rollback readiness. Mount the transition
+   secret only into `worker` and `discovery` if used. Example Compose
+   additions during rotation:
+
+   ```yaml
+   # worker and discovery environment
+   JOSHBOT_WEB_BOT_AUTH_TRANSITION_PRIVATE_KEY_FILE: /run/secrets/joshbot_web_bot_auth_transition_private_key
+
+   # worker and discovery secrets list
+   - joshbot_web_bot_auth_transition_private_key
+
+   # top-level secrets
+   joshbot_web_bot_auth_transition_private_key:
+     file: ${JOSHBOT_WEB_BOT_AUTH_TRANSITION_PRIVATE_KEY_FILE:?set JOSHBOT_WEB_BOT_AUTH_TRANSITION_PRIVATE_KEY_FILE}
+   ```
+
+5. Restart or redeploy `worker` and `discovery`.
+6. Verify outbound crawler `Signature-Input` uses **B**'s RFC 7638
+   thumbprint as `keyid`.
+7. Keep both public keys published during the overlap window.
+8. Promote the directory configuration so **B** is the directory active
+   identity and **A** is the directory transition identity. Verify again.
+9. After the overlap period, remove **A** from the directory transition
+   secret and redeploy the Worker. Confirm only **B** remains published.
+10. Remove JoshBot's optional transition configuration for **A**, then delete
+    obsolete private-key material for **A** from deployment storage only
+    after successful verification.
+
+Rollback before step 9: point JoshBot's active key back to **A** while **A**
+remains published in the directory. Do not delete **A**'s private material
+until the directory and crawler both use only **B** and verification has
+succeeded.
 
 ## Reporting configuration
 
@@ -539,7 +647,7 @@ sudo sh -c '
 
   openssl genpkey \
     -algorithm Ed25519 \
-    -out /srv/joshbot/secrets/joshbot_web_bot_auth_private_key
+    -out /srv/joshbot/secrets/joshbot_web_bot_auth_active_private_key
 
   chmod 0444 \
     /srv/joshbot/secrets/postgres_admin_password \
@@ -550,7 +658,7 @@ sudo sh -c '
     /srv/joshbot/secrets/joshbot_backup_password \
     /srv/joshbot/secrets/joshbot_report_token \
     /srv/joshbot/secrets/joshbot_operator_token \
-    /srv/joshbot/secrets/joshbot_web_bot_auth_private_key
+    /srv/joshbot/secrets/joshbot_web_bot_auth_active_private_key
 '
 ```
 
@@ -587,7 +695,7 @@ sudo stat \
   /srv/joshbot/secrets/joshbot_backup_password \
   /srv/joshbot/secrets/joshbot_report_token \
   /srv/joshbot/secrets/joshbot_operator_token \
-  /srv/joshbot/secrets/joshbot_web_bot_auth_private_key
+  /srv/joshbot/secrets/joshbot_web_bot_auth_active_private_key
 ```
 
 Expected permissions are:
@@ -602,7 +710,7 @@ Expected permissions are:
 444 root:root /srv/joshbot/secrets/joshbot_backup_password
 444 root:root /srv/joshbot/secrets/joshbot_report_token
 444 root:root /srv/joshbot/secrets/joshbot_operator_token
-444 root:root /srv/joshbot/secrets/joshbot_web_bot_auth_private_key
+444 root:root /srv/joshbot/secrets/joshbot_web_bot_auth_active_private_key
 ```
 
 The GitHub publication token is a tenth, separately provisioned secret. It is
@@ -1155,7 +1263,7 @@ The worker and discovery services must each have:
 - the database network;
 - the egress network;
 - `/run/secrets/joshbot_app_password`;
-- `/run/secrets/joshbot_web_bot_auth_private_key`;
+- `/run/secrets/joshbot_web_bot_auth_active_private_key`;
 - no API bearer tokens;
 - no GitHub token;
 - no Docker socket;
@@ -1250,8 +1358,9 @@ Before upgrading:
 3. Record the deployed image.
 4. Review new migrations.
 5. Confirm application compatibility.
-6. Confirm the dedicated Web Bot Auth private-key file exists at the configured
-   path and has the expected ownership and mode.
+6. Confirm the dedicated Web Bot Auth active private-key file exists at the
+   configured path, `JOSHBOT_WEB_BOT_AUTH_MODE=required` is set, and the file
+   has the expected ownership and mode.
 
 Build the new image:
 

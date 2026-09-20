@@ -8,6 +8,9 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Added
 
+- Web Bot Auth active and optional transition signing identities with an
+  explicit `required` / `unsigned` mode so production crawler traffic cannot
+  silently fall back to unsigned requests during key rotation.
 - Private operational reporting HTTP API with bearer authentication, status,
   sources, crawls, queue, services, audit history, and metrics.
 - Keyset pagination for list endpoints via `X-JoshBot-Next-Cursor`.
@@ -34,8 +37,22 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   PKCS#8 private-key secret, derived public OKP JWK, RFC 7638 thumbprint key
   identifier, and crawler-startup identity validation.
 
+### Changed
+
+- Production Web Bot Auth configuration uses
+  `JOSHBOT_WEB_BOT_AUTH_MODE=required` and
+  `JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE`, with
+  `JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE` retained only as a legacy alias for
+  the active path when the new variable is unset.
+- Deployment documentation includes a BotBase meet-or-exceed checklist and a
+  cross-repository signing-key rotation runbook aligned with the public
+  HTTP Message Signature directory.
+
 ### Fixed
 
+- Deployment smoke runs one-shot discovery through the `discovery` service so
+  fail-closed Web Bot Auth remains satisfied without mounting crawler signing
+  credentials into `tools`.
 - Discovery source claims use expiring leases so a crashed crawl can be
   reclaimed; `last_attempted_at` advances only on completion, and stale lease
   tokens cannot renew or complete over a newer claim (#34).
@@ -49,6 +66,9 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Security
 
+- Required Web Bot Auth mode fails closed on missing, unreadable, malformed,
+  unsupported, or inconsistent signing identities, and on duplicate
+  active/transition thumbprints, before crawler work begins.
 - Web Bot Auth private-key material remains outside normal environment values
   and public JWK output, and signing identity formatting, structured logging,
   JSON dumps, and validation errors do not expose private key bytes.

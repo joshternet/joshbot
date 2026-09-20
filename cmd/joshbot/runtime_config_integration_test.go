@@ -38,7 +38,8 @@ func TestRuntimeConfigurationIntegrationLoadsOperationalSettingsAndWebBotAuth(
 		automaticCrawlMaxPromotionsPerRunEnvironment: "11",
 		automaticCrawlExcludedHostsEnvironment:       "hosted.example,social.example",
 		crawlTelemetryRetentionEnvironment:           "72h",
-		webBotAuthPrivateKeyFileEnvironment:          keyPath,
+		webBotAuthModeEnvironment:                    webBotAuthModeRequired,
+		webBotAuthActivePrivateKeyFileEnvironment:    keyPath,
 	}
 
 	getenv := func(name string) string {

@@ -111,10 +111,11 @@ This package is also the shared outbound HTTP boundary for crawler web traffic.
 Robots retrieval, declaration verification, discovery page requests, and their
 redirect hops all pass through the same guarded request path.
 
-The stable JoshBot User-Agent is applied before the optional Web Bot Auth
-signer runs. Each request is signed immediately before it is sent. Redirects
-are handled as new requests, so a redirect to another authority gets a new
-signature for the authority JoshBot is actually contacting.
+The stable JoshBot User-Agent is applied before the Web Bot Auth signer runs
+when authentication is required. Each request is signed immediately before it
+is sent. Redirects are handled as new requests, so a redirect to another
+authority gets a new signature for the authority JoshBot is actually
+contacting.
 
 Robots permission answers whether JoshBot may retrieve a URI. It does not
 decide whether an origin is a Joshternet participant.
@@ -124,10 +125,15 @@ decide whether an origin is a Joshternet participant.
 Owns JoshBot's Web Bot Auth signing primitives and dedicated Ed25519 signing
 identity.
 
-The private key is loaded from an external PKCS#8 PEM secret file by the
-runtime. The package derives the public Ed25519 key, exposes only the public
-OKP JWK members `crv`, `kty`, and `x`, and calculates the SHA-256 JWK
-thumbprint used as the Web Bot Auth key identifier.
+The runtime loads PKCS#8 PEM secret files for one active identity and at most
+one optional transition identity. Mode is explicit: `required` (default when
+unset) or `unsigned` for deliberate local/development use. Production Compose
+always uses `required`. Only the active identity signs crawler requests; the
+transition identity is validated during rotation and never used for signing.
+
+The package derives the public Ed25519 key, exposes only the public OKP JWK
+members `crv`, `kty`, and `x`, and calculates the SHA-256 JWK thumbprint used
+as the Web Bot Auth key identifier.
 
 Worker and discovery runtimes load the same configured signing identity and
 pass its signer into the shared crawler HTTP boundary. This keeps the crawler
@@ -135,10 +141,15 @@ User-Agent and Web Bot Auth identity together instead of giving each crawler
 feature its own signing path.
 
 Private key material is not exposed through the public JWK, normal formatting,
-structured logging, or validation errors. Worker and discovery startup validate
-a configured identity before beginning crawler work.
+structured logging, or validation errors. Worker and discovery startup
+validate required Web Bot Auth configuration before beginning crawler work.
+Missing or invalid required configuration fails closed rather than allowing
+unsigned production crawling.
 
 The signing identity is independent from other Joshternet cryptographic keys.
+Authenticated production crawling is part of JoshBot's Cloudflare BotBase /
+Verified Bot posture for Joshternet participant discovery and verification,
+not model training.
 
 ### `internal/declaration`
 

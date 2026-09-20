@@ -468,6 +468,7 @@ func validCrawlRuntimeEnvironment() mapEnvironment {
 		crawlMaxPageBytesEnvironment:  "1048576",
 		crawlRequestDelayEnvironment:  "250ms",
 		crawlRedirectLimitEnvironment: "5",
+		webBotAuthModeEnvironment:     webBotAuthModeUnsigned,
 	}
 }
 

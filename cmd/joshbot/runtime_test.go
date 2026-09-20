@@ -1137,6 +1137,7 @@ func runtimeTestEnvironment(
 			"?sslmode=disable",
 		databasePasswordFileEnvironment: passwordFile,
 		workerIDEnvironment:             "worker-test",
+		webBotAuthModeEnvironment:       webBotAuthModeUnsigned,
 	}
 }
 
