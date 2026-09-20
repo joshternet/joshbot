@@ -317,15 +317,31 @@ func TestRuntimeConfigFailureIntegrationWebBotAuthSettings(t *testing.T) {
 		t.Errorf("loadWebBotAuthIdentity(nil) = %#v, %v", identity, err)
 	}
 
-	if err := validateWebBotAuthIdentity(runtimeConfigFailureIntegrationEnvironment{}.get); err != nil {
-		t.Errorf("validateWebBotAuthIdentity(unset) error = %v, want nil", err)
+	if err := validateWebBotAuthIdentity(runtimeConfigFailureIntegrationEnvironment{
+		webBotAuthModeEnvironment: webBotAuthModeUnsigned,
+	}.get); err != nil {
+		t.Errorf("validateWebBotAuthIdentity(unsigned) error = %v, want nil", err)
+	}
+
+	if err := validateWebBotAuthIdentity(runtimeConfigFailureIntegrationEnvironment{}.get); err == nil {
+		t.Error("validateWebBotAuthIdentity(default required unset) error = nil, want failure")
 	}
 
 	whitespace := runtimeConfigFailureIntegrationEnvironment{
-		webBotAuthPrivateKeyFileEnvironment: " /secret/key ",
+		webBotAuthModeEnvironment:                 webBotAuthModeRequired,
+		webBotAuthActivePrivateKeyFileEnvironment: " /secret/key ",
 	}
 	if identity, err := loadWebBotAuthIdentity(whitespace.get); !errors.Is(err, errInvalidWebBotAuthConfiguration) || identity != nil {
 		t.Errorf("loadWebBotAuthIdentity(whitespace) = %#v, %v", identity, err)
+	}
+
+	conflict := runtimeConfigFailureIntegrationEnvironment{
+		webBotAuthModeEnvironment:                 webBotAuthModeRequired,
+		webBotAuthActivePrivateKeyFileEnvironment: "/run/secrets/active",
+		webBotAuthPrivateKeyFileEnvironment:       "/run/secrets/legacy",
+	}
+	if identity, err := loadWebBotAuthIdentity(conflict.get); !errors.Is(err, errInvalidWebBotAuthConfiguration) || identity != nil {
+		t.Errorf("loadWebBotAuthIdentity(conflict) = %#v, %v", identity, err)
 	}
 
 	missing := filepath.Join(t.TempDir(), "missing-private-key.pem")

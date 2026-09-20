@@ -555,7 +555,8 @@ func TestRuntimeBoundaryIntegrationWorkerFailures(
 			)
 		}
 
-		environment[webBotAuthPrivateKeyFileEnvironment] = keyFile
+		environment[webBotAuthModeEnvironment] = webBotAuthModeRequired
+		environment[webBotAuthActivePrivateKeyFileEnvironment] = keyFile
 
 		operations.getenv = environment.get
 
@@ -963,7 +964,8 @@ func runtimeBoundaryIntegrationEnvironmentFor(
 
 		databasePasswordFileEnvironment: passwordFile,
 
-		workerIDEnvironment: "integration-worker",
+		workerIDEnvironment:       "integration-worker",
+		webBotAuthModeEnvironment: webBotAuthModeUnsigned,
 	}
 }
 

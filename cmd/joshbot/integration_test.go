@@ -322,6 +322,7 @@ func newCLIIntegrationEnvironment(
 		databaseURLEnvironment:          runtimeURL.String(),
 		databasePasswordFileEnvironment: passwordFile,
 		workerIDEnvironment:             "integration-worker",
+		webBotAuthModeEnvironment:       webBotAuthModeUnsigned,
 	}
 
 	operations := newRuntimeOperations(io.Discard)
