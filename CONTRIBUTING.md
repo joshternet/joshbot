@@ -170,12 +170,6 @@ Run discovery extraction:
 go test \
   ./internal/discovery \
   -run '^$' \
-  -fuzz '^FuzzExtract$' \
-  -fuzztime=10s
-
-go test \
-  ./internal/discovery \
-  -run '^$' \
   -fuzz '^FuzzExtractPageLinks$' \
   -fuzztime=10s
 ```

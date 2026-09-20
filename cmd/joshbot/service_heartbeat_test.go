@@ -20,6 +20,29 @@ type fakeHeartbeatStore struct {
 	written     chan struct{}
 }
 
+func startServiceHeartbeat(
+	ctx context.Context,
+	storage heartbeatStore,
+	service string,
+	instanceID string,
+) (*serviceHeartbeat, error) {
+	return startServiceHeartbeatWithReporter(
+		ctx, storage, service, instanceID, serviceHeartbeatInterval, nil,
+	)
+}
+
+func startServiceHeartbeatWithInterval(
+	ctx context.Context,
+	storage heartbeatStore,
+	service string,
+	instanceID string,
+	interval time.Duration,
+) (*serviceHeartbeat, error) {
+	return startServiceHeartbeatWithReporter(
+		ctx, storage, service, instanceID, interval, nil,
+	)
+}
+
 func (storage *fakeHeartbeatStore) UpsertServiceHeartbeat(
 	_ context.Context,
 	heartbeat store.ServiceHeartbeat,

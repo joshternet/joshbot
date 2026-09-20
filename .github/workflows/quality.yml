@@ -145,12 +145,6 @@ jobs:
             go test \
               ./internal/discovery \
               -run '^$' \
-              -fuzz '^FuzzExtract$' \
-              -fuzztime=10s
-
-            go test \
-              ./internal/discovery \
-              -run '^$' \
               -fuzz '^FuzzExtractPageLinks$' \
               -fuzztime=10s
           } 2>&1 | tee "$REPORT_DIR/discovery-fuzz.txt"

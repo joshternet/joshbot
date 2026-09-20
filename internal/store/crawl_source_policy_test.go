@@ -1,4 +1,3 @@
-//lint:file-ignore SA1012 Intentional negative tests verify defensive nil-context rejection; production callers must never pass a nil context.
 package store
 
 import (
@@ -197,6 +196,10 @@ func TestDomainAvoidRulesControlAutomaticCrawlSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	commander, err := NewControlStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.AddCrawlSeed(ctx, seed); err != nil {
 		t.Fatal(err)
 	}
@@ -205,12 +208,12 @@ func TestDomainAvoidRulesControlAutomaticCrawlSources(t *testing.T) {
 	}
 	admitResolvedAutomaticCandidates(t, ctx, store, seed)
 
-	changed, err := store.AddDomainAvoidRule(ctx, "hosted.example")
-	if err != nil {
-		t.Fatalf("AddDomainAvoidRule() error = %v", err)
-	}
-	if changed != 1 {
-		t.Fatalf("AddDomainAvoidRule() reconciled = %d, want 1", changed)
+	if err := commander.AddDomainAvoid(
+		ctx,
+		"hosted.example",
+		controlAudit("domain-avoid.add", "hosted.example"),
+	); err != nil {
+		t.Fatalf("AddDomainAvoid() error = %v", err)
 	}
 
 	var blocked bool
@@ -228,30 +231,36 @@ func TestDomainAvoidRulesControlAutomaticCrawlSources(t *testing.T) {
 		t.Fatalf("legacy automatic probe count = %d, want 0", queued)
 	}
 
-	rules, err := store.DomainAvoidRules(ctx)
-	if err != nil {
+	var pattern string
+	var createdAt time.Time
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT pattern, created_at FROM crawl_domain_avoid_rules WHERE pattern=$1`,
+		"hosted.example",
+	).Scan(&pattern, &createdAt); err != nil {
 		t.Fatal(err)
 	}
-	found := false
-	for _, rule := range rules {
-		if rule.Pattern == "hosted.example" && !rule.CreatedAt.IsZero() {
-			found = true
-		}
+	if pattern != "hosted.example" || createdAt.IsZero() {
+		t.Fatalf("stored avoid rule = %q, %v", pattern, createdAt)
 	}
-	if !found {
-		t.Fatal("added avoid rule was not listed")
-	}
-	if err := store.RemoveDomainAvoidRule(ctx, "hosted.example"); err != nil {
+
+	if err := commander.RemoveDomainAvoid(
+		ctx,
+		"hosted.example",
+		controlAudit("domain-avoid.remove", "hosted.example"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	rules, err = store.DomainAvoidRules(ctx)
-	if err != nil {
+	var remaining int
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT count(*) FROM crawl_domain_avoid_rules WHERE pattern=$1`,
+		"hosted.example",
+	).Scan(&remaining); err != nil {
 		t.Fatal(err)
 	}
-	for _, rule := range rules {
-		if rule.Pattern == "hosted.example" {
-			t.Fatal("removed avoid rule remains listed")
-		}
+	if remaining != 0 {
+		t.Fatal("removed avoid rule remains listed")
 	}
 }
 
@@ -291,73 +300,27 @@ func TestDefaultDomainAvoidRulesRetainEvidenceWithoutPromotion(t *testing.T) {
 
 func TestDomainAvoidRulesRejectInvalidPatterns(t *testing.T) {
 	ctx := context.Background()
-	store, err := NewDiscoveryStore(newCrawlSourceMigrationTestPool(t))
+	pool := newCrawlSourceMigrationTestPool(t)
+	commander, err := NewControlStore(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, pattern := range []string{"", "*.example.com", "example.*.com", "https://example.com", "one.example,two.example"} {
-		if _, err := store.AddDomainAvoidRule(ctx, pattern); err == nil {
-			t.Errorf("AddDomainAvoidRule(%q) error = nil", pattern)
+		if err := commander.AddDomainAvoid(
+			ctx,
+			pattern,
+			controlAudit("domain-avoid.add", pattern),
+		); err == nil {
+			t.Errorf("AddDomainAvoid(%q) error = nil", pattern)
 		}
-		if err := store.RemoveDomainAvoidRule(ctx, pattern); err == nil {
-			t.Errorf("RemoveDomainAvoidRule(%q) error = nil", pattern)
+		if err := commander.RemoveDomainAvoid(
+			ctx,
+			pattern,
+			controlAudit("domain-avoid.remove", pattern),
+		); err == nil {
+			t.Errorf("RemoveDomainAvoid(%q) error = nil", pattern)
 		}
 	}
-}
-
-func TestDomainAvoidRuleFailures(t *testing.T) {
-	t.Run("invalid context", func(t *testing.T) {
-		store, err := NewDiscoveryStore(newCrawlSourceMigrationTestPool(t))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := store.DomainAvoidRules(nil); err == nil {
-			t.Error("DomainAvoidRules(nil) error = nil")
-		}
-		if _, err := store.AddDomainAvoidRule(nil, "example.com"); err == nil {
-			t.Error("AddDomainAvoidRule(nil) error = nil")
-		}
-		if err := store.RemoveDomainAvoidRule(nil, "example.com"); err == nil {
-			t.Error("RemoveDomainAvoidRule(nil) error = nil")
-		}
-	})
-
-	t.Run("missing table", func(t *testing.T) {
-		ctx := context.Background()
-		store, err := NewDiscoveryStore(newCrawlSourceMigrationTestPool(t))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := store.pool.Exec(ctx, `DROP TABLE crawl_domain_avoid_rules`); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := store.DomainAvoidRules(ctx); err == nil {
-			t.Error("DomainAvoidRules() missing-table error = nil")
-		}
-		if _, err := store.AddDomainAvoidRule(ctx, "example.com"); err == nil {
-			t.Error("AddDomainAvoidRule() missing-table error = nil")
-		}
-		if err := store.RemoveDomainAvoidRule(ctx, "example.com"); err == nil {
-			t.Error("RemoveDomainAvoidRule() missing-table error = nil")
-		}
-	})
-
-	t.Run("corrupt rule", func(t *testing.T) {
-		ctx := context.Background()
-		store, err := NewDiscoveryStore(newCrawlSourceMigrationTestPool(t))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := store.pool.Exec(ctx, `ALTER TABLE crawl_domain_avoid_rules ALTER COLUMN created_at DROP NOT NULL`); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := store.pool.Exec(ctx, `INSERT INTO crawl_domain_avoid_rules (pattern, created_at) VALUES ('corrupt.example', NULL)`); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := store.DomainAvoidRules(ctx); err == nil {
-			t.Error("DomainAvoidRules() corrupt-row error = nil")
-		}
-	})
 }
 
 func TestAutomaticCrawlPolicyEmptyAndUnavailableRules(t *testing.T) {

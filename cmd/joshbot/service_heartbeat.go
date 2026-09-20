@@ -35,17 +35,6 @@ type serviceHeartbeat struct {
 	stopErr       error
 }
 
-func startServiceHeartbeat(
-	ctx context.Context,
-	storage heartbeatStore,
-	service string,
-	instanceID string,
-) (*serviceHeartbeat, error) {
-	return startServiceHeartbeatWithReporter(
-		ctx, storage, service, instanceID, serviceHeartbeatInterval, nil,
-	)
-}
-
 func heartbeatErrorReporter(logger *slog.Logger) func(error) {
 	if logger == nil {
 		return nil
@@ -53,18 +42,6 @@ func heartbeatErrorReporter(logger *slog.Logger) func(error) {
 	return func(err error) {
 		logger.Error("service heartbeat write failed", "error", err)
 	}
-}
-
-func startServiceHeartbeatWithInterval(
-	ctx context.Context,
-	storage heartbeatStore,
-	service string,
-	instanceID string,
-	interval time.Duration,
-) (*serviceHeartbeat, error) {
-	return startServiceHeartbeatWithReporter(
-		ctx, storage, service, instanceID, interval, nil,
-	)
 }
 
 func startServiceHeartbeatWithReporter(

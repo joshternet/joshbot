@@ -281,36 +281,6 @@ func (s *DiscoveryStore) DiscoveryPaused(ctx context.Context) (bool, error) {
 	return control.DiscoveryPaused, nil
 }
 
-// SetProcessorPaused atomically updates one shared processor pause state.
-func (s *DiscoveryStore) SetProcessorPaused(
-	ctx context.Context,
-	processor string,
-	paused bool,
-) error {
-	if err := s.validate(ctx); err != nil {
-		return err
-	}
-	var column string
-	switch processor {
-	case "discovery":
-		column = "discovery_paused"
-	case "verification":
-		column = "verification_paused"
-	default:
-		return errInvalidServiceState
-	}
-	_, err := s.pool.Exec(
-		ctx,
-		"UPDATE crawl_control SET "+column+
-			" = $1, updated_at = statement_timestamp() WHERE singleton",
-		paused,
-	)
-	if err != nil {
-		return fmt.Errorf("store: set crawl control: %w", err)
-	}
-	return nil
-}
-
 // UpsertServiceHeartbeat records current process state without raw errors.
 func (s *DiscoveryStore) UpsertServiceHeartbeat(
 	ctx context.Context,

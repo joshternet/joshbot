@@ -373,12 +373,13 @@ func newDeclarationIntegrationVerifier(
 		)
 	}
 
-	checker := robots.NewCheckerWithRequestDelay(
+	checker := robots.NewCheckerWithRequestDelayAndSigner(
 		declarationIntegrationResolver{},
 		declarationIntegrationDialer{
 			target: server.Listener.Addr().String(),
 		},
 		0,
+		nil,
 	)
 
 	return declaration.NewVerifier(checker), source

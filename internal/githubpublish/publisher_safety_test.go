@@ -1,4 +1,3 @@
-//lint:file-ignore SA1012 Intentional negative tests verify defensive nil-context rejection; production callers must never pass a nil context.
 package githubpublish
 
 import (

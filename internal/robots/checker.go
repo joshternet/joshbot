@@ -44,44 +44,6 @@ type Checker struct {
 	scheduler *originRequestScheduler
 }
 
-// NewChecker constructs a checker using guarded network access.
-//
-// The default constructor does not impose an operator minimum request delay.
-// Production runtimes that have JOSHBOT_CRAWL_REQUEST_DELAY configured should
-// use NewCheckerWithRequestDelay.
-func NewChecker(
-	resolver netguard.Resolver,
-	dialer netguard.Dialer,
-) *Checker {
-	return NewCheckerWithRequestDelay(
-		resolver,
-		dialer,
-		0,
-	)
-}
-
-// NewCheckerWithRequestDelay constructs a checker using guarded network access
-// and a minimum per-origin delay between outbound requests.
-//
-// An applicable robots Crawl-delay can increase this minimum but never reduce
-// it.
-//
-// This constructor leaves Web Bot Auth disabled. Production crawler runtimes
-// with a configured signing identity should use
-// NewCheckerWithRequestDelayAndSigner.
-func NewCheckerWithRequestDelay(
-	resolver netguard.Resolver,
-	dialer netguard.Dialer,
-	requestDelay time.Duration,
-) *Checker {
-	return NewCheckerWithRequestDelayAndSigner(
-		resolver,
-		dialer,
-		requestDelay,
-		nil,
-	)
-}
-
 // NewCheckerWithRequestDelayAndSigner constructs the shared JoshBot outbound
 // HTTP boundary.
 //
@@ -103,18 +65,6 @@ func NewCheckerWithRequestDelayAndSigner(
 		},
 		time.Now,
 		requestDelay,
-		timerRequestDelayWaiter{},
-	)
-}
-
-func newChecker(
-	getter hopGetter,
-	now func() time.Time,
-) *Checker {
-	return newCheckerWithRequestDelay(
-		getter,
-		now,
-		0,
 		timerRequestDelayWaiter{},
 	)
 }

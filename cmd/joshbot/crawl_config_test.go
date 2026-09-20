@@ -154,6 +154,16 @@ func TestCrawlRuntimeConfigurationRejectsInvalidValues(
 		value *string
 	}{
 		{
+			name:  "invalid discovery poll interval",
+			key:   discoveryPollEnvironment,
+			value: stringPointer("0s"),
+		},
+		{
+			name:  "invalid discovery page timeout",
+			key:   discoveryPageTimeoutEnvironment,
+			value: stringPointer("0s"),
+		},
+		{
 			name: "missing maximum depth",
 			key:  crawlMaxDepthEnvironment,
 		},

@@ -91,34 +91,6 @@ type crawlSummaryTelemetry interface {
 	) error
 }
 
-type discardCrawlTelemetry struct{}
-
-func (discardCrawlTelemetry) BeginCrawl(
-	context.Context,
-	origin.Origin,
-	CrawlConfig,
-) (CrawlRunID, error) {
-	return 0, nil
-}
-
-func (discardCrawlTelemetry) RecordPageAttempt(
-	context.Context,
-	CrawlRunID,
-	PageAttempt,
-) error {
-	return nil
-}
-
-func (discardCrawlTelemetry) FinishCrawl(
-	context.Context,
-	CrawlRunID,
-	CrawlResult,
-	CrawlRunOutcome,
-	string,
-) error {
-	return nil
-}
-
 func safeTelemetryURL(pageURL *url.URL) string {
 	if pageURL == nil {
 		return ""
