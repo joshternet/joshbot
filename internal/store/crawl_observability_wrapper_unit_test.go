@@ -425,46 +425,6 @@ func TestDiscoveryPausedWrapperWithoutDatabase(
 	}
 }
 
-func TestSetProcessorPausedValidationWithoutDatabase(
-	t *testing.T,
-) {
-	ctx := context.Background()
-
-	var nilStore *DiscoveryStore
-
-	if err := nilStore.SetProcessorPaused(
-		ctx,
-		"discovery",
-		true,
-	); !errors.Is(
-		err,
-		errDiscoveryStoreUnavailable,
-	) {
-		t.Fatalf(
-			"SetProcessorPaused() error = %v, want %v",
-			err,
-			errDiscoveryStoreUnavailable,
-		)
-	}
-
-	store := observabilityWrapperStore()
-
-	if err := store.SetProcessorPaused(
-		ctx,
-		"unknown",
-		true,
-	); !errors.Is(
-		err,
-		errInvalidServiceState,
-	) {
-		t.Fatalf(
-			"SetProcessorPaused(unknown) error = %v, want %v",
-			err,
-			errInvalidServiceState,
-		)
-	}
-}
-
 func TestUpsertServiceHeartbeatValidationWithoutDatabase(
 	t *testing.T,
 ) {

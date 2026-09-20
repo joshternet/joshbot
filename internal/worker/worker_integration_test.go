@@ -154,11 +154,13 @@ func TestWorkerIntegrationProcessesQueuedVerificationIntoPostgres(
 	)
 	defer server.Close()
 
-	checker := robots.NewChecker(
+	checker := robots.NewCheckerWithRequestDelayAndSigner(
 		workerIntegrationResolver{},
 		workerIntegrationDialer{
 			target: server.Listener.Addr().String(),
 		},
+		0,
+		nil,
 	)
 
 	verifier := declaration.NewVerifier(

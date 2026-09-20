@@ -88,20 +88,21 @@ func TestRecordDiscoveryPromotesEveryAutomaticSource(
 		t.Errorf("automatic sources = %#v, want %#v", got, want)
 	}
 
-	claimed, found, err := store.ClaimDiscoverySource(
+	lease, found, err := store.ClaimDiscoverySourceLease(
 		ctx,
 		time.Hour,
+		time.Minute,
 	)
 	if err != nil {
-		t.Fatalf("ClaimDiscoverySource() error = %v, want nil", err)
+		t.Fatalf("ClaimDiscoverySourceLease() error = %v, want nil", err)
 	}
 	if !found {
-		t.Fatal("ClaimDiscoverySource() found = false, want true")
+		t.Fatal("ClaimDiscoverySourceLease() found = false, want true")
 	}
-	if claimed.String() != "https://alpha.example" {
+	if lease.Origin.String() != "https://alpha.example" {
 		t.Errorf(
 			"claimed source = %q, want %q",
-			claimed.String(),
+			lease.Origin.String(),
 			"https://alpha.example",
 		)
 	}
@@ -310,14 +311,18 @@ func TestAutomaticSourceContinuesDiscoveryWithoutCreatingParticipants(
 	}
 	admitResolvedAutomaticCandidates(t, ctx, discoveryStore, seed)
 
-	claimed, found, err := discoveryStore.ClaimDiscoverySource(ctx, time.Hour)
+	lease, found, err := discoveryStore.ClaimDiscoverySourceLease(
+		ctx,
+		time.Hour,
+		time.Minute,
+	)
 	if err != nil {
 		t.Fatalf("claim automatic source: %v", err)
 	}
-	if !found || claimed != first {
+	if !found || lease.Origin != first {
 		t.Fatalf(
 			"claimed source = %q, %v, want %q, true",
-			claimed.String(),
+			lease.Origin.String(),
 			found,
 			first.String(),
 		)
@@ -448,11 +453,15 @@ func TestAutomaticCrawlingWaitsForProbeQueueBackpressure(
 		t.Fatalf("add crawl seed: %v", err)
 	}
 
-	claimed, found, err := discoveryStore.ClaimDiscoverySource(ctx, time.Hour)
-	if err != nil || !found || claimed != seed {
+	lease, found, err := discoveryStore.ClaimDiscoverySourceLease(
+		ctx,
+		time.Hour,
+		time.Minute,
+	)
+	if err != nil || !found || lease.Origin != seed {
 		t.Fatalf(
 			"claim seed = %q, %v, %v, want %q, true, nil",
-			claimed.String(),
+			lease.Origin.String(),
 			found,
 			err,
 			seed.String(),
@@ -471,14 +480,18 @@ func TestAutomaticCrawlingWaitsForProbeQueueBackpressure(
 	}
 	admitResolvedAutomaticCandidates(t, ctx, discoveryStore, seed)
 
-	claimed, found, err = discoveryStore.ClaimDiscoverySource(ctx, time.Hour)
+	lease, found, err = discoveryStore.ClaimDiscoverySourceLease(
+		ctx,
+		time.Hour,
+		time.Minute,
+	)
 	if err != nil {
 		t.Fatalf("claim under backpressure: %v", err)
 	}
-	if found || claimed.String() != "" {
+	if found || lease.Origin.String() != "" {
 		t.Errorf(
 			"claim under backpressure = %q, %v, want zero, false",
-			claimed.String(),
+			lease.Origin.String(),
 			found,
 		)
 	}
@@ -487,11 +500,15 @@ func TestAutomaticCrawlingWaitsForProbeQueueBackpressure(
 		t.Fatalf("drain probe queue: %v", err)
 	}
 
-	claimed, found, err = discoveryStore.ClaimDiscoverySource(ctx, time.Hour)
-	if err != nil || !found || claimed != candidate {
+	lease, found, err = discoveryStore.ClaimDiscoverySourceLease(
+		ctx,
+		time.Hour,
+		time.Minute,
+	)
+	if err != nil || !found || lease.Origin != candidate {
 		t.Errorf(
 			"claim after drain = %q, %v, %v, want %q, true, nil",
-			claimed.String(),
+			lease.Origin.String(),
 			found,
 			err,
 			candidate.String(),

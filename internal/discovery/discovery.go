@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/joshternet/joshbot/internal/origin"
-	"github.com/joshternet/joshbot/internal/robots"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/charset"
 )
@@ -21,15 +20,13 @@ import (
 const (
 	MaxRawBody     = 1024 * 1024
 	MaxDecodedBody = 2 * 1024 * 1024
-	MaxRedirects   = 5
 )
 
 var (
-	errCrawlerUnavailable = errors.New("discovery: crawler unavailable")
-	errGetterUnavailable  = errors.New("discovery: getter unavailable")
-	errInvalidContext     = errors.New("discovery: invalid context")
-	errInvalidSource      = errors.New("discovery: invalid source")
-	errInvalidPageURL     = errors.New("discovery: invalid page URL")
+	errGetterUnavailable = errors.New("discovery: getter unavailable")
+	errInvalidContext    = errors.New("discovery: invalid context")
+	errInvalidSource     = errors.New("discovery: invalid source")
+	errInvalidPageURL    = errors.New("discovery: invalid page URL")
 )
 
 // Kind describes how a candidate was discovered.
@@ -58,13 +55,6 @@ type Candidate struct {
 	Kind   Kind
 }
 
-// Result is the bounded semantic result of one homepage attempt.
-type Result struct {
-	Source     origin.Origin
-	Status     Status
-	Candidates []Candidate
-}
-
 // PageLinks contains the ephemeral crawl links extracted from one page.
 type PageLinks struct {
 	Internal   []*url.URL
@@ -79,160 +69,6 @@ type RecordResult struct {
 // Getter is the robots-aware guarded HTTP behavior used by Crawler.
 type Getter interface {
 	Get(context.Context, *url.URL) (*http.Response, error)
-}
-
-// Crawler fetches and parses one verified origin's homepage.
-type Crawler struct {
-	getter Getter
-}
-
-// NewCrawler constructs a homepage crawler.
-func NewCrawler(getter Getter) *Crawler {
-	return &Crawler{getter: getter}
-}
-
-// Discover fetches only the canonical homepage and bounded same-origin
-// redirects. A cross-origin redirect becomes one candidate and is not fetched.
-func (c *Crawler) Discover(
-	ctx context.Context,
-	source origin.Origin,
-) (Result, error) {
-	result := Result{Source: source}
-
-	if c == nil {
-		return Result{}, errCrawlerUnavailable
-	}
-
-	if ctx == nil {
-		return Result{}, errInvalidContext
-	}
-
-	if err := ctx.Err(); err != nil {
-		return Result{}, err
-	}
-
-	if source.String() == "" {
-		return Result{}, errInvalidSource
-	}
-
-	if c.getter == nil {
-		return Result{}, errGetterUnavailable
-	}
-
-	current, _ := url.Parse(source.String() + "/")
-	redirects := 0
-
-	for {
-		response, requestErr := c.getter.Get(ctx, current)
-		if requestErr != nil {
-			if contextErr := ctx.Err(); contextErr != nil {
-				return Result{}, contextErr
-			}
-
-			if errors.Is(requestErr, robots.ErrDisallowed) {
-				result.Status = StatusRobotsDenied
-				return result, nil
-			}
-
-			result.Status = StatusUnavailable
-			return result, nil
-		}
-
-		if response == nil || response.Body == nil {
-			result.Status = StatusUnavailable
-			return result, nil
-		}
-
-		if isRedirectStatus(response.StatusCode) {
-			next, redirectErr := redirectTarget(current, response)
-			closeErr := response.Body.Close()
-
-			if redirectErr != nil || closeErr != nil {
-				result.Status = StatusUnavailable
-				return result, nil
-			}
-
-			nextOrigin, _ := origin.Parse(next.String())
-			if nextOrigin != source {
-				result.Status = StatusRedirected
-				result.Candidates = []Candidate{
-					{
-						Origin: nextOrigin,
-						Kind:   KindRedirect,
-					},
-				}
-				return result, nil
-			}
-
-			if redirects >= MaxRedirects {
-				result.Status = StatusUnavailable
-				return result, nil
-			}
-
-			redirects++
-			current = next
-			continue
-		}
-
-		if response.StatusCode < http.StatusOK ||
-			response.StatusCode >= http.StatusMultipleChoices {
-			_ = response.Body.Close()
-			result.Status = StatusUnavailable
-			return result, nil
-		}
-
-		contentType := response.Header.Get("Content-Type")
-		if contentType != "" && !isHTMLContentType(contentType) {
-			_ = response.Body.Close()
-			result.Status = StatusUnsupportedContent
-			return result, nil
-		}
-
-		body, tooLarge, readErr := readBounded(
-			response.Body,
-			MaxRawBody,
-		)
-		closeErr := response.Body.Close()
-
-		if contextErr := ctx.Err(); contextErr != nil {
-			return Result{}, contextErr
-		}
-
-		if readErr != nil || closeErr != nil {
-			result.Status = StatusUnavailable
-			return result, nil
-		}
-
-		if tooLarge {
-			result.Status = StatusTooLarge
-			return result, nil
-		}
-
-		extracted, _ := Extract(
-			source,
-			current,
-			contentType,
-			body,
-		)
-		return extracted, nil
-	}
-}
-
-// Extract parses a bounded HTML document using the legacy homepage result.
-// It returns every distinct external candidate from the accepted page body.
-func Extract(
-	source origin.Origin,
-	pageURL *url.URL,
-	contentType string,
-	body []byte,
-) (Result, error) {
-	return extract(
-		source,
-		pageURL,
-		contentType,
-		body,
-		decodeHTML,
-	)
 }
 
 // ExtractPageLinks parses every navigable hyperlink in one bounded page.
@@ -268,51 +104,6 @@ func ExtractPageLinks(
 	)
 
 	return links, status, nil
-}
-
-func extract(
-	source origin.Origin,
-	pageURL *url.URL,
-	contentType string,
-	body []byte,
-	decoder func(io.Reader, string) ([]byte, bool, error),
-) (Result, error) {
-	links, status, err := extractPageLinks(
-		source,
-		pageURL,
-		contentType,
-		body,
-		decoder,
-	)
-	if err != nil {
-		return Result{}, err
-	}
-
-	result := Result{
-		Source: source,
-		Status: status,
-	}
-
-	if status != StatusComplete {
-		return result, nil
-	}
-
-	result.Candidates = append(
-		[]Candidate(nil),
-		links.Candidates...,
-	)
-
-	sort.Slice(
-		result.Candidates,
-		func(left int, right int) bool {
-			return result.Candidates[left].
-				Origin.String() <
-				result.Candidates[right].
-					Origin.String()
-		},
-	)
-
-	return result, nil
 }
 
 func extractPageLinks(

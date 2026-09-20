@@ -36,6 +36,9 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- Discovery source claims use expiring leases so a crashed crawl can be
+  reclaimed; `last_attempted_at` advances only on completion, and stale lease
+  tokens cannot renew or complete over a newer claim (#34).
 - Crawl-source transient retry completion updates streak, failure category,
   and next-attempt timestamp atomically.
 - Deployment smoke cleanup tears down the reporting and control Compose

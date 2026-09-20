@@ -358,6 +358,13 @@ claimed until workers drain the queue. Curated seeds and verified participants
 remain independently eligible. The high-water mark controls outstanding work;
 it does not drop candidates or limit recursive discovery over time.
 
+Discovery source selection uses an expiring lease separate from completion
+state. Claiming advances `lease_generation` and sets `lease_expires_at` without
+writing `last_attempted_at`. Renewal extends the active expiration for the same
+generation. Completion records `last_attempted_at` and clears the lease.
+Renewal and completion require a matching generation and an unexpired lease, so
+a crashed claimant cannot finish over a newer reclaim after expiry.
+
 ## Publication boundary
 
 Registry generation and publication are separate operations.
@@ -439,5 +446,5 @@ read-only role.
 The recovery smoke test restores into a fresh isolated PostgreSQL instance,
 checks role boundaries and migration records, verifies persisted operational
 state, and rebuilds byte-identical public output. The current schema contains
-twelve embedded migrations, numbered `0001` through `0012`. Recovery never
+thirteen embedded migrations, numbered `0001` through `0013`. Recovery never
 restores into the configured production database.

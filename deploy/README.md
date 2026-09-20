@@ -824,8 +824,8 @@ internal/store/migrations/
 
 Never edit an applied migration. Add a forward migration.
 
-The current image embeds twelve migrations, numbered `0001` through `0012`.
-A backup restored from the current schema must retain twelve
+The current image embeds thirteen migrations, numbered `0001` through `0013`.
+A backup restored from the current schema must retain thirteen
 `schema_migrations` rows.
 
 Run migrations manually:
@@ -1084,7 +1084,7 @@ migrations, checks role and secret-mount boundaries, creates known state,
 exports the registry, backs up PostgreSQL, restores into a fresh isolated
 instance, verifies restored state, rebuilds byte-identical output, and cleans
 its resources. For the current schema, both the source and restored databases
-must contain twelve migration records.
+must contain thirteen migration records.
 
 It never restores into the configured production database.
 

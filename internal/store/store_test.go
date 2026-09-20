@@ -546,39 +546,31 @@ func cloneStoreMigrationSchema(
 
 func loadStoreTestMigrations() (string, error) {
 	storeMigrationsOnce.Do(func() {
-		migrationFiles := []string{
-			"migrations/0001_initial.sql",
-			"migrations/0002_verification_queue.sql",
-			"migrations/0003_discovery.sql",
-			"migrations/0004_crawl_sources.sql",
-			"migrations/0005_automatic_crawl_sources.sql",
-			"migrations/0006_crawl_observability.sql",
-			"migrations/0007_crawl_observability_permissions.sql",
-			"migrations/0008_crawl_domain_avoid_rules.sql",
-			"migrations/0009_automatic_admission.sql",
-			"migrations/0010_retry_state.sql",
-			"migrations/0011_operator_audit_events.sql",
-			"migrations/0012_observability_reporting.sql",
+		migrationSet, err := loadMigrations(
+			embeddedMigrations,
+		)
+		if err != nil {
+			storeMigrationsErr = fmt.Errorf(
+				"load store test migrations: %w",
+				err,
+			)
+			return
 		}
+
 		var migrations strings.Builder
-		for _, migrationFile := range migrationFiles {
-			migration, err := os.ReadFile(migrationFile)
-			if err != nil {
-				storeMigrationsErr = fmt.Errorf(
-					"read migration %q: %w",
-					migrationFile,
-					err,
-				)
-				return
-			}
-			migrations.Write(migration)
+
+		for _, migration := range migrationSet {
+			migrations.Write(migration.data)
 			migrations.WriteByte('\n')
 		}
+
 		storeMigrationsSQL = migrations.String()
 	})
+
 	if storeMigrationsErr != nil {
 		return "", storeMigrationsErr
 	}
+
 	return storeMigrationsSQL, nil
 }
 

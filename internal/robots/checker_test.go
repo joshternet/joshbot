@@ -1,4 +1,3 @@
-//lint:file-ignore SA1012 Intentional negative tests verify defensive nil-context rejection; production callers must never pass a nil context.
 package robots
 
 import (
@@ -16,6 +15,18 @@ import (
 	"testing"
 	"time"
 )
+
+func newChecker(
+	getter hopGetter,
+	now func() time.Time,
+) *Checker {
+	return newCheckerWithRequestDelay(
+		getter,
+		now,
+		0,
+		timerRequestDelayWaiter{},
+	)
+}
 
 func TestCheckerCachesByInitialOriginFor24Hours(t *testing.T) {
 	start := time.Date(
@@ -424,9 +435,11 @@ func TestCheckerRejectsInvalidInputs(t *testing.T) {
 	})
 
 	t.Run("production constructor", func(t *testing.T) {
-		constructed := NewChecker(
+		constructed := NewCheckerWithRequestDelayAndSigner(
 			&robotsResolver{},
 			&recordingDialer{},
+			0,
+			nil,
 		)
 		if constructed == nil {
 			t.Fatal("NewChecker() returned nil")

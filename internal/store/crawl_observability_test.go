@@ -146,12 +146,6 @@ func TestCrawlObservabilityRejectsInvalidState(t *testing.T) {
 	if _, err := (*DiscoveryStore)(nil).CrawlControl(ctx); err == nil {
 		t.Error("nil control error = nil")
 	}
-	if err := (*DiscoveryStore)(nil).SetProcessorPaused(ctx, "discovery", true); err == nil {
-		t.Error("nil pause error = nil")
-	}
-	if err := observability.SetProcessorPaused(ctx, "unknown", true); !errors.Is(err, errInvalidServiceState) {
-		t.Errorf("invalid processor error = %v", err)
-	}
 	if err := (*DiscoveryStore)(nil).UpsertServiceHeartbeat(ctx, ServiceHeartbeat{}); err == nil {
 		t.Error("nil heartbeat error = nil")
 	}
@@ -181,7 +175,6 @@ func TestCrawlObservabilityReturnsDatabaseFailures(t *testing.T) {
 		},
 		func() error { _, err := observability.PurgeCrawlTelemetry(ctx, time.Hour); return err },
 		func() error { _, err := observability.CrawlControl(ctx); return err },
-		func() error { return observability.SetProcessorPaused(ctx, "discovery", true) },
 		func() error { return observability.UpsertServiceHeartbeat(ctx, heartbeat) },
 	}
 	for index, check := range checks {
@@ -237,8 +230,12 @@ func TestProcessorsFailClosedWhenControlStateIsUnavailable(t *testing.T) {
 	if _, err := pool.Exec(ctx, "DROP TABLE crawl_control"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := discoveryStore.ClaimDiscoverySource(ctx, time.Hour); err == nil {
-		t.Error("ClaimDiscoverySource() error = nil")
+	if _, _, err := discoveryStore.ClaimDiscoverySourceLease(
+		ctx,
+		time.Hour,
+		time.Minute,
+	); err == nil {
+		t.Error("ClaimDiscoverySourceLease() error = nil")
 	}
 	if _, _, err := queue.Claim(ctx, "worker"); err == nil {
 		t.Error("Claim() error = nil")
@@ -252,10 +249,24 @@ func TestCrawlControlPausesBothProcessorsIndependently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := observability.SetProcessorPaused(ctx, "discovery", true); err != nil {
+	commander, err := NewControlStore(pool)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := observability.SetProcessorPaused(ctx, "verification", true); err != nil {
+	if err := commander.SetProcessorPaused(
+		ctx,
+		"discovery",
+		true,
+		controlAudit("processor.pause", "discovery"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := commander.SetProcessorPaused(
+		ctx,
+		"verification",
+		true,
+		controlAudit("processor.pause", "verification"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	control, err := observability.CrawlControl(ctx)
@@ -270,8 +281,12 @@ func TestCrawlControlPausesBothProcessorsIndependently(t *testing.T) {
 	if err := observability.AddCrawlSeed(ctx, seed); err != nil {
 		t.Fatal(err)
 	}
-	if claimed, found, err := observability.ClaimDiscoverySource(ctx, time.Hour); err != nil || found || claimed.String() != "" {
-		t.Fatalf("paused discovery claim = %q, %v, %v", claimed.String(), found, err)
+	if lease, found, err := observability.ClaimDiscoverySourceLease(
+		ctx,
+		time.Hour,
+		time.Minute,
+	); err != nil || found || lease.Origin.String() != "" {
+		t.Fatalf("paused discovery claim = %q, %v, %v", lease.Origin.String(), found, err)
 	}
 	queue := newFixedQueue(
 		t,

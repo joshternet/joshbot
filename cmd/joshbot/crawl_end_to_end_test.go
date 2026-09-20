@@ -33,6 +33,34 @@ type endToEndCrawlGetter struct {
 	requests []string
 }
 
+type crawlEndToEndTelemetry struct{}
+
+func (crawlEndToEndTelemetry) BeginCrawl(
+	context.Context,
+	origin.Origin,
+	discovery.CrawlConfig,
+) (discovery.CrawlRunID, error) {
+	return 0, nil
+}
+
+func (crawlEndToEndTelemetry) RecordPageAttempt(
+	context.Context,
+	discovery.CrawlRunID,
+	discovery.PageAttempt,
+) error {
+	return nil
+}
+
+func (crawlEndToEndTelemetry) FinishCrawl(
+	context.Context,
+	discovery.CrawlRunID,
+	discovery.CrawlResult,
+	discovery.CrawlRunOutcome,
+	string,
+) error {
+	return nil
+}
+
 func (getter *endToEndCrawlGetter) Get(
 	ctx context.Context,
 	pageURL *url.URL,
@@ -163,11 +191,12 @@ func TestCuratedSeedCrawlToPublicRegistryEndToEnd(
 		},
 	}
 
-	crawler, err := discovery.NewMultiPageCrawler(
+	crawler, err := discovery.NewMultiPageCrawlerWithTelemetry(
 		getter,
 		runtimeCandidateSink{
 			store: discoveryStore,
 		},
+		crawlEndToEndTelemetry{},
 		discovery.CrawlConfig{
 			MaxDepth:      4,
 			MaxPages:      32,

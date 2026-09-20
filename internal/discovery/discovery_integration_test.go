@@ -55,6 +55,34 @@ type discoveryIntegrationSink struct {
 	candidates []discovery.Candidate
 }
 
+type discoveryIntegrationTelemetry struct{}
+
+func (discoveryIntegrationTelemetry) BeginCrawl(
+	context.Context,
+	origin.Origin,
+	discovery.CrawlConfig,
+) (discovery.CrawlRunID, error) {
+	return 0, nil
+}
+
+func (discoveryIntegrationTelemetry) RecordPageAttempt(
+	context.Context,
+	discovery.CrawlRunID,
+	discovery.PageAttempt,
+) error {
+	return nil
+}
+
+func (discoveryIntegrationTelemetry) FinishCrawl(
+	context.Context,
+	discovery.CrawlRunID,
+	discovery.CrawlResult,
+	discovery.CrawlRunOutcome,
+	string,
+) error {
+	return nil
+}
+
 func (sink *discoveryIntegrationSink) RecordCandidates(
 	_ context.Context,
 	source origin.Origin,
@@ -76,81 +104,19 @@ func (sink *discoveryIntegrationSink) RecordCandidates(
 	return nil
 }
 
-func TestDiscoveryIntegrationHomepageCrawlerUsesGuardedRobotsHTTP(
-	t *testing.T,
-) {
-	server := newDiscoveryIntegrationServer(t)
-	defer server.Close()
-
-	checker := robots.NewChecker(
-		discoveryIntegrationResolver{},
-		discoveryIntegrationDialer{
-			target: server.Listener.Addr().String(),
-		},
-	)
-
-	source := mustDiscoveryIntegrationOrigin(
-		t,
-		"http://example.com",
-	)
-
-	crawler := discovery.NewCrawler(
-		checker,
-	)
-
-	result, err := crawler.Discover(
-		context.Background(),
-		source,
-	)
-	if err != nil {
-		t.Fatalf(
-			"Crawler.Discover() error = %v",
-			err,
-		)
-	}
-
-	if result.Status != discovery.StatusComplete {
-		t.Fatalf(
-			"Crawler.Discover() status = %v, want %v",
-			result.Status,
-			discovery.StatusComplete,
-		)
-	}
-
-	if result.Source != source {
-		t.Errorf(
-			"Crawler.Discover() source = %q, want %q",
-			result.Source.String(),
-			source.String(),
-		)
-	}
-
-	got := candidateOrigins(
-		result.Candidates,
-	)
-
-	if !slices.Contains(
-		got,
-		"https://alpha.example",
-	) {
-		t.Errorf(
-			"homepage candidates = %#v, want alpha.example",
-			got,
-		)
-	}
-}
-
 func TestDiscoveryIntegrationMultiPageCrawlDiscoversAndDeduplicatesCandidates(
 	t *testing.T,
 ) {
 	server := newDiscoveryIntegrationServer(t)
 	defer server.Close()
 
-	checker := robots.NewChecker(
+	checker := robots.NewCheckerWithRequestDelayAndSigner(
 		discoveryIntegrationResolver{},
 		discoveryIntegrationDialer{
 			target: server.Listener.Addr().String(),
 		},
+		0,
+		nil,
 	)
 
 	source := mustDiscoveryIntegrationOrigin(
@@ -160,9 +126,10 @@ func TestDiscoveryIntegrationMultiPageCrawlDiscoversAndDeduplicatesCandidates(
 
 	sink := &discoveryIntegrationSink{}
 
-	crawler, err := discovery.NewMultiPageCrawler(
+	crawler, err := discovery.NewMultiPageCrawlerWithTelemetry(
 		checker,
 		sink,
+		discoveryIntegrationTelemetry{},
 		discovery.CrawlConfig{
 			MaxDepth:                     1,
 			MaxPages:                     4,

@@ -322,11 +322,13 @@ func newWorkerIntegrationRuntime(
 ) *worker.Worker {
 	t.Helper()
 
-	checker := robots.NewChecker(
+	checker := robots.NewCheckerWithRequestDelayAndSigner(
 		workerIntegrationResolver{},
 		workerIntegrationDialer{
 			target: target,
 		},
+		0,
+		nil,
 	)
 
 	verifier :=

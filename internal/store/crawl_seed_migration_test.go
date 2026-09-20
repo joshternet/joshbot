@@ -397,6 +397,7 @@ func newCrawlSourceMigrationTestPool(
 		"migrations/0010_retry_state.sql",
 		"migrations/0011_operator_audit_events.sql",
 		"migrations/0012_observability_reporting.sql",
+		"migrations/0013_discovery_source_lease.sql",
 	} {
 		applyRawStoreMigration(
 			t,

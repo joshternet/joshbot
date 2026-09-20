@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 	"github.com/joshternet/joshbot/internal/store"
 )
 
@@ -272,11 +273,33 @@ func (
 
 func (
 	*coverageDiscoveryRuntimeStore,
-) ClaimDiscoverySource(
+) ClaimDiscoverySourceLease(
 	context.Context,
 	time.Duration,
-) (origin.Origin, bool, error) {
-	return origin.Origin{}, false, nil
+	time.Duration,
+) (discovery.CrawlSourceLease, bool, error) {
+	return discovery.CrawlSourceLease{}, false, nil
+}
+
+func (
+	*coverageDiscoveryRuntimeStore,
+) RenewDiscoverySourceLease(
+	_ context.Context,
+	lease discovery.CrawlSourceLease,
+	_ time.Duration,
+) (discovery.CrawlSourceLease, error) {
+	return lease, nil
+}
+
+func (
+	*coverageDiscoveryRuntimeStore,
+) CompleteDiscoverySourceLeaseRetry(
+	context.Context,
+	discovery.CrawlSourceLease,
+	retry.Category,
+	time.Duration,
+) error {
+	return nil
 }
 
 func (

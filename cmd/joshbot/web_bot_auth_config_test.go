@@ -344,6 +344,16 @@ func TestValidateWebBotAuthIdentity(
 	}
 }
 
+func validateWebBotAuthIdentity(
+	getenv environmentGetter,
+) error {
+	_, err := loadWebBotAuthSigner(
+		getenv,
+	)
+
+	return err
+}
+
 func writeWebBotAuthPrivateKey(
 	t *testing.T,
 ) string {

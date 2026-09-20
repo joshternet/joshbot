@@ -10,6 +10,8 @@ import (
 	"github.com/joshternet/joshbot/internal/retry"
 )
 
+const defaultCrawlSourceLeaseDuration = 5 * time.Minute
+
 var (
 	errCrawlRunnerUnavailable = errors.New(
 		"discovery: crawl runner unavailable",
@@ -28,13 +30,33 @@ var (
 	)
 )
 
-// CrawlSourceStore claims durable crawl sources without keeping a database
+// CrawlSourceStore leases durable crawl sources without keeping a database
 // transaction open during the network crawl.
+//
+// Claim advances lease_generation and sets a renewable expiration. It does not
+// touch last_attempted_at. Renew extends the active expiration for the same
+// generation. Complete records last_attempted_at and clears the lease. Renew
+// and complete both require a matching generation and an unexpired lease so a
+// stale claimant cannot overwrite a newer claim.
 type CrawlSourceStore interface {
-	ClaimDiscoverySource(
+	ClaimDiscoverySourceLease(
 		context.Context,
 		time.Duration,
-	) (origin.Origin, bool, error)
+		time.Duration,
+	) (CrawlSourceLease, bool, error)
+
+	RenewDiscoverySourceLease(
+		context.Context,
+		CrawlSourceLease,
+		time.Duration,
+	) (CrawlSourceLease, error)
+
+	CompleteDiscoverySourceLeaseRetry(
+		context.Context,
+		CrawlSourceLease,
+		retry.Category,
+		time.Duration,
+	) error
 }
 
 // LifecycleObserver receives bounded operational state transitions.
@@ -46,23 +68,6 @@ type discoveryPauseStore interface {
 	DiscoveryPaused(context.Context) (bool, error)
 }
 
-type crawlSourceCompletionStore interface {
-	CompleteDiscoverySource(
-		context.Context,
-		origin.Origin,
-		retry.Category,
-	) error
-}
-
-type crawlSourceRetryCompletionStore interface {
-	CompleteDiscoverySourceRetry(
-		context.Context,
-		origin.Origin,
-		retry.Category,
-		time.Duration,
-	) error
-}
-
 // SourceCrawler performs one complete bounded crawl of an origin.
 type SourceCrawler interface {
 	Crawl(
@@ -72,9 +77,13 @@ type SourceCrawler interface {
 }
 
 // CrawlRunnerConfig contains durable source scheduling policy.
+//
+// A zero LeaseDuration uses the bounded default. A positive value overrides
+// that default.
 type CrawlRunnerConfig struct {
 	DiscoveryInterval time.Duration
 	PollInterval      time.Duration
+	LeaseDuration     time.Duration
 	RetryJitter       retry.Jitter
 }
 
@@ -126,6 +135,11 @@ type crawlRunnerWaiter interface {
 
 type timerCrawlRunnerWaiter struct{}
 
+type crawlLeaseRenewalResult struct {
+	lease CrawlSourceLease
+	err   error
+}
+
 // NewCrawlRunner constructs a multi-page discovery runner.
 func NewCrawlRunner(
 	store CrawlSourceStore,
@@ -171,10 +185,8 @@ func newCrawlRunner(
 	}, nil
 }
 
-// RunOnce claims and processes at most one crawl source.
-//
-// A successful claim represents one source crawl attempt, regardless of how
-// many same-origin pages the configured crawler fetches.
+// RunOnce claims and processes at most one crawl source using renewable,
+// generation-fenced lease authority.
 func (runner *CrawlRunner) RunOnce(
 	ctx context.Context,
 ) (CrawlReport, error) {
@@ -182,13 +194,28 @@ func (runner *CrawlRunner) RunOnce(
 		return CrawlReport{}, err
 	}
 
-	source, found, err :=
-		runner.store.ClaimDiscoverySource(
+	return runner.runOnceWithLease(
+		ctx,
+		runner.store,
+	)
+}
+
+func (runner *CrawlRunner) runOnceWithLease(
+	ctx context.Context,
+	store CrawlSourceStore,
+) (CrawlReport, error) {
+	lease, found, err :=
+		store.ClaimDiscoverySourceLease(
 			ctx,
 			runner.config.DiscoveryInterval,
+			runner.config.leaseDuration(),
 		)
 	if err != nil {
-		runner.observe("failed", origin.Origin{}, "claim_failed")
+		runner.observe(
+			"failed",
+			origin.Origin{},
+			"claim_failed",
+		)
 		return CrawlReport{}, fmt.Errorf(
 			"discovery: claim crawl source: %w",
 			err,
@@ -196,20 +223,10 @@ func (runner *CrawlRunner) RunOnce(
 	}
 
 	if !found {
-		state := "idle"
-		if store, ok := runner.store.(discoveryPauseStore); ok {
-			paused, pauseErr := store.DiscoveryPaused(ctx)
-			if pauseErr != nil {
-				runner.observe("failed", origin.Origin{}, "control_read_failed")
-				return CrawlReport{}, pauseErr
-			}
-			if paused {
-				state = "paused"
-			}
-		}
-		runner.observe(state, origin.Origin{}, "")
-		return CrawlReport{}, nil
+		return runner.noSource(ctx)
 	}
+
+	source := lease.Origin
 	runner.observe("running", source, "")
 
 	report := CrawlReport{
@@ -217,77 +234,236 @@ func (runner *CrawlRunner) RunOnce(
 		Source: source,
 	}
 
-	result, err := runner.crawler.Crawl(
-		ctx,
-		source,
-	)
+	result, crawlErr, currentLease, renewalErr :=
+		runner.crawlWithLease(
+			ctx,
+			store,
+			lease,
+		)
 
 	if parentErr := ctx.Err(); parentErr != nil {
 		return report, parentErr
 	}
 
-	if err != nil {
+	if renewalErr != nil {
+		runner.observe(
+			"failed",
+			source,
+			"lease_renewal_failed",
+		)
+		return report, fmt.Errorf(
+			"discovery: renew crawl source lease: %w",
+			renewalErr,
+		)
+	}
+
+	if crawlErr != nil {
 		category := result.FailureCategory
 		retryAfter := result.RetryAfter
+
 		if result.PagesParsed > 0 {
 			category = retry.CategoryNone
 			retryAfter = 0
 		} else if category == retry.CategoryNone {
 			category = retry.CategoryProcessor
 		}
-		if completionErr := runner.completeSource(
-			ctx, source, category, retryAfter,
-		); completionErr != nil {
-			runner.observe("failed", source, "completion_failed")
+
+		if completionErr :=
+			store.CompleteDiscoverySourceLeaseRetry(
+				ctx,
+				currentLease,
+				category,
+				retryAfter,
+			); completionErr != nil {
+			runner.observe(
+				"failed",
+				source,
+				"completion_failed",
+			)
 			return report, fmt.Errorf(
 				"discovery: complete failed crawl source: %w",
 				completionErr,
 			)
 		}
-		runner.observe("failed", source, "crawl_failed")
+
+		runner.observe(
+			"failed",
+			source,
+			"crawl_failed",
+		)
 		return report, fmt.Errorf(
 			"discovery: crawl source: %w",
-			err,
+			crawlErr,
 		)
 	}
 
-	report.PagesAttempted = result.PagesAttempted
-	report.PagesParsed = result.PagesParsed
+	report.PagesAttempted =
+		result.PagesAttempted
+	report.PagesParsed =
+		result.PagesParsed
 	report.CandidatesDiscovered =
 		result.CandidatesDiscovered
-	report.BudgetExhausted = result.BudgetExhausted
-	if err := runner.completeSource(
+	report.BudgetExhausted =
+		result.BudgetExhausted
+
+	if err := store.CompleteDiscoverySourceLeaseRetry(
 		ctx,
-		source,
+		currentLease,
 		result.FailureCategory,
 		result.RetryAfter,
 	); err != nil {
-		runner.observe("failed", source, "completion_failed")
+		runner.observe(
+			"failed",
+			source,
+			"completion_failed",
+		)
 		return report, fmt.Errorf(
 			"discovery: complete crawl source: %w",
 			err,
 		)
 	}
-	runner.observe("idle", origin.Origin{}, "")
+
+	runner.observe(
+		"idle",
+		origin.Origin{},
+		"",
+	)
 
 	return report, nil
 }
 
-func (runner *CrawlRunner) completeSource(
+func (runner *CrawlRunner) crawlWithLease(
 	ctx context.Context,
-	source origin.Origin,
-	category retry.Category,
-	retryAfter time.Duration,
-) error {
-	if store, ok := runner.store.(crawlSourceRetryCompletionStore); ok {
-		return store.CompleteDiscoverySourceRetry(
-			ctx, source, category, retryAfter,
+	store CrawlSourceStore,
+	lease CrawlSourceLease,
+) (
+	CrawlResult,
+	error,
+	CrawlSourceLease,
+	error,
+) {
+	crawlCtx, cancelCrawl :=
+		context.WithCancel(ctx)
+	defer cancelCrawl()
+
+	renewCtx, cancelRenew :=
+		context.WithCancel(ctx)
+
+	renewalResults := make(
+		chan crawlLeaseRenewalResult,
+		1,
+	)
+
+	go runner.renewCrawlSourceLease(
+		renewCtx,
+		cancelCrawl,
+		store,
+		lease,
+		runner.config.leaseDuration(),
+		renewalResults,
+	)
+
+	result, crawlErr := runner.crawler.Crawl(
+		crawlCtx,
+		lease.Origin,
+	)
+
+	cancelRenew()
+
+	renewal := <-renewalResults
+
+	return result,
+		crawlErr,
+		renewal.lease,
+		renewal.err
+}
+
+func (runner *CrawlRunner) renewCrawlSourceLease(
+	ctx context.Context,
+	cancelCrawl context.CancelFunc,
+	store CrawlSourceStore,
+	lease CrawlSourceLease,
+	leaseDuration time.Duration,
+	results chan<- crawlLeaseRenewalResult,
+) {
+	renewInterval :=
+		discoveryLeaseRenewInterval(
+			leaseDuration,
 		)
+
+	timer := time.NewTimer(renewInterval)
+	defer timer.Stop()
+
+	current := lease
+
+	for {
+		select {
+		case <-ctx.Done():
+			results <- crawlLeaseRenewalResult{
+				lease: current,
+			}
+			return
+
+		case <-timer.C:
+			renewed, err :=
+				store.RenewDiscoverySourceLease(
+					ctx,
+					current,
+					leaseDuration,
+				)
+			if err != nil {
+				if ctx.Err() != nil {
+					results <- crawlLeaseRenewalResult{
+						lease: current,
+					}
+					return
+				}
+
+				cancelCrawl()
+
+				results <- crawlLeaseRenewalResult{
+					lease: current,
+					err:   err,
+				}
+				return
+			}
+
+			current = renewed
+			timer.Reset(renewInterval)
+		}
 	}
-	if store, ok := runner.store.(crawlSourceCompletionStore); ok {
-		return store.CompleteDiscoverySource(ctx, source, category)
+}
+
+func (runner *CrawlRunner) noSource(
+	ctx context.Context,
+) (CrawlReport, error) {
+	state := "idle"
+
+	if store, ok :=
+		runner.store.(discoveryPauseStore); ok {
+		paused, err :=
+			store.DiscoveryPaused(ctx)
+		if err != nil {
+			runner.observe(
+				"failed",
+				origin.Origin{},
+				"control_read_failed",
+			)
+			return CrawlReport{}, err
+		}
+
+		if paused {
+			state = "paused"
+		}
 	}
-	return nil
+
+	runner.observe(
+		state,
+		origin.Origin{},
+		"",
+	)
+
+	return CrawlReport{}, nil
 }
 
 // Run processes due crawl sources until cancellation or a fatal store,
@@ -300,21 +476,30 @@ func (runner *CrawlRunner) Run(
 	}
 
 	consecutiveFailures := 0
+
 	for {
 		report, err := runner.RunOnce(ctx)
 		if err != nil {
-			if contextError := ctx.Err(); contextError != nil {
+			if contextError :=
+				ctx.Err(); contextError != nil {
 				return contextError
 			}
+
 			consecutiveFailures++
+
 			if waitErr := runner.waiter.Wait(
 				ctx,
-				runner.retryPolicy.Delay(consecutiveFailures, 0),
+				runner.retryPolicy.Delay(
+					consecutiveFailures,
+					0,
+				),
 			); waitErr != nil {
 				return waitErr
 			}
+
 			continue
 		}
+
 		consecutiveFailures = 0
 
 		if report.Worked {
@@ -338,10 +523,6 @@ func (runner *CrawlRunner) validate(
 		return errCrawlRunnerUnavailable
 	}
 
-	if ctx == nil {
-		return errInvalidContext
-	}
-
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -358,7 +539,8 @@ func (runner *CrawlRunner) validate(
 		return errInvalidCrawlRunnerConfig
 	}
 
-	if requireWaiter && runner.waiter == nil {
+	if requireWaiter &&
+		runner.waiter == nil {
 		return errCrawlRunnerWaiterUnavailable
 	}
 
@@ -369,7 +551,28 @@ func validCrawlRunnerConfig(
 	config CrawlRunnerConfig,
 ) bool {
 	return config.DiscoveryInterval > 0 &&
-		config.PollInterval > 0
+		config.PollInterval > 0 &&
+		config.LeaseDuration >= 0
+}
+
+func (config CrawlRunnerConfig) leaseDuration() time.Duration {
+	if config.LeaseDuration > 0 {
+		return config.LeaseDuration
+	}
+
+	return defaultCrawlSourceLeaseDuration
+}
+
+func discoveryLeaseRenewInterval(
+	leaseDuration time.Duration,
+) time.Duration {
+	interval := leaseDuration / 2
+
+	if interval <= 0 {
+		return leaseDuration
+	}
+
+	return interval
 }
 
 func (timerCrawlRunnerWaiter) Wait(
@@ -382,6 +585,7 @@ func (timerCrawlRunnerWaiter) Wait(
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+
 	case <-timer.C:
 		return nil
 	}

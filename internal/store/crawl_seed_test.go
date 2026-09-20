@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/joshternet/joshbot/internal/declaration"
+	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/origin"
 )
 
@@ -389,40 +390,43 @@ func TestCrawlSeedIsClaimableWithoutVerification(
 		)
 	}
 
-	claimed, found, err :=
-		crawlStore.ClaimDiscoverySource(
+	lease, found, err :=
+		crawlStore.ClaimDiscoverySourceLease(
 			ctx,
 			time.Hour,
+			time.Minute,
 		)
 	if err != nil {
 		t.Fatalf(
-			"ClaimDiscoverySource() error = %v, want nil",
+			"ClaimDiscoverySourceLease() error = %v, want nil",
 			err,
 		)
 	}
 
 	if !found {
 		t.Fatal(
-			"ClaimDiscoverySource() found = false, want true",
+			"ClaimDiscoverySourceLease() found = false, want true",
 		)
 	}
 
-	if claimed != source {
+	if lease.Origin != source {
 		t.Errorf(
-			"ClaimDiscoverySource() = %q, want %q",
-			claimed,
+			"ClaimDiscoverySourceLease() = %q, want %q",
+			lease.Origin,
 			source,
 		)
 	}
 
 	var (
-		lastAttemptedAt time.Time
+		lastClaimedAt   time.Time
+		lastAttemptedAt *time.Time
 		seeded          bool
 	)
 	err = pool.QueryRow(
 		ctx,
 		`
 			SELECT
+				last_claimed_at,
 				last_attempted_at,
 				seeded
 			FROM discovery_source_state
@@ -430,6 +434,7 @@ func TestCrawlSeedIsClaimableWithoutVerification(
 		`,
 		source.String(),
 	).Scan(
+		&lastClaimedAt,
 		&lastAttemptedAt,
 		&seeded,
 	)
@@ -440,12 +445,15 @@ func TestCrawlSeedIsClaimableWithoutVerification(
 		)
 	}
 
-	if !lastAttemptedAt.Equal(claimedAt) {
+	if !lastClaimedAt.Equal(claimedAt) {
 		t.Errorf(
-			"last_attempted_at = %v, want %v",
-			lastAttemptedAt,
+			"last_claimed_at = %v, want %v",
+			lastClaimedAt,
 			claimedAt,
 		)
+	}
+	if lastAttemptedAt != nil {
+		t.Errorf("last_attempted_at = %v, want nil", lastAttemptedAt)
 	}
 
 	if !seeded {
@@ -530,22 +538,23 @@ func TestCrawlSeedRemoveDisablesUnverifiedSource(
 		)
 	}
 
-	claimed, found, err :=
-		crawlStore.ClaimDiscoverySource(
+	lease, found, err :=
+		crawlStore.ClaimDiscoverySourceLease(
 			ctx,
 			time.Hour,
+			time.Minute,
 		)
 	if err != nil {
 		t.Fatalf(
-			"ClaimDiscoverySource() error = %v, want nil",
+			"ClaimDiscoverySourceLease() error = %v, want nil",
 			err,
 		)
 	}
 
-	if found || claimed != (origin.Origin{}) {
+	if found || lease != (discovery.CrawlSourceLease{}) {
 		t.Errorf(
-			"ClaimDiscoverySource() = %q, %v, want zero, false",
-			claimed,
+			"ClaimDiscoverySourceLease() = %#v, %v, want zero, false",
+			lease,
 			found,
 		)
 	}
@@ -745,22 +754,23 @@ func TestCrawlSeedRemovalPreservesVerifiedEligibilityAndState(
 		)
 	}
 
-	claimed, found, err :=
-		crawlStore.ClaimDiscoverySource(
+	lease, found, err :=
+		crawlStore.ClaimDiscoverySourceLease(
 			ctx,
 			time.Hour,
+			time.Minute,
 		)
 	if err != nil {
 		t.Fatalf(
-			"ClaimDiscoverySource() error = %v, want nil",
+			"ClaimDiscoverySourceLease() error = %v, want nil",
 			err,
 		)
 	}
 
-	if !found || claimed != source {
+	if !found || lease.Origin != source {
 		t.Errorf(
-			"ClaimDiscoverySource() = %q, %v, want %q, true",
-			claimed,
+			"ClaimDiscoverySourceLease() = %q, %v, want %q, true",
+			lease.Origin,
 			found,
 			source,
 		)
@@ -768,13 +778,15 @@ func TestCrawlSeedRemovalPreservesVerifiedEligibilityAndState(
 
 	var (
 		seeded          bool
-		lastAttemptedAt time.Time
+		lastClaimedAt   time.Time
+		lastAttemptedAt *time.Time
 	)
 	err = pool.QueryRow(
 		ctx,
 		`
 			SELECT
 				seeded,
+				last_claimed_at,
 				last_attempted_at
 			FROM discovery_source_state
 			WHERE source_origin = $1
@@ -782,6 +794,7 @@ func TestCrawlSeedRemovalPreservesVerifiedEligibilityAndState(
 		source.String(),
 	).Scan(
 		&seeded,
+		&lastClaimedAt,
 		&lastAttemptedAt,
 	)
 	if err != nil {
@@ -797,12 +810,15 @@ func TestCrawlSeedRemovalPreservesVerifiedEligibilityAndState(
 		)
 	}
 
-	if !lastAttemptedAt.Equal(claimedAt) {
+	if !lastClaimedAt.Equal(claimedAt) {
 		t.Errorf(
-			"last_attempted_at = %v, want %v",
-			lastAttemptedAt,
+			"last_claimed_at = %v, want %v",
+			lastClaimedAt,
 			claimedAt,
 		)
+	}
+	if lastAttemptedAt != nil {
+		t.Errorf("last_attempted_at = %v, want nil", lastAttemptedAt)
 	}
 }
 

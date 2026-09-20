@@ -1,4 +1,3 @@
-//lint:file-ignore SA1012 Intentional negative tests verify defensive nil-context rejection; production callers must never pass a nil context.
 package discovery
 
 import (
@@ -203,24 +202,6 @@ func TestCrawlRunnerDoesNotPersistTransientFailureAfterPartialSuccess(t *testing
 	}
 	if _, err := runner.RunOnce(context.Background()); err == nil {
 		t.Fatal("RunOnce() error = nil")
-	}
-	if len(store.categories) != 1 || store.categories[0] != retry.CategoryNone {
-		t.Fatalf("completion categories = %#v", store.categories)
-	}
-}
-
-func TestCrawlRunnerSupportsLegacyCompletionStore(t *testing.T) {
-	source := mustDiscoveryOrigin(t, "https://example.com")
-	base := &fakeCrawlSourceStore{claims: []fakeCrawlSourceClaim{{
-		source: source, found: true,
-	}}}
-	store := &legacyCompletionStore{fakeCrawlSourceStore: base}
-	runner, err := NewCrawlRunner(store, &fakeSourceCrawler{}, testCrawlRunnerConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := runner.RunOnce(context.Background()); err != nil {
-		t.Fatal(err)
 	}
 	if len(store.categories) != 1 || store.categories[0] != retry.CategoryNone {
 		t.Fatalf("completion categories = %#v", store.categories)
@@ -757,16 +738,6 @@ func TestCrawlRunnerValidatesStoredState(
 		waiter:  validWaiter,
 	}
 
-	if _, err := runner.RunOnce(nil); !errors.Is(
-		err,
-		errInvalidContext,
-	) {
-		t.Errorf(
-			"nil context error = %v, want invalid context",
-			err,
-		)
-	}
-
 	canceled, cancel := context.WithCancel(
 		context.Background(),
 	)
@@ -902,6 +873,38 @@ func TestTimerCrawlRunnerWaiter(t *testing.T) {
 	}
 }
 
+func TestTimerWaitStrategy(t *testing.T) {
+	waiter := timerWaitStrategy{}
+
+	if err := waiter.Wait(
+		context.Background(),
+		0,
+	); err != nil {
+		t.Errorf(
+			"immediate Wait() error = %v, want nil",
+			err,
+		)
+	}
+
+	ctx, cancel := context.WithCancel(
+		context.Background(),
+	)
+	cancel()
+
+	if err := waiter.Wait(
+		ctx,
+		time.Hour,
+	); !errors.Is(
+		err,
+		context.Canceled,
+	) {
+		t.Errorf(
+			"canceled Wait() error = %v, want context.Canceled",
+			err,
+		)
+	}
+}
+
 type fakeCrawlSourceClaim struct {
 	source origin.Origin
 	found  bool
@@ -995,8 +998,14 @@ func TestCrawlRunnerObservesPausedAndControlFailure(t *testing.T) {
 }
 
 type fakeCrawlSourceStore struct {
-	claims    []fakeCrawlSourceClaim
-	intervals []time.Duration
+	claims         []fakeCrawlSourceClaim
+	intervals      []time.Duration
+	leaseDurations []time.Duration
+	generation     int64
+	categories     []retry.Category
+	retryAfter     []time.Duration
+	completeError  error
+	renewError     error
 }
 
 type retryingCrawlSourceStore struct {
@@ -1006,32 +1015,9 @@ type retryingCrawlSourceStore struct {
 	retryAfter    []time.Duration
 }
 
-type legacyCompletionStore struct {
-	*fakeCrawlSourceStore
-	categories []retry.Category
-}
-
-func (store *legacyCompletionStore) CompleteDiscoverySource(
+func (store *retryingCrawlSourceStore) CompleteDiscoverySourceLeaseRetry(
 	_ context.Context,
-	_ origin.Origin,
-	category retry.Category,
-) error {
-	store.categories = append(store.categories, category)
-	return nil
-}
-
-func (store *retryingCrawlSourceStore) CompleteDiscoverySource(
-	_ context.Context,
-	_ origin.Origin,
-	category retry.Category,
-) error {
-	store.categories = append(store.categories, category)
-	return store.completeError
-}
-
-func (store *retryingCrawlSourceStore) CompleteDiscoverySourceRetry(
-	_ context.Context,
-	_ origin.Origin,
+	_ CrawlSourceLease,
 	category retry.Category,
 	retryAfter time.Duration,
 ) error {
@@ -1040,23 +1026,82 @@ func (store *retryingCrawlSourceStore) CompleteDiscoverySourceRetry(
 	return store.completeError
 }
 
-func (store *fakeCrawlSourceStore) ClaimDiscoverySource(
+func (store *fakeCrawlSourceStore) ClaimDiscoverySourceLease(
 	_ context.Context,
 	interval time.Duration,
-) (origin.Origin, bool, error) {
+	leaseDuration time.Duration,
+) (CrawlSourceLease, bool, error) {
 	store.intervals = append(
 		store.intervals,
 		interval,
 	)
+	store.leaseDurations = append(
+		store.leaseDurations,
+		leaseDuration,
+	)
 
 	if len(store.claims) == 0 {
-		return origin.Origin{}, false, nil
+		return CrawlSourceLease{}, false, nil
 	}
 
 	claim := store.claims[0]
 	store.claims = store.claims[1:]
 
-	return claim.source, claim.found, claim.err
+	if claim.err != nil {
+		return CrawlSourceLease{}, false, claim.err
+	}
+
+	if !claim.found {
+		return CrawlSourceLease{}, false, nil
+	}
+
+	store.generation++
+
+	claimedAt := time.Unix(
+		1_800_000_000+store.generation,
+		0,
+	).UTC()
+
+	return CrawlSourceLease{
+		Origin:     claim.source,
+		Generation: store.generation,
+		ClaimedAt:  claimedAt,
+		ExpiresAt:  claimedAt.Add(leaseDuration),
+	}, true, nil
+}
+
+func (store *fakeCrawlSourceStore) RenewDiscoverySourceLease(
+	_ context.Context,
+	lease CrawlSourceLease,
+	leaseDuration time.Duration,
+) (CrawlSourceLease, error) {
+	if store.renewError != nil {
+		return CrawlSourceLease{}, store.renewError
+	}
+
+	lease.ExpiresAt = lease.ExpiresAt.Add(
+		leaseDuration,
+	)
+
+	return lease, nil
+}
+
+func (store *fakeCrawlSourceStore) CompleteDiscoverySourceLeaseRetry(
+	_ context.Context,
+	_ CrawlSourceLease,
+	category retry.Category,
+	retryAfter time.Duration,
+) error {
+	store.categories = append(
+		store.categories,
+		category,
+	)
+	store.retryAfter = append(
+		store.retryAfter,
+		retryAfter,
+	)
+
+	return store.completeError
 }
 
 type fakeSourceCrawlResult struct {

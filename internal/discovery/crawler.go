@@ -98,22 +98,6 @@ type crawledPage struct {
 	retryAfter      time.Duration
 }
 
-// NewMultiPageCrawler constructs a bounded multi-page crawler.
-func NewMultiPageCrawler(
-	getter Getter,
-	sink CandidateSink,
-	config CrawlConfig,
-) (*MultiPageCrawler, error) {
-	return newMultiPageCrawler(
-		getter,
-		sink,
-		config,
-		timerWaitStrategy{},
-		contextTimeoutFactory{},
-		discardCrawlTelemetry{},
-	)
-}
-
 // NewMultiPageCrawlerWithTelemetry constructs a crawler that durably reports
 // every run and attempted frontier page.
 func NewMultiPageCrawlerWithTelemetry(

@@ -11,6 +11,14 @@ import (
 )
 
 const (
+	discoveryIntervalEnvironment    = "JOSHBOT_DISCOVERY_INTERVAL"
+	discoveryPollEnvironment        = "JOSHBOT_DISCOVERY_POLL_INTERVAL"
+	discoveryPageTimeoutEnvironment = "JOSHBOT_DISCOVERY_PAGE_TIMEOUT"
+
+	defaultDiscoveryInterval     = 168 * time.Hour
+	defaultDiscoveryPollInterval = 30 * time.Second
+	defaultDiscoveryPageTimeout  = 30 * time.Second
+
 	crawlMaxDepthEnvironment = "JOSHBOT_CRAWL_MAX_DEPTH"
 
 	crawlMaxPagesEnvironment = "JOSHBOT_CRAWL_MAX_PAGES"
@@ -45,7 +53,29 @@ type crawlRuntimeSettings struct {
 func loadCrawlRuntimeSettings(
 	getenv environmentGetter,
 ) (crawlRuntimeSettings, error) {
-	legacy, err := loadDiscoveryConfig(getenv)
+	discoveryInterval, err := positiveDurationSetting(
+		getenv,
+		discoveryIntervalEnvironment,
+		defaultDiscoveryInterval,
+	)
+	if err != nil {
+		return crawlRuntimeSettings{}, err
+	}
+
+	pollInterval, err := positiveDurationSetting(
+		getenv,
+		discoveryPollEnvironment,
+		defaultDiscoveryPollInterval,
+	)
+	if err != nil {
+		return crawlRuntimeSettings{}, err
+	}
+
+	pageTimeout, err := positiveDurationSetting(
+		getenv,
+		discoveryPageTimeoutEnvironment,
+		defaultDiscoveryPageTimeout,
+	)
 	if err != nil {
 		return crawlRuntimeSettings{}, err
 	}
@@ -143,8 +173,8 @@ func loadCrawlRuntimeSettings(
 
 	return crawlRuntimeSettings{
 		runner: discovery.CrawlRunnerConfig{
-			DiscoveryInterval: legacy.DiscoveryInterval,
-			PollInterval:      legacy.PollInterval,
+			DiscoveryInterval: discoveryInterval,
+			PollInterval:      pollInterval,
 		},
 		crawl: discovery.CrawlConfig{
 			MaxDepth:                     maxDepth,
@@ -152,7 +182,7 @@ func loadCrawlRuntimeSettings(
 			MaxPageBytes:                 maxPageBytes,
 			RequestDelay:                 requestDelay,
 			RedirectLimit:                redirectLimit,
-			PageTimeout:                  legacy.PageTimeout,
+			PageTimeout:                  pageTimeout,
 			MaxAutomaticPromotionsPerRun: automaticConfig.MaxAutomaticPromotionsPerRun,
 		},
 		automatic:          automaticConfig,

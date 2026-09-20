@@ -1,4 +1,3 @@
-//lint:file-ignore SA1012 Intentional negative tests verify defensive nil-context rejection; production callers must never pass a nil context.
 package store
 
 import (
@@ -17,6 +16,7 @@ import (
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 )
 
 var errDiscoveryTestClock = errors.New(
@@ -69,33 +69,34 @@ func TestDiscoveryStoreClaimsEveryValidIdentity(
 				now,
 			)
 
-			got, found, err :=
-				discoveryStore.ClaimDiscoverySource(
+			lease, found, err :=
+				discoveryStore.ClaimDiscoverySourceLease(
 					ctx,
 					24*time.Hour,
+					time.Minute,
 				)
 			if err != nil {
 				t.Fatalf(
-					"ClaimDiscoverySource() error = %v, want nil",
+					"ClaimDiscoverySourceLease() error = %v, want nil",
 					err,
 				)
 			}
 
 			if !found {
 				t.Fatal(
-					"ClaimDiscoverySource() found = false, want true",
+					"ClaimDiscoverySourceLease() found = false, want true",
 				)
 			}
 
-			if got != source {
+			if lease.Origin != source {
 				t.Errorf(
-					"ClaimDiscoverySource() source = %q, want %q",
-					got,
+					"ClaimDiscoverySourceLease() source = %q, want %q",
+					lease.Origin,
 					source,
 				)
 			}
 
-			var attemptedAt time.Time
+			var attemptedAt *time.Time
 			err = pool.QueryRow(
 				ctx,
 				`
@@ -112,12 +113,8 @@ func TestDiscoveryStoreClaimsEveryValidIdentity(
 				)
 			}
 
-			if !attemptedAt.Equal(now) {
-				t.Errorf(
-					"last attempted at = %v, want %v",
-					attemptedAt,
-					now,
-				)
+			if attemptedAt != nil {
+				t.Errorf("last attempted at = %v, want nil", attemptedAt)
 			}
 		})
 	}
@@ -161,23 +158,24 @@ func TestDiscoveryStoreExcludesNonVerifiedSources(
 						now,
 					)
 
-				got, found, err :=
+				lease, found, err :=
 					discoveryStore.
-						ClaimDiscoverySource(
+						ClaimDiscoverySourceLease(
 							ctx,
 							time.Hour,
+							time.Minute,
 						)
 				if err != nil {
 					t.Fatalf(
-						"ClaimDiscoverySource() error = %v, want nil",
+						"ClaimDiscoverySourceLease() error = %v, want nil",
 						err,
 					)
 				}
 
 				if found {
 					t.Errorf(
-						"ClaimDiscoverySource() = %q, true, want zero, false",
-						got,
+						"ClaimDiscoverySourceLease() = %q, true, want zero, false",
+						lease.Origin,
 					)
 				}
 			},
@@ -213,22 +211,23 @@ func TestDiscoveryStoreExcludesNonVerifiedSources(
 			now,
 		)
 
-		got, found, err :=
-			discoveryStore.ClaimDiscoverySource(
+		lease, found, err :=
+			discoveryStore.ClaimDiscoverySourceLease(
 				ctx,
 				time.Hour,
+				time.Minute,
 			)
 		if err != nil {
 			t.Fatalf(
-				"ClaimDiscoverySource() error = %v, want nil",
+				"ClaimDiscoverySourceLease() error = %v, want nil",
 				err,
 			)
 		}
 
 		if found {
 			t.Errorf(
-				"ClaimDiscoverySource() = %q, true, want zero, false",
-				got,
+				"ClaimDiscoverySourceLease() = %q, true, want zero, false",
+				lease.Origin,
 			)
 		}
 	})
@@ -278,23 +277,24 @@ func TestDiscoveryStoreTemporaryFailuresPreserveEligibility(
 						now,
 					)
 
-				got, found, err :=
+				lease, found, err :=
 					discoveryStore.
-						ClaimDiscoverySource(
+						ClaimDiscoverySourceLease(
 							ctx,
 							time.Hour,
+							time.Minute,
 						)
 				if err != nil {
 					t.Fatalf(
-						"ClaimDiscoverySource() error = %v, want nil",
+						"ClaimDiscoverySourceLease() error = %v, want nil",
 						err,
 					)
 				}
 
-				if !found || got != source {
+				if !found || lease.Origin != source {
 					t.Errorf(
-						"ClaimDiscoverySource() = %q, %v, want %q, true",
-						got,
+						"ClaimDiscoverySourceLease() = %q, %v, want %q, true",
+						lease.Origin,
 						found,
 						source,
 					)
@@ -332,6 +332,8 @@ func TestDiscoveryStoreUsesDeterministicClaimOrderAndInterval(
 		times: []time.Time{
 			start.Add(2 * time.Hour),
 			start.Add(2 * time.Hour),
+			start.Add(2 * time.Hour),
+			start.Add(2 * time.Hour),
 			start.Add(3*time.Hour - time.Nanosecond),
 			start.Add(3 * time.Hour),
 		},
@@ -347,68 +349,88 @@ func TestDiscoveryStoreUsesDeterministicClaimOrderAndInterval(
 		)
 	}
 
-	got, found, err :=
-		discoveryStore.ClaimDiscoverySource(
+	lease, found, err :=
+		discoveryStore.ClaimDiscoverySourceLease(
 			ctx,
 			interval,
+			time.Minute,
 		)
 	if err != nil {
 		t.Fatalf("first claim error = %v", err)
 	}
-	if !found || got != first {
+	if !found || lease.Origin != first {
 		t.Errorf(
 			"first claim = %q, %v, want %q, true",
-			got,
+			lease.Origin,
 			found,
 			first,
 		)
 	}
+	if err := discoveryStore.CompleteDiscoverySourceLeaseRetry(
+		ctx,
+		lease,
+		retry.CategoryNone,
+		0,
+	); err != nil {
+		t.Fatalf("first completion error = %v", err)
+	}
 
-	got, found, err =
-		discoveryStore.ClaimDiscoverySource(
+	lease, found, err =
+		discoveryStore.ClaimDiscoverySourceLease(
 			ctx,
 			interval,
+			time.Minute,
 		)
 	if err != nil {
 		t.Fatalf("second claim error = %v", err)
 	}
-	if !found || got != second {
+	if !found || lease.Origin != second {
 		t.Errorf(
 			"second claim = %q, %v, want %q, true",
-			got,
+			lease.Origin,
 			found,
 			second,
 		)
 	}
+	if err := discoveryStore.CompleteDiscoverySourceLeaseRetry(
+		ctx,
+		lease,
+		retry.CategoryNone,
+		0,
+	); err != nil {
+		t.Fatalf("second completion error = %v", err)
+	}
 
-	got, found, err =
-		discoveryStore.ClaimDiscoverySource(
+	lease, found, err =
+		discoveryStore.ClaimDiscoverySourceLease(
 			ctx,
 			interval,
+			time.Minute,
 		)
 	if err != nil {
 		t.Fatalf("early claim error = %v", err)
 	}
-	if found || got != (origin.Origin{}) {
+	if found || lease != (discovery.CrawlSourceLease{}) {
 		t.Errorf(
-			"early claim = %q, %v, want zero, false",
-			got,
+			"early claim = %#v, %v, want zero, false",
+			lease,
 			found,
 		)
 	}
 
-	got, found, err =
-		discoveryStore.ClaimDiscoverySource(
+	lease, found, err =
+		discoveryStore.ClaimDiscoverySourceLease(
 			ctx,
 			interval,
+			time.Minute,
 		)
 	if err != nil {
 		t.Fatalf("due claim error = %v", err)
 	}
-	if !found || got != first {
+	if !found || lease.Origin != first {
 		t.Errorf(
 			"due claim = %q, %v, want %q, true",
-			got,
+			lease.Origin,
 			found,
 			first,
 		)
@@ -443,38 +465,40 @@ func TestDiscoveryStoreUsesPostgreSQLClock(
 	}
 
 	before := time.Now().UTC()
-	got, found, err :=
-		discoveryStore.ClaimDiscoverySource(
+	lease, found, err :=
+		discoveryStore.ClaimDiscoverySourceLease(
 			ctx,
 			time.Hour,
+			time.Minute,
 		)
 	after := time.Now().UTC()
 	if err != nil {
 		t.Fatalf(
-			"ClaimDiscoverySource() error = %v, want nil",
+			"ClaimDiscoverySourceLease() error = %v, want nil",
 			err,
 		)
 	}
 
-	if !found || got != source {
+	if !found || lease.Origin != source {
 		t.Errorf(
 			"claim = %q, %v, want %q, true",
-			got,
+			lease.Origin,
 			found,
 			source,
 		)
 	}
 
-	var attemptedAt time.Time
+	var claimedAt time.Time
+	var attemptedAt *time.Time
 	err = pool.QueryRow(
 		ctx,
 		`
-			SELECT last_attempted_at
+			SELECT last_claimed_at, last_attempted_at
 			FROM discovery_source_state
 			WHERE source_origin = $1
 		`,
 		source.String(),
-	).Scan(&attemptedAt)
+	).Scan(&claimedAt, &attemptedAt)
 	if err != nil {
 		t.Fatalf(
 			"query discovery source state: %v",
@@ -482,14 +506,17 @@ func TestDiscoveryStoreUsesPostgreSQLClock(
 		)
 	}
 
-	if attemptedAt.Before(before) ||
-		attemptedAt.After(after) {
+	if claimedAt.Before(before) ||
+		claimedAt.After(after) {
 		t.Errorf(
-			"last attempted at = %v, want between %v and %v",
-			attemptedAt,
+			"last claimed at = %v, want between %v and %v",
+			claimedAt,
 			before,
 			after,
 		)
+	}
+	if attemptedAt != nil {
+		t.Errorf("last attempted at = %v, want nil", attemptedAt)
 	}
 }
 
@@ -541,14 +568,15 @@ func TestDiscoveryStoreConcurrentClaimsReturnOneSource(
 			defer group.Done()
 			<-start
 
-			got, found, err :=
+			lease, found, err :=
 				discoveryStore.
-					ClaimDiscoverySource(
+					ClaimDiscoverySourceLease(
 						ctx,
 						time.Hour,
+						time.Minute,
 					)
 			results <- discoveryTestClaim{
-				source: got,
+				source: lease.Origin,
 				found:  found,
 				err:    err,
 			}
@@ -563,7 +591,7 @@ func TestDiscoveryStoreConcurrentClaimsReturnOneSource(
 	for result := range results {
 		if result.err != nil {
 			t.Errorf(
-				"ClaimDiscoverySource() error = %v",
+				"ClaimDiscoverySourceLease() error = %v",
 				result.err,
 			)
 			continue
@@ -642,22 +670,23 @@ func TestDiscoveryStoreSkipsLockedSource(
 		now,
 	)
 
-	got, found, err :=
-		discoveryStore.ClaimDiscoverySource(
+	lease, found, err :=
+		discoveryStore.ClaimDiscoverySourceLease(
 			ctx,
 			time.Hour,
+			time.Minute,
 		)
 	if err != nil {
 		t.Fatalf(
-			"ClaimDiscoverySource() error = %v, want nil",
+			"ClaimDiscoverySourceLease() error = %v, want nil",
 			err,
 		)
 	}
 
-	if !found || got != second {
+	if !found || lease.Origin != second {
 		t.Errorf(
 			"claim = %q, %v, want %q, true",
-			got,
+			lease.Origin,
 			found,
 			second,
 		)
@@ -1686,9 +1715,10 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 
 	var nilStore *DiscoveryStore
 
-	_, _, err := nilStore.ClaimDiscoverySource(
+	_, _, err := nilStore.ClaimDiscoverySourceLease(
 		ctx,
 		time.Hour,
+		time.Minute,
 	)
 	if !errors.Is(err, errDiscoveryStoreUnavailable) {
 		t.Errorf("nil store claim error = %v", err)
@@ -1709,9 +1739,10 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 		now,
 	)
 
-	_, _, err = discoveryStore.ClaimDiscoverySource(
+	_, _, err = discoveryStore.ClaimDiscoverySourceLease(
 		nil,
 		time.Hour,
+		time.Minute,
 	)
 	if !errors.Is(err, errInvalidContext) {
 		t.Errorf("nil context claim error = %v", err)
@@ -1731,9 +1762,10 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 	)
 	cancel()
 
-	_, _, err = discoveryStore.ClaimDiscoverySource(
+	_, _, err = discoveryStore.ClaimDiscoverySourceLease(
 		canceledContext,
 		time.Hour,
+		time.Minute,
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("canceled claim error = %v", err)
@@ -1748,9 +1780,10 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 		t.Errorf("canceled record error = %v", err)
 	}
 
-	_, _, err = discoveryStore.ClaimDiscoverySource(
+	_, _, err = discoveryStore.ClaimDiscoverySourceLease(
 		ctx,
 		0,
+		time.Minute,
 	)
 	if !errors.Is(err, errInvalidDiscoveryInterval) {
 		t.Errorf("zero interval error = %v", err)
@@ -1761,9 +1794,10 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 			times: []time.Time{now},
 		},
 	}
-	_, _, err = poolMissingStore.ClaimDiscoverySource(
+	_, _, err = poolMissingStore.ClaimDiscoverySourceLease(
 		ctx,
 		time.Hour,
+		time.Minute,
 	)
 	if !errors.Is(err, errPoolUnavailable) {
 		t.Errorf("missing pool error = %v", err)
@@ -1773,7 +1807,7 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 		pool: pool,
 	}
 	_, _, err = clockMissingStore.
-		ClaimDiscoverySource(ctx, time.Hour)
+		ClaimDiscoverySourceLease(ctx, time.Hour, time.Minute)
 	if !errors.Is(
 		err,
 		errDiscoveryClockUnavailable,
@@ -1985,9 +2019,10 @@ func TestDiscoveryStoreReturnsClockAndDatabaseFailures(
 			claimPool,
 			queueTestTime(),
 		)
-		_, _, err = discoveryStore.ClaimDiscoverySource(
+		_, _, err = discoveryStore.ClaimDiscoverySourceLease(
 			ctx,
 			time.Hour,
+			time.Minute,
 		)
 		if err == nil || !strings.Contains(
 			err.Error(),
@@ -2013,9 +2048,10 @@ func TestDiscoveryStoreReturnsClockAndDatabaseFailures(
 		}
 
 		_, _, err =
-			discoveryStore.ClaimDiscoverySource(
+			discoveryStore.ClaimDiscoverySourceLease(
 				context.Background(),
 				time.Hour,
+				time.Minute,
 			)
 		if !errors.Is(
 			err,
@@ -2118,9 +2154,10 @@ func TestDiscoveryStoreReturnsClockAndDatabaseFailures(
 		)
 
 		_, _, err =
-			discoveryStore.ClaimDiscoverySource(
+			discoveryStore.ClaimDiscoverySourceLease(
 				ctx,
 				time.Hour,
+				time.Minute,
 			)
 		if err == nil ||
 			!strings.Contains(
@@ -2154,9 +2191,10 @@ func TestDiscoveryStoreReturnsClockAndDatabaseFailures(
 		)
 
 		_, _, err =
-			discoveryStore.ClaimDiscoverySource(
+			discoveryStore.ClaimDiscoverySourceLease(
 				ctx,
 				time.Hour,
+				time.Minute,
 			)
 		if err == nil {
 			t.Fatal(

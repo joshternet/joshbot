@@ -69,16 +69,6 @@ func loadWebBotAuthSigner(
 	return identity.Signer()
 }
 
-func validateWebBotAuthIdentity(
-	getenv environmentGetter,
-) error {
-	_, err := loadWebBotAuthSigner(
-		getenv,
-	)
-
-	return err
-}
-
 func readWebBotAuthIdentityFile(
 	path string,
 ) (*webbotauth.Identity, error) {

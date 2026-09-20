@@ -115,11 +115,13 @@ func TestRobotsIntegrationGuardsRequestsAndCachesPolicy(
 	)
 	defer server.Close()
 
-	checker := robots.NewChecker(
+	checker := robots.NewCheckerWithRequestDelayAndSigner(
 		robotsIntegrationResolver{},
 		robotsIntegrationDialer{
 			target: server.Listener.Addr().String(),
 		},
+		0,
+		nil,
 	)
 
 	publicURL := mustRobotsIntegrationURL(
@@ -257,11 +259,13 @@ func TestRobotsIntegrationFailsClosedOnTemporaryPolicyFailure(
 	)
 	defer server.Close()
 
-	checker := robots.NewChecker(
+	checker := robots.NewCheckerWithRequestDelayAndSigner(
 		robotsIntegrationResolver{},
 		robotsIntegrationDialer{
 			target: server.Listener.Addr().String(),
 		},
+		0,
+		nil,
 	)
 
 	response, err := checker.Get(

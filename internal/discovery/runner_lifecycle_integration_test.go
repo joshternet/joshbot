@@ -29,18 +29,44 @@ type discoveryRunnerIntegrationCrawlStore struct {
 	completeErr         error
 }
 
-func (store *discoveryRunnerIntegrationCrawlStore) ClaimDiscoverySource(
-	context.Context,
-	time.Duration,
-) (origin.Origin, bool, error) {
+func (store *discoveryRunnerIntegrationCrawlStore) ClaimDiscoverySourceLease(
+	_ context.Context,
+	_ time.Duration,
+	leaseDuration time.Duration,
+) (discovery.CrawlSourceLease, bool, error) {
 	if store.index >= len(store.claims) {
-		return origin.Origin{}, false, nil
+		return discovery.CrawlSourceLease{}, false, nil
 	}
 
 	claim := store.claims[store.index]
 	store.index++
 
-	return claim.source, claim.found, claim.err
+	if claim.err != nil {
+		return discovery.CrawlSourceLease{}, false, claim.err
+	}
+
+	if !claim.found {
+		return discovery.CrawlSourceLease{}, false, nil
+	}
+
+	claimedAt := time.Unix(1_800_000_000, 0).UTC()
+
+	return discovery.CrawlSourceLease{
+		Origin:     claim.source,
+		Generation: int64(store.index),
+		ClaimedAt:  claimedAt,
+		ExpiresAt:  claimedAt.Add(leaseDuration),
+	}, true, nil
+}
+
+func (store *discoveryRunnerIntegrationCrawlStore) RenewDiscoverySourceLease(
+	_ context.Context,
+	lease discovery.CrawlSourceLease,
+	leaseDuration time.Duration,
+) (discovery.CrawlSourceLease, error) {
+	lease.ExpiresAt = lease.ExpiresAt.Add(leaseDuration)
+
+	return lease, nil
 }
 
 func (store *discoveryRunnerIntegrationCrawlStore) DiscoveryPaused(
@@ -53,9 +79,9 @@ func (store *discoveryRunnerIntegrationCrawlStore) DiscoveryPaused(
 	return store.paused, nil
 }
 
-func (store *discoveryRunnerIntegrationCrawlStore) CompleteDiscoverySourceRetry(
+func (store *discoveryRunnerIntegrationCrawlStore) CompleteDiscoverySourceLeaseRetry(
 	_ context.Context,
-	_ origin.Origin,
+	_ discovery.CrawlSourceLease,
 	category retry.Category,
 	retryAfter time.Duration,
 ) error {
@@ -320,234 +346,6 @@ func TestDiscoveryRunnerIntegrationCrawlRunnerReportsPauseAndCancellation(
 		)
 	}
 
-	cancel()
-
-	select {
-	case err := <-runResult:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf(
-				"Run() error = %v, want context.Canceled",
-				err,
-			)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal(
-			"Run() did not stop after cancellation",
-		)
-	}
-}
-
-type discoveryLegacyIntegrationStore struct {
-	source origin.Origin
-	found  bool
-
-	recordedSource     origin.Origin
-	recordedCandidates []discovery.Candidate
-	accepted           int
-}
-
-func (store *discoveryLegacyIntegrationStore) ClaimDiscoverySource(
-	context.Context,
-	time.Duration,
-) (origin.Origin, bool, error) {
-	if !store.found {
-		return origin.Origin{}, false, nil
-	}
-
-	store.found = false
-	return store.source, true, nil
-}
-
-func (store *discoveryLegacyIntegrationStore) RecordDiscovery(
-	_ context.Context,
-	source origin.Origin,
-	candidates []discovery.Candidate,
-) (discovery.RecordResult, error) {
-	store.recordedSource = source
-	store.recordedCandidates = append(
-		[]discovery.Candidate(nil),
-		candidates...,
-	)
-
-	return discovery.RecordResult{
-		Accepted: store.accepted,
-	}, nil
-}
-
-type discoveryLegacyIntegrationDiscoverer struct {
-	discover func(
-		context.Context,
-		origin.Origin,
-	) (discovery.Result, error)
-}
-
-func (discoverer discoveryLegacyIntegrationDiscoverer) Discover(
-	ctx context.Context,
-	source origin.Origin,
-) (discovery.Result, error) {
-	return discoverer.discover(ctx, source)
-}
-
-func TestDiscoveryRunnerIntegrationLegacyRunnerPersistsCandidates(
-	t *testing.T,
-) {
-	source := mustDiscoveryRunnerIntegrationOrigin(
-		t,
-		"https://example.com",
-	)
-	candidateOrigin := mustDiscoveryRunnerIntegrationOrigin(
-		t,
-		"https://candidate.example",
-	)
-
-	store := &discoveryLegacyIntegrationStore{
-		source:   source,
-		found:    true,
-		accepted: 1,
-	}
-
-	discoverer := discoveryLegacyIntegrationDiscoverer{
-		discover: func(
-			context.Context,
-			origin.Origin,
-		) (discovery.Result, error) {
-			return discovery.Result{
-				Source: source,
-				Status: discovery.StatusComplete,
-				Candidates: []discovery.Candidate{
-					{
-						Origin: candidateOrigin,
-						Kind:   discovery.KindLink,
-					},
-				},
-			}, nil
-		},
-	}
-
-	runner, err := discovery.NewRunner(
-		store,
-		discoverer,
-		discovery.Config{
-			DiscoveryInterval: time.Hour,
-			PollInterval:      time.Hour,
-			PageTimeout:       time.Second,
-		},
-	)
-	if err != nil {
-		t.Fatalf(
-			"NewRunner() error = %v",
-			err,
-		)
-	}
-
-	report, err := runner.RunOnce(
-		context.Background(),
-	)
-	if err != nil {
-		t.Fatalf(
-			"RunOnce() error = %v",
-			err,
-		)
-	}
-
-	if !report.Worked ||
-		report.Source != source ||
-		report.Status != discovery.StatusComplete ||
-		report.Candidates != 1 ||
-		report.Accepted != 1 {
-		t.Errorf(
-			"RunOnce() report = %#v",
-			report,
-		)
-	}
-
-	if store.recordedSource != source {
-		t.Errorf(
-			"recorded source = %q, want %q",
-			store.recordedSource.String(),
-			source.String(),
-		)
-	}
-
-	if len(store.recordedCandidates) != 1 ||
-		store.recordedCandidates[0].Origin != candidateOrigin {
-		t.Errorf(
-			"recorded candidates = %#v",
-			store.recordedCandidates,
-		)
-	}
-}
-
-func TestDiscoveryRunnerIntegrationLegacyRunnerTimesOutAndCancels(
-	t *testing.T,
-) {
-	source := mustDiscoveryRunnerIntegrationOrigin(
-		t,
-		"https://timeout.example",
-	)
-
-	store := &discoveryLegacyIntegrationStore{
-		source: source,
-		found:  true,
-	}
-
-	discoverer := discoveryLegacyIntegrationDiscoverer{
-		discover: func(
-			ctx context.Context,
-			source origin.Origin,
-		) (discovery.Result, error) {
-			<-ctx.Done()
-			return discovery.Result{
-				Source: source,
-			}, ctx.Err()
-		},
-	}
-
-	runner, err := discovery.NewRunner(
-		store,
-		discoverer,
-		discovery.Config{
-			DiscoveryInterval: time.Hour,
-			PollInterval:      time.Hour,
-			PageTimeout:       20 * time.Millisecond,
-		},
-	)
-	if err != nil {
-		t.Fatalf(
-			"NewRunner() error = %v",
-			err,
-		)
-	}
-
-	report, err := runner.RunOnce(
-		context.Background(),
-	)
-	if err != nil {
-		t.Fatalf(
-			"RunOnce() error = %v",
-			err,
-		)
-	}
-
-	if !report.Worked ||
-		report.Source != source ||
-		report.Status != discovery.StatusUnavailable {
-		t.Errorf(
-			"timeout report = %#v",
-			report,
-		)
-	}
-
-	ctx, cancel := context.WithCancel(
-		context.Background(),
-	)
-
-	runResult := make(chan error, 1)
-	go func() {
-		runResult <- runner.Run(ctx)
-	}()
-
-	time.Sleep(20 * time.Millisecond)
 	cancel()
 
 	select {

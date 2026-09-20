@@ -186,18 +186,21 @@ func TestDiscoveryPostgresIntegrationCrawlsAndPersistsCandidates(
 	)
 	defer server.Close()
 
-	checker := robots.NewChecker(
+	checker := robots.NewCheckerWithRequestDelayAndSigner(
 		discoveryPostgresResolver{},
 		discoveryPostgresDialer{
 			target: server.Listener.Addr().String(),
 		},
+		0,
+		nil,
 	)
 
-	crawler, err := discovery.NewMultiPageCrawler(
+	crawler, err := discovery.NewMultiPageCrawlerWithTelemetry(
 		checker,
 		discoveryPostgresCandidateSink{
 			store: discoveryStore,
 		},
+		discoveryIntegrationTelemetry{},
 		discovery.CrawlConfig{
 			MaxDepth:                     1,
 			MaxPages:                     4,
