@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joshternet/joshbot/internal/database"
 )
 
 var (
@@ -36,13 +37,27 @@ type PostgresConfig struct {
 //
 // The caller owns the supplied pool and remains responsible for closing it.
 type PostgresReader struct {
-	pool   *pgxpool.Pool
+	pool   database.Queryer
 	config PostgresConfig
 }
 
 // NewPostgresReader constructs the PostgreSQL reporting read model.
 func NewPostgresReader(
 	pool *pgxpool.Pool,
+	config PostgresConfig,
+) (*PostgresReader, error) {
+	if pool == nil {
+		return nil, errPostgresPoolUnavailable
+	}
+
+	return newPostgresReader(
+		pool,
+		config,
+	)
+}
+
+func newPostgresReader(
+	pool database.Queryer,
 	config PostgresConfig,
 ) (*PostgresReader, error) {
 	if pool == nil {

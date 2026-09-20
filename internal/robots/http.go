@@ -47,6 +47,16 @@ var (
 	)
 )
 
+// RequestSigner applies authentication metadata to one outbound JoshBot HTTP
+// request.
+//
+// Sign is called after JoshBot's stable User-Agent has been applied and
+// immediately before the guarded transport sends the request. Redirect hops
+// therefore receive a fresh signature for the authority actually contacted.
+type RequestSigner interface {
+	Sign(*http.Request) error
+}
+
 type hopGetter interface {
 	get(
 		context.Context,
@@ -58,6 +68,7 @@ type guardedHTTP struct {
 	resolver netguard.Resolver
 	dialer   netguard.Dialer
 	rootCAs  *x509.CertPool
+	signer   RequestSigner
 }
 
 func (g *guardedHTTP) get(
@@ -111,6 +122,17 @@ func (g *guardedHTTP) get(
 	}
 	request = request.WithContext(ctx)
 	request.Header.Set("User-Agent", UserAgent)
+
+	if g.signer != nil {
+		if err := g.signer.Sign(request); err != nil {
+			transport.CloseIdleConnections()
+
+			return nil, fmt.Errorf(
+				"robots: sign HTTP request: %w",
+				err,
+			)
+		}
+	}
 
 	response, err := transport.RoundTrip(request)
 	if err != nil {

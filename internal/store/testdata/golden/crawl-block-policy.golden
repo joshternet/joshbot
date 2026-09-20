@@ -1,0 +1,20 @@
+=== exact block ===
+result=ok
+operation=intent source=https://example.com blocked=true
+operation=update source=https://example.com blocked=true
+operation=remove_probe source=https://example.com
+
+=== allow automatic source with domain avoid ===
+result=ok
+operation=intent source=https://auto.example.com blocked=false
+operation=update source=https://auto.example.com blocked=true
+operation=remove_probe source=https://auto.example.com
+
+=== reconcile automatic sources ===
+result=ok
+changed=4
+operation=update source=https://change.example.com blocked=true
+operation=update source=https://operator.test blocked=true
+operation=update source=https://allow.test blocked=false
+operation=update source=https://configured.configured.test blocked=true
+operation=remove_probes sources=https://same.example.com,https://change.example.com,https://operator.test,https://configured.configured.test

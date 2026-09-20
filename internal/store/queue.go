@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joshternet/joshbot/internal/database"
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/retry"
@@ -57,7 +58,8 @@ type Lease struct {
 // Normal operation needs SELECT, INSERT, UPDATE, and narrowly scoped DELETE
 // access to verification_queue. Schema migrations are intentionally separate.
 type Queue struct {
-	pool        *pgxpool.Pool
+	pool        database.Postgres
+	clockPool   *pgxpool.Pool
 	config      QueueConfig
 	clock       queueClock
 	retryPolicy retry.Policy
@@ -118,6 +120,7 @@ func newQueue(
 
 	return &Queue{
 		pool:        pool,
+		clockPool:   pool,
 		config:      config,
 		clock:       clock,
 		retryPolicy: retry.NewPolicy(config.RetryJitter),
@@ -618,22 +621,22 @@ func (q *Queue) CompleteVerification(
 							available_at = GREATEST(
 								$5,
 								queued.last_claimed_at +
-									make_interval(
-										secs =>
-											$6::double precision
-									)
+								make_interval(
+								secs =>
+								$6::double precision
+								)
 							),
 							consecutive_failures = $10,
 							last_failure_category = $11,
 							next_attempt_at = CASE
 								WHEN $12::boolean
 								THEN GREATEST(
-									$5,
-									queued.last_claimed_at +
-										make_interval(
-											secs =>
-												$6::double precision
-										)
+								$5,
+								queued.last_claimed_at +
+								make_interval(
+								secs =>
+								$6::double precision
+								)
 								)
 								ELSE NULL
 							END,
@@ -644,7 +647,7 @@ func (q *Queue) CompleteVerification(
 								leased_queue.origin
 							AND (
 								leased_queue.mode =
-									'recurring'
+								'recurring'
 								OR $7 = 'valid'
 								OR $12::boolean
 							)
@@ -774,7 +777,7 @@ func (q *Queue) validate(ctx context.Context) error {
 }
 
 func (q *Queue) now(ctx context.Context) (time.Time, error) {
-	now, err := q.clock.Now(ctx, q.pool)
+	now, err := q.clock.Now(ctx, q.clockPool)
 	if err != nil {
 		return time.Time{}, fmt.Errorf(
 			"store: read queue clock: %w",
@@ -797,7 +800,7 @@ func (q *Queue) completionTime(
 	if clock, ok := q.clock.(transactionQueueClock); ok {
 		now, err = clock.NowTransaction(ctx, tx)
 	} else {
-		now, err = q.clock.Now(ctx, q.pool)
+		now, err = q.clock.Now(ctx, q.clockPool)
 	}
 
 	if err != nil {

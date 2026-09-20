@@ -1,0 +1,25 @@
+=== config ===
+valid=true
+zero-lease=false
+zero-origin-interval=false
+
+=== worker IDs ===
+empty=false
+normal=true
+spaces=true
+max-runes=true
+over-max-runes=false
+
+=== lease ===
+valid=true
+zero-origin=false
+zero-generation=false
+non-forward-expiration=false
+
+=== failure category ===
+non-transient=<nil>
+transient=dns
+
+=== clock ===
+input=2026-09-18T10:30:00-07:00
+stored=2026-09-18T17:30:00Z

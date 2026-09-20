@@ -24,7 +24,7 @@ func CheckGolden(path string, actual []byte) error {
 	}
 
 	return fmt.Errorf(
-		"golden mismatch for %q:\nexpected:\n%s\nactual:\n%s\n",
+		"golden mismatch for %q:\nexpected:\n%s\nactual:\n%s",
 		path,
 		expected,
 		actual,

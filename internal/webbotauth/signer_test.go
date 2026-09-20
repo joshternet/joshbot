@@ -251,7 +251,9 @@ func TestSignerFormattingAndLogsDoNotLeakPrivateKey(t *testing.T) {
 		}
 	}
 
-	marshaled, err := json.Marshal(signer)
+	marshaled, err := json.Marshal(
+		map[string]any{"signer": signer},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

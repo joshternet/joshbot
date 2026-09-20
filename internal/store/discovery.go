@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joshternet/joshbot/internal/database"
 	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/retry"
@@ -43,7 +44,7 @@ var (
 //
 // The caller retains ownership of the PostgreSQL pool.
 type DiscoveryStore struct {
-	pool        *pgxpool.Pool
+	pool        database.Postgres
 	clock       transactionQueueClock
 	automatic   AutomaticCrawlConfig
 	retryPolicy retry.Policy
@@ -325,6 +326,13 @@ func (s *DiscoveryStore) ReconcileAutomaticCrawlPolicy(
 func NewDiscoveryStore(
 	pool *pgxpool.Pool,
 ) (*DiscoveryStore, error) {
+	if pool == nil {
+		return newDiscoveryStore(
+			nil,
+			databaseQueueClock{},
+		)
+	}
+
 	return newDiscoveryStore(
 		pool,
 		databaseQueueClock{},
@@ -337,6 +345,14 @@ func NewDiscoveryStoreWithAutomaticCrawling(
 	pool *pgxpool.Pool,
 	config AutomaticCrawlConfig,
 ) (*DiscoveryStore, error) {
+	if pool == nil {
+		return newDiscoveryStoreWithConfig(
+			nil,
+			databaseQueueClock{},
+			config,
+		)
+	}
+
 	return newDiscoveryStoreWithConfig(
 		pool,
 		databaseQueueClock{},
@@ -345,7 +361,7 @@ func NewDiscoveryStoreWithAutomaticCrawling(
 }
 
 func newDiscoveryStore(
-	pool *pgxpool.Pool,
+	pool database.Postgres,
 	clock transactionQueueClock,
 ) (*DiscoveryStore, error) {
 	return newDiscoveryStoreWithConfig(
@@ -356,7 +372,7 @@ func newDiscoveryStore(
 }
 
 func newDiscoveryStoreWithConfig(
-	pool *pgxpool.Pool,
+	pool database.Postgres,
 	clock transactionQueueClock,
 	config AutomaticCrawlConfig,
 ) (*DiscoveryStore, error) {
@@ -591,13 +607,13 @@ func (s *DiscoveryStore) ClaimDiscoverySource(
 							FROM verification_observations
 								AS observation
 							WHERE observation.origin =
-									stored_origin.origin
+								stored_origin.origin
 								AND observation.outcome IN (
-									'valid',
-									'absent',
-									'invalid',
-									'unsupported_version',
-									'cross_origin_redirect'
+								'valid',
+								'absent',
+								'invalid',
+								'unsupported_version',
+								'cross_origin_redirect'
 								)
 							ORDER BY
 								observation.observed_at DESC,
@@ -623,15 +639,15 @@ func (s *DiscoveryStore) ClaimDiscoverySource(
 							)
 							AND (
 								source_state.last_attempted_at
-									IS NULL
+								IS NULL
 								OR source_state.last_attempted_at
-									<= (
-										$1::timestamptz -
-										make_interval(
-											secs =>
-												$2::double precision
-										)
-									)
+								<= (
+								$1::timestamptz -
+								make_interval(
+								secs =>
+								$2::double precision
+								)
+								)
 							)
 						ORDER BY
 							source_state.last_attempted_at
@@ -652,18 +668,18 @@ func (s *DiscoveryStore) ClaimDiscoverySource(
 							AND (
 								source_state.seeded
 								OR (
-									$3::boolean
-									AND source_state.
-										automatically_discovered
-									AND (
-										SELECT count(*)
-										FROM (
-											SELECT 1
-											FROM verification_queue
-											WHERE mode = 'probe'
-											LIMIT $4::bigint
-										) AS pending_probe
-									) < $4::bigint
+								$3::boolean
+								AND source_state.
+								automatically_discovered
+								AND (
+								SELECT count(*)
+								FROM (
+								SELECT 1
+								FROM verification_queue
+								WHERE mode = 'probe'
+								LIMIT $4::bigint
+								) AS pending_probe
+								) < $4::bigint
 								)
 							)
 							AND (
@@ -672,15 +688,15 @@ func (s *DiscoveryStore) ClaimDiscoverySource(
 							)
 							AND (
 								source_state.last_attempted_at
-									IS NULL
+								IS NULL
 								OR source_state.last_attempted_at
-									<= (
-										$1::timestamptz -
-										make_interval(
-											secs =>
-												$2::double precision
-										)
-									)
+								<= (
+								$1::timestamptz -
+								make_interval(
+								secs =>
+								$2::double precision
+								)
+								)
 							)
 						ORDER BY
 							source_state.last_attempted_at
@@ -994,12 +1010,12 @@ func (s *DiscoveryStore) recordDiscovery(
 						SET
 							first_discovered_at = LEAST(
 								discovery_candidates.
-									first_discovered_at,
+								first_discovered_at,
 								EXCLUDED.first_discovered_at
 							),
 							last_discovered_at = GREATEST(
 								discovery_candidates.
-									last_discovered_at,
+								last_discovered_at,
 								EXCLUDED.last_discovered_at
 							)
 						RETURNING origin
@@ -1030,12 +1046,12 @@ func (s *DiscoveryStore) recordDiscovery(
 						SET
 							first_discovered_at = LEAST(
 								discovery_edges.
-									first_discovered_at,
+								first_discovered_at,
 								EXCLUDED.first_discovered_at
 							),
 							last_discovered_at = GREATEST(
 								discovery_edges.
-									last_discovered_at,
+								last_discovered_at,
 								EXCLUDED.last_discovered_at
 							)
 						RETURNING candidate_origin
@@ -1210,7 +1226,7 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 					WHERE batch.admission_run_id = run.id
 				)
 			FROM crawl_runs AS run
-			WHERE run.id = $1 AND run.finished_at IS NULL
+			WHERE run.id = $1 AND finished_at IS NULL
 			FOR UPDATE
 		`, int64(runID)).Scan(&maxPromotions, &batchCount); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -1258,9 +1274,9 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 							FROM crawl_run_automatic_admission_batches AS prior
 							WHERE prior.candidate_origin = candidate.origin
 								AND prior.outcome IN (
-									'promoted',
-									'network_rejected',
-									'existing'
+								'promoted',
+								'network_rejected',
+								'existing'
 								)
 						)
 						AND NOT EXISTS (
@@ -1274,32 +1290,32 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 							FROM unnest($2::text[]) AS excluded(pattern)
 							CROSS JOIN LATERAL (
 								SELECT lower(trim(
-									both '[]' from substring(
-										candidate.origin
-										from '^https?://(\[[^]]+\]|[^:]+)'
-									)
+								both '[]' from substring(
+								candidate.origin
+								from '^https?://(\[[^]]+\]|[^:]+)'
+								)
 								)) AS hostname
 							) AS parsed
 							WHERE (
 								right(excluded.pattern, 2) = '.*'
 								AND (
-									parsed.hostname LIKE
-										left(
-											excluded.pattern,
-											length(excluded.pattern) - 2
-										) || '.%'
-									OR parsed.hostname LIKE
-										'%.' || left(
-											excluded.pattern,
-											length(excluded.pattern) - 2
-										) || '.%'
+								parsed.hostname LIKE
+								left(
+								excluded.pattern,
+								length(excluded.pattern) - 2
+								) || '.%'
+								OR parsed.hostname LIKE
+								'%.' || left(
+								excluded.pattern,
+								length(excluded.pattern) - 2
+								) || '.%'
 								)
 							) OR (
 								right(excluded.pattern, 2) <> '.*'
 								AND (
-									parsed.hostname = excluded.pattern
-									OR parsed.hostname LIKE
-										'%.' || excluded.pattern
+								parsed.hostname = excluded.pattern
+								OR parsed.hostname LIKE
+								'%.' || excluded.pattern
 								)
 							)
 						)
@@ -1358,8 +1374,8 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 						CROSS JOIN LATERAL (
 							SELECT lower(trim(
 								both '[]' from substring(
-									candidate.origin
-									from '^https?://(\[[^]]+\]|[^:]+)'
+								candidate.origin
+								from '^https?://(\[[^]]+\]|[^:]+)'
 								)
 							)) AS hostname
 						) AS parsed
@@ -1367,22 +1383,22 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 							right(excluded.pattern, 2) = '.*'
 							AND (
 								parsed.hostname LIKE
-									left(
-										excluded.pattern,
-										length(excluded.pattern) - 2
-									) || '.%'
+								left(
+								excluded.pattern,
+								length(excluded.pattern) - 2
+								) || '.%'
 								OR parsed.hostname LIKE
-									'%.' || left(
-										excluded.pattern,
-										length(excluded.pattern) - 2
-									) || '.%'
+								'%.' || left(
+								excluded.pattern,
+								length(excluded.pattern) - 2
+								) || '.%'
 							)
 						) OR (
 							right(excluded.pattern, 2) <> '.*'
 							AND (
 								parsed.hostname = excluded.pattern
 								OR parsed.hostname LIKE
-									'%.' || excluded.pattern
+								'%.' || excluded.pattern
 							)
 						)
 					)

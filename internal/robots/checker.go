@@ -65,15 +65,41 @@ func NewChecker(
 //
 // An applicable robots Crawl-delay can increase this minimum but never reduce
 // it.
+//
+// This constructor leaves Web Bot Auth disabled. Production crawler runtimes
+// with a configured signing identity should use
+// NewCheckerWithRequestDelayAndSigner.
 func NewCheckerWithRequestDelay(
 	resolver netguard.Resolver,
 	dialer netguard.Dialer,
 	requestDelay time.Duration,
 ) *Checker {
+	return NewCheckerWithRequestDelayAndSigner(
+		resolver,
+		dialer,
+		requestDelay,
+		nil,
+	)
+}
+
+// NewCheckerWithRequestDelayAndSigner constructs the shared JoshBot outbound
+// HTTP boundary.
+//
+// Every robots fetch and robots-authorized target request uses the same guarded
+// network access, stable User-Agent, per-origin scheduler, and optional request
+// signer. Redirect hops are performed as new requests through this same
+// boundary, so each hop receives a fresh signature for its actual authority.
+func NewCheckerWithRequestDelayAndSigner(
+	resolver netguard.Resolver,
+	dialer netguard.Dialer,
+	requestDelay time.Duration,
+	signer RequestSigner,
+) *Checker {
 	return newCheckerWithRequestDelay(
 		&guardedHTTP{
 			resolver: resolver,
 			dialer:   dialer,
+			signer:   signer,
 		},
 		time.Now,
 		requestDelay,

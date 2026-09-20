@@ -544,15 +544,6 @@ func cloneStoreMigrationSchema(
 	}
 }
 
-func storeTestMigrations(t *testing.T) string {
-	t.Helper()
-	migrations, err := loadStoreTestMigrations()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return migrations
-}
-
 func loadStoreTestMigrations() (string, error) {
 	storeMigrationsOnce.Do(func() {
 		migrationFiles := []string{

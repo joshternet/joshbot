@@ -113,9 +113,8 @@ func TestAuthorizationComparisonUsesFixedLengthDigests(t *testing.T) {
 		"Bearer short",
 		"Bearer " + controlTestToken + strings.Repeat("x", 4096),
 	} {
-		digest := authorizationDigest(provided)
-		if len(digest) != len(expected) {
-			t.Errorf("digest length = %d for input length %d", len(digest), len(provided))
+		if got := len(authorizationDigest(provided)); got != len(expected) {
+			t.Errorf("digest length = %d for input length %d", got, len(provided))
 		}
 		if authorizationMatches(expected, provided) {
 			t.Errorf("authorizationMatches accepted input length %d", len(provided))

@@ -464,9 +464,10 @@ func (operations runtimeOperations) worker(
 		return err
 	}
 
-	if err := validateWebBotAuthIdentity(
+	signer, err := loadWebBotAuthSigner(
 		operations.getenv,
-	); err != nil {
+	)
+	if err != nil {
 		return err
 	}
 
@@ -510,10 +511,11 @@ func (operations runtimeOperations) worker(
 				)
 			}
 
-			checker := robots.NewCheckerWithRequestDelay(
+			checker := robots.NewCheckerWithRequestDelayAndSigner(
 				net.DefaultResolver,
 				&net.Dialer{},
 				requestDelay,
+				signer,
 			)
 			verifier := declaration.NewVerifier(
 				checker,

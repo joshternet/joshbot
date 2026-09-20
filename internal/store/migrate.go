@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joshternet/joshbot/internal/database"
 )
 
 const migrationAdvisoryLockKey int64 = 0x4a6f7368426f74
@@ -61,6 +62,14 @@ func Migrate(
 	ctx context.Context,
 	pool *pgxpool.Pool,
 ) error {
+	if pool == nil {
+		return migrate(
+			ctx,
+			nil,
+			embeddedMigrations,
+		)
+	}
+
 	return migrate(
 		ctx,
 		pool,
@@ -70,7 +79,7 @@ func Migrate(
 
 func migrate(
 	ctx context.Context,
-	pool *pgxpool.Pool,
+	pool database.Beginner,
 	source fs.FS,
 ) error {
 	if ctx == nil {
