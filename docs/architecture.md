@@ -446,5 +446,5 @@ read-only role.
 The recovery smoke test restores into a fresh isolated PostgreSQL instance,
 checks role boundaries and migration records, verifies persisted operational
 state, and rebuilds byte-identical public output. The current schema contains
-twelve embedded migrations, numbered `0001` through `0012`. Recovery never
+thirteen embedded migrations, numbered `0001` through `0013`. Recovery never
 restores into the configured production database.
