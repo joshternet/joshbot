@@ -55,6 +55,11 @@ type Queue interface {
 		string,
 	) (store.Lease, bool, error)
 
+	Renew(
+		context.Context,
+		store.Lease,
+	) (store.Lease, error)
+
 	CompleteVerification(
 		context.Context,
 		store.Lease,
@@ -87,21 +92,26 @@ type Config struct {
 	JobTimeout      time.Duration
 	CompletionGrace time.Duration
 	RecheckInterval time.Duration
-	RetryJitter     retry.Jitter
 }
 
 // Worker claims and processes declaration-verification work.
 //
 // Queue delivery and physical verification are at-least-once. Only a worker
 // with current lease authority can atomically commit a verification result.
+//
+// Durable per-origin retry delays are owned by queue completion. Run paces
+// processor and infrastructure failures with PollInterval and continues
+// immediately after claimed-work failures so unrelated due work is not parked.
+// That immediate continue is intentional: durable scheduling belongs to the
+// failed origin's lease/completion state, not the processor loop.
 type Worker struct {
 	queue          Queue
 	verifier       Verifier
 	config         Config
 	waiter         waitStrategy
 	timeoutFactory timeoutFactory
-	retryPolicy    retry.Policy
 	observer       LifecycleObserver
+	now            func() time.Time
 }
 
 // SetLifecycleObserver attaches state observation without changing work.
@@ -183,7 +193,6 @@ func newWorker(
 		config:         config,
 		waiter:         waiter,
 		timeoutFactory: timeoutFactory,
-		retryPolicy:    retry.NewPolicy(config.RetryJitter),
 	}, nil
 }
 
@@ -227,21 +236,8 @@ func (w *Worker) RunOnce(
 	}
 	w.observe("running", lease.Origin, "")
 
-	leaseBudget := lease.ExpiresAt.Sub(
-		lease.ClaimedAt,
-	)
-	if !hasCompletionBudget(
-		leaseBudget,
-		w.config.JobTimeout,
-		w.config.CompletionGrace,
-	) {
-		w.observe("failed", lease.Origin, "insufficient_lease_budget")
-		return true, ErrInsufficientLeaseBudget
-	}
-
-	result, timedOut, err := w.verifyWithRetries(ctx, lease.Origin)
+	result, lease, timedOut, err := w.verifyWithRetries(ctx, lease)
 	if err != nil {
-		w.observe("failed", lease.Origin, "verification_failed")
 		return true, err
 	}
 
@@ -299,25 +295,41 @@ func (w *Worker) RunOnce(
 
 func (w *Worker) verifyWithRetries(
 	ctx context.Context,
-	source origin.Origin,
-) (declaration.Result, bool, error) {
+	lease store.Lease,
+) (declaration.Result, store.Lease, bool, error) {
 	anyTimeout := false
 	var lastResult declaration.Result
+	current := lease
+
 	for attempt := 1; attempt <= retry.MaxAttemptsPerCycle; attempt++ {
+		ensured, ensureErr := w.ensureVerificationLeaseBudget(
+			ctx,
+			current,
+		)
+		if ensureErr != nil {
+			return declaration.Result{}, ensured, anyTimeout, ensureErr
+		}
+		current = ensured
+
 		jobContext, cancelJob := w.timeoutFactory.WithTimeout(
 			ctx,
 			w.config.JobTimeout,
 		)
-		result, err := w.verifier.Verify(jobContext, source)
+		result, err := w.verifier.Verify(jobContext, current.Origin)
 		jobContextError := jobContext.Err()
 		cancelJob()
 
 		if err != nil {
 			if contextError := ctx.Err(); contextError != nil {
-				return declaration.Result{}, anyTimeout, contextError
+				return declaration.Result{}, current, anyTimeout, contextError
 			}
 			if jobContextError == nil {
-				return declaration.Result{}, anyTimeout, fmt.Errorf(
+				w.observe(
+					"failed",
+					current.Origin,
+					"verification_failed",
+				)
+				return declaration.Result{}, current, anyTimeout, fmt.Errorf(
 					"worker: verify origin: %w",
 					err,
 				)
@@ -325,7 +337,7 @@ func (w *Worker) verifyWithRetries(
 			anyTimeout = true
 			result = declaration.Result{
 				Outcome:         declaration.OutcomeUnavailable,
-				Origin:          source,
+				Origin:          current.Origin,
 				FailureCategory: retry.CategoryTimeout,
 			}
 		}
@@ -338,39 +350,95 @@ func (w *Worker) verifyWithRetries(
 		}
 		if result.Outcome != declaration.OutcomeUnavailable ||
 			!category.Transient() {
-			return result, anyTimeout, nil
+			return result, current, anyTimeout, nil
 		}
 		lastResult = result
 	}
-	return lastResult, anyTimeout, nil
+	return lastResult, current, anyTimeout, nil
+}
+
+// ensureVerificationLeaseBudget renews only when remaining wall-clock lease
+// time cannot hold one JobTimeout plus CompletionGrace.
+func (w *Worker) ensureVerificationLeaseBudget(
+	ctx context.Context,
+	lease store.Lease,
+) (store.Lease, error) {
+	if hasCompletionBudget(
+		lease.ExpiresAt.Sub(w.currentTime()),
+		w.config.JobTimeout,
+		w.config.CompletionGrace,
+	) {
+		return lease, nil
+	}
+
+	renewed, renewErr := w.queue.Renew(ctx, lease)
+	if renewErr != nil {
+		w.observe(
+			"failed",
+			lease.Origin,
+			"lease_renewal_failed",
+		)
+		if contextError := ctx.Err(); contextError != nil {
+			return lease, contextError
+		}
+		return lease, fmt.Errorf(
+			"worker: renew lease: %w",
+			renewErr,
+		)
+	}
+
+	if !hasCompletionBudget(
+		renewed.ExpiresAt.Sub(w.currentTime()),
+		w.config.JobTimeout,
+		w.config.CompletionGrace,
+	) {
+		w.observe(
+			"failed",
+			renewed.Origin,
+			"insufficient_lease_budget",
+		)
+		return renewed, ErrInsufficientLeaseBudget
+	}
+
+	return renewed, nil
+}
+
+func (w *Worker) currentTime() time.Time {
+	if w != nil && w.now != nil {
+		return w.now()
+	}
+	return time.Now()
 }
 
 // Run processes work until the context is canceled or a fatal operation fails.
 //
-// Successful work immediately leads to another claim attempt. An idle worker
-// waits for PollInterval before polling again.
+// Successful or claimed-work failures immediately lead to another claim
+// attempt. That immediate continue after claimed-work failure is intentional so
+// one origin cannot park the processor on the durable origin retry schedule.
+// Idle polls and processor failures before a claim wait for PollInterval.
+// Durable origin backoff is applied only by queue completion.
 func (w *Worker) Run(ctx context.Context) error {
 	if err := w.validate(ctx, true); err != nil {
 		return err
 	}
 
-	consecutiveFailures := 0
 	for {
 		worked, err := w.RunOnce(ctx)
 		if err != nil {
 			if contextError := ctx.Err(); contextError != nil {
 				return contextError
 			}
-			consecutiveFailures++
+			if worked {
+				continue
+			}
 			if waitErr := w.waiter.Wait(
 				ctx,
-				w.retryPolicy.Delay(consecutiveFailures, 0),
+				w.config.PollInterval,
 			); waitErr != nil {
 				return waitErr
 			}
 			continue
 		}
-		consecutiveFailures = 0
 
 		if worked {
 			continue

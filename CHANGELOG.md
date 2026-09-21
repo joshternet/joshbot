@@ -50,6 +50,17 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- Worker and discovery processor loops no longer apply the durable origin
+  retry schedule (`5m`→`24h`) after a claimed item fails; unrelated due work
+  continues immediately, and pre-claim infrastructure failures wait for the
+  configured poll interval (#32).
+- Verification workers renew queue leases only when remaining wall-clock time
+  cannot hold another job timeout plus completion grace, and complete with the
+  latest authoritative lease (#32).
+- Crawler redirect-loop tracking is local to each fetch attempt so a
+  same-origin redirect that fails transiently can be retried without being
+  treated as a malformed redirect loop; crawl-wide visited state updates only
+  after a successful fetch attempt (#35).
 - Deployment smoke runs one-shot discovery through the `discovery` service so
   fail-closed Web Bot Auth remains satisfied without mounting crawler signing
   credentials into `tools`.

@@ -481,6 +481,165 @@ func TestMultiPageCrawlerFollowsAndDeduplicatesSameOriginRedirect(
 	}
 }
 
+func TestMultiPageCrawlerRetriesSameOriginRedirectAfterTransientFailure(
+	t *testing.T,
+) {
+	source := mustDiscoveryOrigin(
+		t,
+		"https://example.com",
+	)
+	getter := newFrontierGetter(
+		map[string][]frontierStep{
+			"https://example.com/": {
+				frontierRedirect("/final"),
+				frontierRedirect("/final"),
+			},
+			"https://example.com/final": {
+				{
+					status: http.StatusServiceUnavailable,
+					body:   "unavailable",
+				},
+				frontierHTML(
+					`<a href="https://external.example/path">external</a>`,
+				),
+			},
+		},
+	)
+	sink := &frontierCandidateSink{}
+
+	crawler := mustNewMultiPageCrawler(
+		t,
+		getter,
+		sink,
+		frontierCrawlConfig(),
+		&frontierWaiter{},
+		contextTimeoutFactory{},
+	)
+
+	result, err := crawler.Crawl(
+		context.Background(),
+		source,
+	)
+	if err != nil {
+		t.Fatalf(
+			"Crawl() error = %v, want nil",
+			err,
+		)
+	}
+
+	wantCalls := []string{
+		"https://example.com/",
+		"https://example.com/final",
+		"https://example.com/",
+		"https://example.com/final",
+	}
+	if !reflect.DeepEqual(
+		getter.calls,
+		wantCalls,
+	) {
+		t.Errorf(
+			"fetch calls = %#v, want %#v",
+			getter.calls,
+			wantCalls,
+		)
+	}
+
+	want := CrawlResult{
+		Source:               source,
+		PagesAttempted:       1,
+		PagesParsed:          1,
+		CandidatesDiscovered: 1,
+		FailureCategory:      retry.CategoryNone,
+	}
+	if result != want {
+		t.Errorf(
+			"Crawl() = %#v, want %#v",
+			result,
+			want,
+		)
+	}
+
+	wantCandidates := []string{
+		"https://external.example",
+	}
+	if got := frontierSinkOrigins(
+		sink.calls,
+	); !reflect.DeepEqual(got, wantCandidates) {
+		t.Errorf(
+			"stored candidates = %#v, want %#v",
+			got,
+			wantCandidates,
+		)
+	}
+}
+
+func TestMultiPageCrawlerRejectsSameAttemptRedirectLoop(
+	t *testing.T,
+) {
+	source := mustDiscoveryOrigin(
+		t,
+		"https://example.com",
+	)
+	getter := newFrontierGetter(
+		map[string][]frontierStep{
+			"https://example.com/": {
+				frontierRedirect("/bounce"),
+			},
+			"https://example.com/bounce": {
+				frontierRedirect("/"),
+			},
+		},
+	)
+
+	crawler := mustNewMultiPageCrawler(
+		t,
+		getter,
+		&frontierCandidateSink{},
+		frontierCrawlConfig(),
+		&frontierWaiter{},
+		contextTimeoutFactory{},
+	)
+
+	result, err := crawler.Crawl(
+		context.Background(),
+		source,
+	)
+	if err != nil {
+		t.Fatalf(
+			"Crawl() error = %v, want nil",
+			err,
+		)
+	}
+
+	wantCalls := []string{
+		"https://example.com/",
+		"https://example.com/bounce",
+	}
+	if !reflect.DeepEqual(
+		getter.calls,
+		wantCalls,
+	) {
+		t.Errorf(
+			"fetch calls = %#v, want %#v",
+			getter.calls,
+			wantCalls,
+		)
+	}
+
+	if result.FailureCategory != retry.CategoryMalformedOrigin {
+		t.Errorf(
+			"FailureCategory = %v, want malformed_origin",
+			result.FailureCategory,
+		)
+	}
+	if result.PagesParsed != 0 {
+		t.Errorf(
+			"PagesParsed = %d, want 0",
+			result.PagesParsed,
+		)
+	}
+}
+
 func TestMultiPageCrawlerRecordsCrossOriginRedirectAndContinues(
 	t *testing.T,
 ) {

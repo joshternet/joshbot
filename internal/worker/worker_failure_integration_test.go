@@ -15,6 +15,7 @@ import (
 
 type workerFailureIntegrationQueue struct {
 	claim    func(context.Context, string) (store.Lease, bool, error)
+	renew    func(context.Context, store.Lease) (store.Lease, error)
 	complete func(
 		context.Context,
 		store.Lease,
@@ -33,6 +34,19 @@ func (queue *workerFailureIntegrationQueue) Claim(
 	}
 
 	return queue.claim(ctx, workerID)
+}
+
+func (queue *workerFailureIntegrationQueue) Renew(
+	ctx context.Context,
+	lease store.Lease,
+) (store.Lease, error) {
+	if queue.renew == nil {
+		renewed := lease
+		renewed.ExpiresAt = time.Now().UTC().Add(10 * time.Minute)
+		return renewed, nil
+	}
+
+	return queue.renew(ctx, lease)
 }
 
 func (queue *workerFailureIntegrationQueue) CompleteVerification(
@@ -957,6 +971,89 @@ func TestWorkerFailureIntegrationRunLoopBranches(
 		if waiter.calls != 1 {
 			t.Errorf(
 				"waiter calls = %d, want 1",
+				waiter.calls,
+			)
+		}
+	})
+
+	t.Run("claimed work failure immediately polls again", func(t *testing.T) {
+		source := workerFailureIntegrationOrigin(
+			t,
+			"https://example.com",
+		)
+		lease := workerFailureIntegrationLease(source)
+		claims := 0
+		verifyFailure := errors.New(
+			"integration claimed verification failure",
+		)
+
+		idleWaitFailure := errors.New(
+			"integration idle wait failure",
+		)
+		waiter := &workerFailureIntegrationWaiter{
+			wait: func(
+				context.Context,
+				time.Duration,
+			) error {
+				return idleWaitFailure
+			},
+		}
+
+		runtime, err := newWorker(
+			&workerFailureIntegrationQueue{
+				claim: func(
+					context.Context,
+					string,
+				) (store.Lease, bool, error) {
+					claims++
+
+					if claims == 1 {
+						return lease, true, nil
+					}
+
+					return store.Lease{}, false, nil
+				},
+			},
+			workerFailureIntegrationVerifier{
+				verify: func(
+					context.Context,
+					origin.Origin,
+				) (declaration.Result, error) {
+					return declaration.Result{},
+						verifyFailure
+				},
+			},
+			workerFailureIntegrationConfig(),
+			waiter,
+			contextTimeoutFactory{},
+		)
+		if err != nil {
+			t.Fatalf(
+				"newWorker() error = %v",
+				err,
+			)
+		}
+
+		if err := runtime.Run(
+			context.Background(),
+		); !errors.Is(err, idleWaitFailure) {
+			t.Errorf(
+				"Run() error = %v, want %v",
+				err,
+				idleWaitFailure,
+			)
+		}
+
+		if claims != 2 {
+			t.Errorf(
+				"claim calls = %d, want 2",
+				claims,
+			)
+		}
+
+		if waiter.calls != 1 {
+			t.Errorf(
+				"waiter calls = %d, want 1 after claimed-work failure continue",
 				waiter.calls,
 			)
 		}

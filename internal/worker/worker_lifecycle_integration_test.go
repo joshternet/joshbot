@@ -21,6 +21,7 @@ type workerLifecycleIntegrationQueue struct {
 	completeErr error
 	paused      bool
 	pauseErr    error
+	renew       func(context.Context, store.Lease) (store.Lease, error)
 
 	completed chan declaration.Result
 }
@@ -34,6 +35,19 @@ func (queue *workerLifecycleIntegrationQueue) Claim(
 	}
 
 	return queue.lease, queue.found, nil
+}
+
+func (queue *workerLifecycleIntegrationQueue) Renew(
+	ctx context.Context,
+	lease store.Lease,
+) (store.Lease, error) {
+	if queue.renew != nil {
+		return queue.renew(ctx, lease)
+	}
+
+	renewed := lease
+	renewed.ExpiresAt = time.Now().UTC().Add(10 * time.Minute)
+	return renewed, nil
 }
 
 func (queue *workerLifecycleIntegrationQueue) CompleteVerification(
@@ -232,6 +246,12 @@ func TestWorkerLifecycleIntegrationRejectsInsufficientLeaseBudget(
 				25 * time.Millisecond,
 			),
 		},
+		renew: func(
+			_ context.Context,
+			lease store.Lease,
+		) (store.Lease, error) {
+			return lease, nil
+		},
 	}
 
 	verifyCalls := 0
@@ -314,6 +334,326 @@ func TestWorkerLifecycleIntegrationRejectsInsufficientLeaseBudget(
 		t.Errorf(
 			"failed event = %#v",
 			failed,
+		)
+	}
+}
+
+func TestWorkerLifecycleIntegrationRejectsLeaseRenewalFailure(
+	t *testing.T,
+) {
+	source := mustWorkerLifecycleIntegrationOrigin(
+		t,
+		"https://example.com",
+	)
+
+	claimedAt := time.Now().UTC()
+	renewErr := errors.New(
+		"integration lease renewal failure",
+	)
+
+	queue := &workerLifecycleIntegrationQueue{
+		found: true,
+		lease: store.Lease{
+			Origin:     source,
+			WorkerID:   "integration-worker",
+			Generation: 1,
+			ClaimedAt:  claimedAt,
+			ExpiresAt: claimedAt.Add(
+				25 * time.Millisecond,
+			),
+		},
+		renew: func(
+			_ context.Context,
+			_ store.Lease,
+		) (store.Lease, error) {
+			return store.Lease{}, renewErr
+		},
+	}
+
+	verifyCalls := 0
+
+	verifier := workerLifecycleIntegrationVerifier{
+		verify: func(
+			context.Context,
+			origin.Origin,
+		) (declaration.Result, error) {
+			verifyCalls++
+
+			return declaration.Result{}, nil
+		},
+	}
+
+	runtime := newWorkerLifecycleIntegrationWorker(
+		t,
+		queue,
+		verifier,
+	)
+
+	observer := &workerLifecycleIntegrationObserver{
+		events: make(
+			chan workerLifecycleIntegrationEvent,
+			8,
+		),
+	}
+
+	runtime.SetLifecycleObserver(observer)
+
+	worked, err := runtime.RunOnce(
+		context.Background(),
+	)
+
+	if !worked {
+		t.Fatal(
+			"RunOnce() worked = false, want true after claim",
+		)
+	}
+
+	if !errors.Is(err, renewErr) ||
+		!strings.Contains(
+			err.Error(),
+			"renew lease",
+		) {
+		t.Fatalf(
+			"RunOnce() error = %v, want wrapped lease renewal failure",
+			err,
+		)
+	}
+
+	if verifyCalls != 0 {
+		t.Errorf(
+			"verifier calls = %d, want 0",
+			verifyCalls,
+		)
+	}
+
+	running := receiveWorkerLifecycleIntegrationEvent(
+		t,
+		observer.events,
+	)
+	failed := receiveWorkerLifecycleIntegrationEvent(
+		t,
+		observer.events,
+	)
+
+	if running.state != "running" ||
+		running.source != source {
+		t.Errorf(
+			"running event = %#v",
+			running,
+		)
+	}
+
+	if failed.state != "failed" ||
+		failed.source != source ||
+		failed.message !=
+			"lease_renewal_failed" {
+		t.Errorf(
+			"failed event = %#v",
+			failed,
+		)
+	}
+}
+
+func TestWorkerLifecycleIntegrationLeaseRenewalFailurePreservesCancellation(
+	t *testing.T,
+) {
+	source := mustWorkerLifecycleIntegrationOrigin(
+		t,
+		"https://example.com",
+	)
+
+	ctx, cancel := context.WithCancel(
+		context.Background(),
+	)
+
+	claimedAt := time.Now().UTC()
+
+	queue := &workerLifecycleIntegrationQueue{
+		found: true,
+		lease: store.Lease{
+			Origin:     source,
+			WorkerID:   "integration-worker",
+			Generation: 1,
+			ClaimedAt:  claimedAt,
+			ExpiresAt: claimedAt.Add(
+				25 * time.Millisecond,
+			),
+		},
+		renew: func(
+			_ context.Context,
+			_ store.Lease,
+		) (store.Lease, error) {
+			cancel()
+
+			return store.Lease{}, errors.New(
+				"integration lease lost",
+			)
+		},
+	}
+
+	runtime := newWorkerLifecycleIntegrationWorker(
+		t,
+		queue,
+		workerLifecycleIntegrationVerifier{
+			verify: func(
+				context.Context,
+				origin.Origin,
+			) (declaration.Result, error) {
+				t.Fatal(
+					"verifier called after lease renewal failure",
+				)
+
+				return declaration.Result{}, nil
+			},
+		},
+	)
+
+	observer := &workerLifecycleIntegrationObserver{
+		events: make(
+			chan workerLifecycleIntegrationEvent,
+			8,
+		),
+	}
+
+	runtime.SetLifecycleObserver(observer)
+
+	worked, err := runtime.RunOnce(ctx)
+
+	if !worked {
+		t.Fatal(
+			"RunOnce() worked = false, want true after claim",
+		)
+	}
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf(
+			"RunOnce() error = %v, want context.Canceled",
+			err,
+		)
+	}
+
+	running := receiveWorkerLifecycleIntegrationEvent(
+		t,
+		observer.events,
+	)
+	failed := receiveWorkerLifecycleIntegrationEvent(
+		t,
+		observer.events,
+	)
+
+	if running.state != "running" ||
+		running.source != source {
+		t.Errorf(
+			"running event = %#v",
+			running,
+		)
+	}
+
+	if failed.state != "failed" ||
+		failed.message !=
+			"lease_renewal_failed" {
+		t.Errorf(
+			"failed event = %#v",
+			failed,
+		)
+	}
+}
+
+func TestWorkerLifecycleIntegrationRenewsLeaseBeforeVerification(
+	t *testing.T,
+) {
+	source := mustWorkerLifecycleIntegrationOrigin(
+		t,
+		"https://example.com",
+	)
+
+	claimedAt := time.Now().UTC()
+	renewCalls := 0
+
+	queue := &workerLifecycleIntegrationQueue{
+		found: true,
+		lease: store.Lease{
+			Origin:     source,
+			WorkerID:   "integration-worker",
+			Generation: 1,
+			ClaimedAt:  claimedAt,
+			ExpiresAt: claimedAt.Add(
+				25 * time.Millisecond,
+			),
+		},
+		renew: func(
+			_ context.Context,
+			lease store.Lease,
+		) (store.Lease, error) {
+			renewCalls++
+
+			renewed := lease
+			renewed.ExpiresAt = time.Now().UTC().Add(
+				time.Minute,
+			)
+
+			return renewed, nil
+		},
+		completed: make(
+			chan declaration.Result,
+			1,
+		),
+	}
+
+	verifier := workerLifecycleIntegrationVerifier{
+		verify: func(
+			_ context.Context,
+			source origin.Origin,
+		) (declaration.Result, error) {
+			return declaration.Result{
+				Origin:  source,
+				Outcome: declaration.OutcomeValid,
+			}, nil
+		},
+	}
+
+	runtime := newWorkerLifecycleIntegrationWorker(
+		t,
+		queue,
+		verifier,
+	)
+
+	worked, err := runtime.RunOnce(
+		context.Background(),
+	)
+	if err != nil {
+		t.Fatalf(
+			"RunOnce() error = %v",
+			err,
+		)
+	}
+
+	if !worked {
+		t.Fatal(
+			"RunOnce() worked = false, want true after claim",
+		)
+	}
+
+	if renewCalls != 1 {
+		t.Fatalf(
+			"Renew() calls = %d, want 1",
+			renewCalls,
+		)
+	}
+
+	select {
+	case result := <-queue.completed:
+		if result.Outcome !=
+			declaration.OutcomeValid {
+			t.Errorf(
+				"completed outcome = %v, want valid",
+				result.Outcome,
+			)
+		}
+
+	case <-time.After(2 * time.Second):
+		t.Fatal(
+			"CompleteVerification() was not called",
 		)
 	}
 }

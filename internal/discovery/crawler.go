@@ -435,6 +435,13 @@ func (c *MultiPageCrawler) fetchPage(
 		initial,
 	)
 	redirects := 0
+	// Attempt-local hop tracking detects redirect loops for this fetch only.
+	// Crawl-wide visited is updated only after a successful terminal outcome so
+	// failed attempts (including redirect hops) cannot poison later retries or
+	// frontier decisions.
+	attemptHops := map[string]struct{}{
+		current.String(): {},
+	}
 	attempt := PageAttempt{
 		RequestedURL:   safeTelemetryURL(current),
 		FinalURL:       safeTelemetryURL(current),
@@ -447,10 +454,13 @@ func (c *MultiPageCrawler) fetchPage(
 		page.attempt.Duration = c.clock.Now().UTC().Sub(started)
 		return page
 	}
+	commitHops := func() {
+		for hop := range attemptHops {
+			visited[hop] = struct{}{}
+		}
+	}
 
 	for {
-		visited[current.String()] = struct{}{}
-
 		response, err := c.getter.Get(
 			ctx,
 			current,
@@ -503,6 +513,7 @@ func (c *MultiPageCrawler) fetchPage(
 						attempt.RedirectCount = redirects + 1
 						attempt.FinalURL = safeTelemetryURL(next)
 						attempt.Outcome = PageRedirected
+						commitHops()
 						return finish(crawledPage{
 							links: PageLinks{
 								Candidates: []Candidate{
@@ -519,14 +530,18 @@ func (c *MultiPageCrawler) fetchPage(
 						source,
 						next,
 					)
-					_, alreadyVisited :=
+					_, inAttempt :=
+						attemptHops[next.String()]
+					_, inCrawl :=
 						visited[next.String()]
 
 					if redirects <
 						c.config.RedirectLimit &&
-						!alreadyVisited {
+						!inAttempt &&
+						!inCrawl {
 						redirects++
 						current = next
+						attemptHops[current.String()] = struct{}{}
 						attempt.RedirectCount = redirects
 						attempt.FinalURL = safeTelemetryURL(current)
 						continue
@@ -585,6 +600,7 @@ func (c *MultiPageCrawler) fetchPage(
 		attempt.InternalLinkCount = len(links.Internal)
 		attempt.ExternalLinkCount = len(links.Candidates)
 		attempt.Outcome = PageComplete
+		commitHops()
 
 		return finish(crawledPage{
 			links:  links,

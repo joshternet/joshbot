@@ -1184,6 +1184,13 @@ func (queue *fakeRuntimeQueue) Claim(
 	return store.Lease{}, false, nil
 }
 
+func (queue *fakeRuntimeQueue) Renew(
+	_ context.Context,
+	lease store.Lease,
+) (store.Lease, error) {
+	return lease, nil
+}
+
 func (queue *fakeRuntimeQueue) CompleteVerification(
 	context.Context,
 	store.Lease,

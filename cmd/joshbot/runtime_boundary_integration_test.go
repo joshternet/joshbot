@@ -63,6 +63,13 @@ func (*runtimeBoundaryIntegrationQueue) Claim(
 	return store.Lease{}, false, nil
 }
 
+func (*runtimeBoundaryIntegrationQueue) Renew(
+	_ context.Context,
+	lease store.Lease,
+) (store.Lease, error) {
+	return lease, nil
+}
+
 func (*runtimeBoundaryIntegrationQueue) CompleteVerification(
 	context.Context,
 	store.Lease,

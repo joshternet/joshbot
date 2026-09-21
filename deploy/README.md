@@ -247,7 +247,10 @@ JOSHBOT_RECHECK_INTERVAL=24h
 
 JOSHBOT_JOB_TIMEOUT + JOSHBOT_COMPLETION_GRACE
     < JOSHBOT_LEASE_DURATION
-```
+
+Each verification attempt must fit inside the remaining lease. The worker renews
+only when remaining wall-clock time cannot hold another
+`JOB_TIMEOUT + COMPLETION_GRACE` attempt.```
 
 All six durations must be positive. `JOSHBOT_WORKER_ID` is optional outside
 Compose; when empty, the command generates `worker-` followed by 32 lowercase
