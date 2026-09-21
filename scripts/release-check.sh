@@ -320,6 +320,7 @@ joshbot worker
 joshbot discover [--once]
 joshbot export --output <directory>
 joshbot publish --input <directory>
+joshbot conformance web-bot-auth --expect unregistered|verified
 joshbot help
 EOF
 

@@ -146,6 +146,12 @@ validate required Web Bot Auth configuration before beginning crawler work.
 Missing or invalid required configuration fails closed rather than allowing
 unsigned production crawling.
 
+`joshbot conformance web-bot-auth` uses that same required identity and the
+shared crawler client. It checks the public signature directory, then probes
+Cloudflare's fixed Web Bot Auth endpoint. The command refuses unsigned mode
+and does not open the database. The deployment guide has the operator
+commands. A passing check is not Cloudflare approval.
+
 The signing identity is independent from other Joshternet cryptographic keys.
 Authenticated production crawling is part of JoshBot's Cloudflare BotBase /
 Verified Bot posture for Joshternet participant discovery and verification,
@@ -481,5 +487,6 @@ read-only role.
 The recovery smoke test restores into a fresh isolated PostgreSQL instance,
 checks role boundaries and migration records, verifies persisted operational
 state, and rebuilds byte-identical public output. The current schema contains
-thirteen embedded migrations, numbered `0001` through `0013`. Recovery never
+fourteen embedded migrations, numbered `0001` through `0014`, including
+`0014_clear_ephemeral_service_heartbeats.sql`. Recovery never
 restores into the configured production database.

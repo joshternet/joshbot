@@ -35,6 +35,7 @@ Usage:
   joshbot control
   joshbot export --output <directory>
   joshbot publish --input <directory>
+  joshbot conformance web-bot-auth --expect unregistered|verified
   joshbot help
 
 Commands:
@@ -49,6 +50,7 @@ Commands:
   control    Serve the private operator mutation API
   export     Write a deterministic public registry snapshot
   publish    Publish an existing registry snapshot to GitHub
+  conformance Check the signature directory and Cloudflare Web Bot Auth
   help       Show this help
 `
 
@@ -608,6 +610,14 @@ func runWithOperations(
 		}
 
 		return exitSuccess
+
+	case "conformance":
+		return runWebBotAuthConformanceCommand(
+			ctx,
+			commandArgs,
+			stdout,
+			stderr,
+		)
 
 	default:
 		return reportUsage(

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
@@ -716,6 +718,194 @@ func TestCrawlerStartupValidatesWebBotAuthBeforeDatabase(
 			)
 		}
 	})
+}
+
+func TestWebBotAuthStartupRejectsInvalidRequiredConfiguration(
+	t *testing.T,
+) {
+	active, activePath :=
+		writeWebBotAuthPrivateKeyWithIdentity(t)
+	_, otherPath :=
+		writeWebBotAuthPrivateKeyWithIdentity(t)
+
+	tests := []struct {
+		name        string
+		environment mapEnvironment
+		want        error
+	}{
+		{
+			name: "unreadable active key",
+			environment: mapEnvironment{
+				webBotAuthActivePrivateKeyFileEnvironment: filepath.Join(
+					t.TempDir(),
+					"missing.pem",
+				),
+			},
+			want: errOpenWebBotAuthPrivateKeyFile,
+		},
+		{
+			name: "wrong private key algorithm",
+			environment: mapEnvironment{
+				webBotAuthActivePrivateKeyFileEnvironment: writeWebBotAuthECDSAPrivateKey(
+					t,
+				),
+			},
+			want: errInvalidWebBotAuthPrivateKey,
+		},
+		{
+			name: "duplicate active and transition identities",
+			environment: mapEnvironment{
+				webBotAuthActivePrivateKeyFileEnvironment:     activePath,
+				webBotAuthTransitionPrivateKeyFileEnvironment: activePath,
+			},
+			want: errDuplicateWebBotAuthIdentities,
+		},
+		{
+			name: "malformed transition identity",
+			environment: mapEnvironment{
+				webBotAuthActivePrivateKeyFileEnvironment: activePath,
+				webBotAuthTransitionPrivateKeyFileEnvironment: writeWebBotAuthFile(
+					t,
+					[]byte("not a private key"),
+				),
+			},
+			want: errInvalidWebBotAuthPrivateKey,
+		},
+		{
+			name: "active and legacy paths together",
+			environment: mapEnvironment{
+				webBotAuthActivePrivateKeyFileEnvironment: activePath,
+				webBotAuthPrivateKeyFileEnvironment:       otherPath,
+			},
+			want: errInvalidWebBotAuthConfiguration,
+		},
+		{
+			name: "unknown mode",
+			environment: mapEnvironment{
+				webBotAuthModeEnvironment: "maybe",
+			},
+			want: errInvalidWebBotAuthConfiguration,
+		},
+		{
+			name: "whitespace in the active path",
+			environment: mapEnvironment{
+				webBotAuthActivePrivateKeyFileEnvironment: " " + activePath,
+			},
+			want: errInvalidWebBotAuthConfiguration,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if active.KeyID() == "" {
+				t.Fatal("active identity is missing")
+			}
+
+			assertWebBotAuthStartupRejection(
+				t,
+				test.environment,
+				test.want,
+			)
+		})
+	}
+}
+
+func assertWebBotAuthStartupRejection(
+	t *testing.T,
+	environment mapEnvironment,
+	want error,
+) {
+	t.Helper()
+
+	workerEnvironment := mapEnvironment{
+		workerIDEnvironment:       "worker-test",
+		webBotAuthModeEnvironment: webBotAuthModeRequired,
+	}
+	discoveryEnvironment :=
+		validCrawlRuntimeEnvironment()
+	discoveryEnvironment[webBotAuthModeEnvironment] =
+		webBotAuthModeRequired
+
+	for name, value := range environment {
+		workerEnvironment[name] = value
+		discoveryEnvironment[name] = value
+	}
+
+	worker := newRuntimeOperations(io.Discard)
+	worker.getenv = workerEnvironment.get
+
+	if err := worker.worker(
+		context.Background(),
+	); !errors.Is(err, want) {
+		t.Fatalf(
+			"worker() error = %v, want %v",
+			err,
+			want,
+		)
+	}
+
+	discovery := newRuntimeOperations(io.Discard)
+	discovery.getenv = discoveryEnvironment.get
+
+	if err := discovery.discover(
+		context.Background(),
+		true,
+	); !errors.Is(err, want) {
+		t.Fatalf(
+			"discover() error = %v, want %v",
+			err,
+			want,
+		)
+	}
+}
+
+func writeWebBotAuthFile(
+	t *testing.T,
+	data []byte,
+) string {
+	t.Helper()
+
+	path := filepath.Join(
+		t.TempDir(),
+		"web-bot-auth-material.pem",
+	)
+
+	if err := os.WriteFile(
+		path,
+		data,
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	return path
+}
+
+func writeWebBotAuthECDSAPrivateKey(
+	t *testing.T,
+) string {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(
+		elliptic.P256(),
+		rand.Reader,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return writeWebBotAuthFile(
+		t,
+		pem.EncodeToMemory(&pem.Block{
+			Type:  "PRIVATE KEY",
+			Bytes: der,
+		}),
+	)
 }
 
 func TestLoadWebBotAuthIdentity(t *testing.T) {

@@ -22,6 +22,7 @@ func TestIntegrationCoverageBridge(t *testing.T) {
 		{name: "TestCheckerRejectsMalformedApplicableCrawlDelay", run: TestCheckerRejectsMalformedApplicableCrawlDelay},
 		{name: "TestCheckerSchedulesSameOriginRobotsRedirect", run: TestCheckerSchedulesSameOriginRobotsRedirect},
 		{name: "TestCheckerSignsRobotsRedirectsAndProtectedRequests", run: TestCheckerSignsRobotsRedirectsAndProtectedRequests},
+		{name: "TestCheckerSignsScheduledRobotsAndProtectedRequests", run: TestCheckerSignsScheduledRobotsAndProtectedRequests},
 		{name: "TestCheckerUsesIndependentDestinationOriginSchedule", run: TestCheckerUsesIndependentDestinationOriginSchedule},
 		{name: "TestGuardedHTTPPreservesIdentityAndTLSAuthority", run: TestGuardedHTTPPreservesIdentityAndTLSAuthority},
 		{name: "TestGuardedHTTPRejectsInvalidInputs", run: TestGuardedHTTPRejectsInvalidInputs},

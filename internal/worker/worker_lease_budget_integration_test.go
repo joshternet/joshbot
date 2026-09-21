@@ -11,14 +11,8 @@ import (
 	"github.com/joshternet/joshbot/internal/store"
 )
 
-// Goal & Constraints: cover mid-cycle lease renewal after a job timeout
-// consumes the remaining verification budget so independent integration
-// coverage includes ensureVerificationLeaseBudget on attempt two.
-// Inputs: short initial lease, injectable clock, timeout then success.
-// Outputs: Renew once between attempts; second origin still processed.
-// Error cases: renew must not be skipped when remaining wall time is short.
-// Acceptance: claim continues after renewal without parking on PollInterval.
-
+// A job timeout can leave less wall time than another attempt needs.
+// The worker renews that lease before it claims the next origin.
 func TestWorkerLeaseBudgetIntegrationRenewsAcrossTimeoutAttempts(
 	t *testing.T,
 ) {
