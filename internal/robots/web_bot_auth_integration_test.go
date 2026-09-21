@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
@@ -13,8 +14,10 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joshternet/joshbot/internal/webbotauth"
 )
@@ -362,13 +365,23 @@ func verifyWebBotAuthIntegrationSignature(
 		)
 	}
 
-	if !strings.Contains(
+	keyID, ok := quotedWebBotAuthParameter(
 		parameters,
-		`keyid="`+identity.KeyID()+`"`,
+		"keyid",
+	)
+	if !ok {
+		t.Fatalf(
+			"Signature-Input parameters = %q, want keyid",
+			parameters,
+		)
+	}
+
+	if keyID != webBotAuthThumbprint(
+		identity.PublicJWK(),
 	) {
 		t.Errorf(
-			"Signature-Input parameters = %q, want identity key ID",
-			parameters,
+			"keyid = %q, want JWK thumbprint",
+			keyID,
 		)
 	}
 
@@ -450,4 +463,111 @@ func verifyWebBotAuthIntegrationSignature(
 			observation.path,
 		)
 	}
+
+	created, ok := integerWebBotAuthParameter(
+		parameters,
+		"created",
+	)
+	expires, expiresOK := integerWebBotAuthParameter(
+		parameters,
+		"expires",
+	)
+	nonce, nonceOK := quotedWebBotAuthParameter(
+		parameters,
+		"nonce",
+	)
+
+	if !ok || !expiresOK || expires-created != 60 {
+		t.Errorf(
+			"signature lifetime created=%d expires=%d, want a 60s window",
+			created,
+			expires,
+		)
+	}
+
+	age := time.Since(time.Unix(created, 0))
+	if age < -time.Minute || age > 2*time.Minute {
+		t.Errorf(
+			"signature created age = %s, want a current timestamp",
+			age,
+		)
+	}
+
+	decodedNonce, err := base64.StdEncoding.DecodeString(
+		nonce,
+	)
+	if !nonceOK || err != nil || len(decodedNonce) != 32 {
+		t.Errorf(
+			"nonce = %q, want 32 bytes",
+			nonce,
+		)
+	}
+}
+
+func webBotAuthThumbprint(
+	jwk webbotauth.PublicJWK,
+) string {
+	canonical :=
+		`{"crv":"` + jwk.Crv +
+			`","kty":"` + jwk.Kty +
+			`","x":"` + jwk.X +
+			`"}`
+	sum := sha256.Sum256([]byte(canonical))
+
+	return base64.RawURLEncoding.EncodeToString(
+		sum[:],
+	)
+}
+
+func quotedWebBotAuthParameter(
+	parameters string,
+	name string,
+) (string, bool) {
+	token := ";" + name + `="`
+	start := strings.Index(parameters, token)
+	if start < 0 {
+		return "", false
+	}
+
+	start += len(token)
+	end := strings.Index(parameters[start:], `"`)
+	if end < 0 {
+		return "", false
+	}
+
+	return parameters[start : start+end], true
+}
+
+func integerWebBotAuthParameter(
+	parameters string,
+	name string,
+) (int64, bool) {
+	token := ";" + name + "="
+	start := strings.Index(parameters, token)
+	if start < 0 {
+		return 0, false
+	}
+
+	start += len(token)
+	end := start
+	for end < len(parameters) &&
+		parameters[end] >= '0' &&
+		parameters[end] <= '9' {
+		end++
+	}
+
+	if end == start {
+		return 0, false
+	}
+
+	value, err := strconv.ParseInt(
+		parameters[start:end],
+		10,
+		64,
+	)
+	if err != nil {
+		return 0, false
+	}
+
+	return value, true
 }

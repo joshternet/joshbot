@@ -637,6 +637,7 @@ joshbot report
 joshbot control
 joshbot export --output <directory>
 joshbot publish --input <directory>
+joshbot conformance web-bot-auth --expect unregistered|verified
 joshbot help
 ```
 
@@ -762,6 +763,18 @@ joshbot publish --input <directory>
 
 The normal deployment uses `deploy/publish.sh` so database export and GitHub
 publication occur in separate containers.
+
+### `conformance`
+
+Checks the deployed signature directory and sends one signed request to
+Cloudflare's Web Bot Auth test endpoint. It uses the production crawler
+client and refuses unsigned mode. The deployment guide has the exact
+pre-registration and post-approval commands. A passing check is not
+Cloudflare approval.
+
+```bash
+joshbot conformance web-bot-auth --expect unregistered|verified
+```
 
 ### `help`
 

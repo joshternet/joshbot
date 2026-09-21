@@ -8,6 +8,15 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Added
 
+- `joshbot conformance web-bot-auth` checks the public signature directory
+  and Cloudflare's fixed Web Bot Auth endpoint with the production crawler
+  client. `--expect unregistered` treats HTTP 401 as a pass before
+  registration. `--expect verified` requires HTTP 200 after Cloudflare has
+  accepted the key. The command refuses unsigned mode and does not use the
+  database.
+- Signature-directory validation for the published Joshternet directory:
+  HTTP 200, the directory content type, one or two public Ed25519 keys,
+  a matching SHA-256 content digest, and one directory signature per key.
 - Web Bot Auth active and optional transition signing identities with an
   explicit `required` / `unsigned` mode so production crawler traffic cannot
   silently fall back to unsigned requests during key rotation.
@@ -44,12 +53,16 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   `JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE`, with
   `JOSHBOT_WEB_BOT_AUTH_PRIVATE_KEY_FILE` retained only as a legacy alias for
   the active path when the new variable is unset.
-- Deployment documentation includes a BotBase meet-or-exceed checklist and a
-  cross-repository signing-key rotation runbook aligned with the public
-  HTTP Message Signature directory.
+- Deployment documentation includes the BotBase registration procedure,
+  including `joshbot conformance web-bot-auth` and the pinned
+  `http-signature-directory` 0.7.0 command, plus the signing-key rotation
+  runbook. Passing those checks is not Cloudflare approval.
 
 ### Fixed
 
+- Architecture and deployment docs count fourteen embedded migrations,
+  `0001` through `0014`, including
+  `0014_clear_ephemeral_service_heartbeats.sql`.
 - Crawl service heartbeats use a stable logical slot
   (`JOSHBOT_SERVICE_INSTANCE_ID`) and replace that slot when a newer process
   starts, instead of leaving a stale card for every previous worker or

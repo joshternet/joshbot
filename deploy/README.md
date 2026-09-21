@@ -451,22 +451,71 @@ Cloudflare accepts all valid Ed25519 keys published in that directory.
 JoshBot's `Signature-Agent` points at that URL on every signed crawler
 request.
 
-### BotBase meet-or-exceed checklist
+### BotBase registration
 
-Before submitting JoshBot to Cloudflare BotBase as a Direct bot with
-Verification Method Request Signature:
+Passing these checks is not Cloudflare approval. Cloudflare still has to
+accept the registration.
 
+Deploy `worker` and `discovery` with required mode and the active private-key
+file, using the configuration above. Confirm the stack with the health check
+later in this guide. From a checkout of that same revision, run the local
+validation later in this guide, including `./scripts/release-check.sh` and
+`go test ./...`.
+
+On a host that has the active private key and can reach the public directory,
+run:
+
+```bash
+joshbot conformance web-bot-auth --expect unregistered
+```
+
+The command refuses `unsigned` mode. It fetches the signature directory,
+checks the published Ed25519 keys, content digest, and directory signatures,
+and requires the active thumbprint. When a transition key is configured, that
+thumbprint must be published too. It then sends one signed request to
+`https://crawltest.com/cdn-cgi/web-bot-auth` through the production crawler
+client: guarded HTTP, the JoshBot User-Agent, robots, the configured request
+delay, and the active signature. It does not open the database. A directory
+failure stops before the probe.
+
+Before registration, HTTP 401 is the expected pass. The command says
+Cloudflare accepted the Web Bot Auth request shape and did not verify the
+identity. That does not mean the key is registered or correct. HTTP 400
+fails. Any other status fails.
+
+Check the same directory with the pinned Cloudflare validator. This is an
+operator tool. Do not install Rust in the production image.
+
+```bash
+cargo install http-signature-directory --version 0.7.0 --locked
+http-signature-directory --version
+http-signature-directory https://joshternet.org/.well-known/http-message-signatures-directory
+```
+
+`http-signature-directory` 0.7.0 (published 2026-04-22, Apache-2.0,
+`cloudflare/web-bot-auth`) accepts the live Joshternet directory. Its README
+says the tool only validates `@authority` and does not validate other covered
+components. JoshBot still checks `content-digest` and `;req`. Do not remove
+those components from the published directory to match the crate.
+
+Submit a Direct bot with Verification Method Request Signature:
+
+- Verification method: Request Signature
+- Purpose: Joshternet participant discovery and verification, not model
+  training
+- User-Agent: `Joshternet-Joshbot (+https://joshternet.org/joshbot)`
+- Public crawler page: `https://joshternet.org/joshbot`
 - Directory URL:
   `https://joshternet.org/.well-known/http-message-signatures-directory`
-- Stable User-Agent:
-  `Joshternet-Joshbot (+https://joshternet.org/joshbot)`
-- Production `JOSHBOT_WEB_BOT_AUTH_MODE=required`
-- Active signing `keyid` always matches a public JWK currently published in
-  the directory
-- Robots and Crawl-delay enforcement remain enabled on the shared crawler
-  HTTP boundary
-- Disclosed purpose matches traffic: Joshternet participant discovery and
-  verification, not model training
+
+After Cloudflare approval, run:
+
+```bash
+joshbot conformance web-bot-auth --expect verified
+```
+
+HTTP 200 is the expected pass. The command says Cloudflare verified the Web
+Bot Auth request. HTTP 401 fails that check.
 
 ### Signing-key rotation runbook
 
@@ -482,9 +531,9 @@ Steady state uses one key, called **A** below. The replacement key is **B**.
 2. Install **B** as the signature-directory Worker transition secret
    (`WEB_BOT_AUTH_TRANSITION_PRIVATE_KEY_PEM`) while the directory active
    secret remains **A**. Deploy the Worker.
-3. Verify the live directory publishes both public JWKs and that both
-   directory signatures validate (Worker verifier /
-   `http-signature-directory`).
+3. Verify the live directory publishes both public JWKs. Use
+   `joshbot conformance web-bot-auth` and the pinned
+   `http-signature-directory` 0.7.0 command in BotBase registration.
 4. Configure JoshBot so the active signer is **B** and, optionally, the
    transition identity is **A** for rollback readiness. Mount the transition
    secret only into `worker` and `discovery` if used. Example Compose
@@ -949,8 +998,8 @@ internal/store/migrations/
 
 Never edit an applied migration. Add a forward migration.
 
-The current image embeds thirteen migrations, numbered `0001` through `0013`.
-A backup restored from the current schema must retain thirteen
+The current image embeds fourteen migrations, numbered `0001` through `0014`.
+A backup restored from the current schema must retain fourteen
 `schema_migrations` rows.
 
 Run migrations manually:
@@ -1209,7 +1258,7 @@ migrations, checks role and secret-mount boundaries, creates known state,
 exports the registry, backs up PostgreSQL, restores into a fresh isolated
 instance, verifies restored state, rebuilds byte-identical output, and cleans
 its resources. For the current schema, both the source and restored databases
-must contain thirteen migration records.
+must contain fourteen migration records.
 
 It never restores into the configured production database.
 
