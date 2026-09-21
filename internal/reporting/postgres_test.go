@@ -1323,3 +1323,43 @@ func TestPostgresReaderCrawlPreservesPageFailure(
 		)
 	}
 }
+
+func TestServicesReturnsAgedCurrentHeartbeat(t *testing.T) {
+	ctx := context.Background()
+	pool := newReportingTestPool(t)
+	started := time.Date(2026, 9, 19, 8, 0, 0, 0, time.UTC)
+	updated := started.Add(5 * time.Second)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO crawl_service_heartbeats (
+			service, instance_id, state, current_origin, message,
+			started_at, updated_at
+		) VALUES (
+			'worker', 'worker', 'running', '', 'idle-slot', $1, $2
+		)
+	`, started, updated); err != nil {
+		t.Fatalf("insert aged heartbeat: %v", err)
+	}
+
+	reader, err := NewPostgresReader(pool, PostgresConfig{
+		MaxPendingProbes: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	services, err := reader.Services(ctx)
+	if err != nil {
+		t.Fatalf("Services() error = %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("Services() length = %d, want 1", len(services))
+	}
+	service := services[0]
+	if service.Service != "worker" ||
+		service.InstanceID != "worker" ||
+		service.State != "running" ||
+		service.Message != "idle-slot" ||
+		!service.StartedAt.Equal(started) ||
+		!service.UpdatedAt.Equal(updated) {
+		t.Fatalf("Services() = %#v", service)
+	}
+}

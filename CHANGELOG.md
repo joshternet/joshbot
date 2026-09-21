@@ -50,6 +50,10 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- Crawl service heartbeats use a stable logical slot
+  (`JOSHBOT_SERVICE_INSTANCE_ID`) and replace that slot when a newer process
+  starts, instead of leaving a stale card for every previous worker or
+  container identity (#39).
 - Worker and discovery processor loops no longer apply the durable origin
   retry schedule (`5m`→`24h`) after a claimed item fails; unrelated due work
   continues immediately, and pre-claim infrastructure failures wait for the

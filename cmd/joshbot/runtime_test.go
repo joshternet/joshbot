@@ -868,6 +868,58 @@ func TestRuntimeWorkerRecordsHeartbeatLifecycle(t *testing.T) {
 	if len(storage.writes) != 2 || storage.writes[0].State != "starting" || storage.writes[1].State != "stopping" {
 		t.Errorf("worker heartbeat lifecycle = %#v", storage.writes)
 	}
+	if storage.writes[0].InstanceID != "worker-test" {
+		t.Errorf("fallback heartbeat instance = %q, want worker-test", storage.writes[0].InstanceID)
+	}
+}
+
+func TestRuntimeWorkerHeartbeatUsesServiceSlot(t *testing.T) {
+	operations, state := newTestRuntimeOperations(t)
+	base := operations.getenv
+	operations.getenv = func(name string) string {
+		if name == serviceInstanceIDEnvironment {
+			return "worker"
+		}
+
+		return base(name)
+	}
+	storage := &fakeHeartbeatStore{}
+	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+		return storage, nil
+	}
+	if err := operations.worker(context.Background()); err != nil {
+		t.Fatalf("worker() error = %v", err)
+	}
+	if state.workerConfig.WorkerID != "worker-test" {
+		t.Fatalf("queue worker ID = %q, want worker-test", state.workerConfig.WorkerID)
+	}
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+	if len(storage.writes) == 0 || storage.writes[0].InstanceID != "worker" {
+		t.Fatalf("heartbeat instance = %#v, want worker", storage.writes)
+	}
+}
+
+func TestRuntimeWorkerRejectsInvalidServiceInstanceID(t *testing.T) {
+	operations, state := newTestRuntimeOperations(t)
+	base := operations.getenv
+	operations.getenv = func(name string) string {
+		if name == serviceInstanceIDEnvironment {
+			return strings.Repeat("w", maxServiceInstanceIDLength+1)
+		}
+
+		return base(name)
+	}
+	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+		return &fakeHeartbeatStore{}, nil
+	}
+	err := operations.worker(context.Background())
+	if !errors.Is(err, errInvalidRuntimeConfiguration) {
+		t.Fatalf("worker() error = %v", err)
+	}
+	if state.newWorkerCount != 0 {
+		t.Fatalf("worker starts = %d, want 0", state.newWorkerCount)
+	}
 }
 
 func TestRuntimeProductionAdapters(t *testing.T) {

@@ -255,7 +255,18 @@ only when remaining wall-clock time cannot hold another
 All six durations must be positive. `JOSHBOT_WORKER_ID` is optional outside
 Compose; when empty, the command generates `worker-` followed by 32 lowercase
 hexadecimal characters. A configured ID must be valid UTF-8 and no more than
-128 characters.
+128 characters. It identifies the verification queue worker and is separate
+from the heartbeat service slot.
+
+`JOSHBOT_SERVICE_INSTANCE_ID` identifies one logical worker or discovery slot
+in `crawl_service_heartbeats`. It must be non-empty after trimming, valid
+UTF-8, and no more than 128 bytes. Compose sets `worker` and `discovery`.
+Keep that value stable across restarts of the same slot. Concurrent replicas
+must use distinct IDs. `started_at` distinguishes successive process
+generations that occupy one slot. Host overrides are
+`JOSHBOT_WORKER_SERVICE_INSTANCE_ID` and
+`JOSHBOT_DISCOVERY_SERVICE_INSTANCE_ID`. Do not rely on a generated worker ID
+or the container hostname for the production slot.
 
 Review discovery timing:
 
@@ -365,7 +376,10 @@ Worker and discovery heartbeats are written every five seconds after an
 initial `starting` record. Their applicable states are `running`, `idle`,
 `paused`, `failed`, and `stopping`. Current-origin and machine-readable message
 fields are bounded; heartbeat persistence failures are logged when the failure
-first becomes active.
+first becomes active. A restart of the same logical slot replaces that row,
+including `started_at`. A slot that stops heartbeating stays visible so a
+reporting client can mark the current service stale. Heartbeat rows are
+current service status, not a history of previous process identities.
 
 ## Web Bot Auth signing identity
 

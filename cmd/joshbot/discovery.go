@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/discovery"
@@ -344,11 +343,14 @@ func (operations runtimeOperations) discover(
 					)
 				}
 
-				instanceID := os.Getenv(
-					"HOSTNAME",
+				instanceID, err := loadServiceInstanceID(
+					operations.getenv,
+					discoveryServiceInstanceFallback(
+						operations.getenv,
+					),
 				)
-				if instanceID == "" {
-					instanceID = "discovery"
+				if err != nil {
+					return err
 				}
 
 				heartbeat, err =

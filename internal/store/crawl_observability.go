@@ -281,7 +281,10 @@ func (s *DiscoveryStore) DiscoveryPaused(ctx context.Context) (bool, error) {
 	return control.DiscoveryPaused, nil
 }
 
-// UpsertServiceHeartbeat records current process state without raw errors.
+// UpsertServiceHeartbeat records the current generation of a logical
+// service slot. A newer started_at replaces the slot. An older started_at
+// is ignored, even when its updated_at is later. The same generation
+// accepts an update only when updated_at is not older than the stored row.
 func (s *DiscoveryStore) UpsertServiceHeartbeat(
 	ctx context.Context,
 	heartbeat ServiceHeartbeat,
@@ -299,28 +302,15 @@ func (s *DiscoveryStore) UpsertServiceHeartbeat(
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (service, instance_id) DO UPDATE
-		SET state = CASE
-				WHEN EXCLUDED.updated_at >= crawl_service_heartbeats.updated_at
-				THEN EXCLUDED.state
-				ELSE crawl_service_heartbeats.state
-			END,
-			current_origin = CASE
-				WHEN EXCLUDED.updated_at >= crawl_service_heartbeats.updated_at
-				THEN EXCLUDED.current_origin
-				ELSE crawl_service_heartbeats.current_origin
-			END,
-			message = CASE
-				WHEN EXCLUDED.updated_at >= crawl_service_heartbeats.updated_at
-				THEN EXCLUDED.message
-				ELSE crawl_service_heartbeats.message
-			END,
-			started_at = LEAST(
-				crawl_service_heartbeats.started_at,
-				EXCLUDED.started_at
-			),
-			updated_at = GREATEST(
-				crawl_service_heartbeats.updated_at,
-				EXCLUDED.updated_at
+		SET state = EXCLUDED.state,
+			current_origin = EXCLUDED.current_origin,
+			message = EXCLUDED.message,
+			started_at = EXCLUDED.started_at,
+			updated_at = EXCLUDED.updated_at
+		WHERE EXCLUDED.started_at > crawl_service_heartbeats.started_at
+			OR (
+				EXCLUDED.started_at = crawl_service_heartbeats.started_at
+				AND EXCLUDED.updated_at >= crawl_service_heartbeats.updated_at
 			)
 	`, heartbeat.Service, heartbeat.InstanceID, heartbeat.State,
 		heartbeat.CurrentOrigin.String(), heartbeat.Message,

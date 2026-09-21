@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -23,6 +24,8 @@ const (
 	completionGraceEnvironment   = "JOSHBOT_COMPLETION_GRACE"
 	recheckIntervalEnvironment   = "JOSHBOT_RECHECK_INTERVAL"
 	workerIDEnvironment          = "JOSHBOT_WORKER_ID"
+	serviceInstanceIDEnvironment = "JOSHBOT_SERVICE_INSTANCE_ID"
+	hostnameEnvironment          = "HOSTNAME"
 
 	defaultLeaseDuration     = 5 * time.Minute
 	defaultMinOriginInterval = time.Minute
@@ -31,8 +34,10 @@ const (
 	defaultCompletionGrace   = 30 * time.Second
 	defaultRecheckInterval   = 24 * time.Hour
 
-	generatedWorkerIDBytes   = 16
-	maxRuntimeWorkerIDLength = 128
+	generatedWorkerIDBytes     = 16
+	maxRuntimeWorkerIDLength   = 128
+	maxServiceInstanceIDLength = 128
+	defaultDiscoveryInstanceID = "discovery"
 )
 
 var (
@@ -215,4 +220,48 @@ func validRuntimeWorkerID(workerID string) bool {
 		utf8.ValidString(workerID) &&
 		utf8.RuneCountInString(workerID) <=
 			maxRuntimeWorkerIDLength
+}
+
+// loadServiceInstanceID resolves the logical heartbeat slot for one process.
+// A configured JOSHBOT_SERVICE_INSTANCE_ID wins. Otherwise fallback is used.
+// The result is trimmed, valid UTF-8, and at most 128 bytes, matching the
+// crawl_service_heartbeats instance_id limit.
+func loadServiceInstanceID(
+	getenv environmentGetter,
+	fallback string,
+) (string, error) {
+	candidate := strings.TrimSpace(
+		getenv(serviceInstanceIDEnvironment),
+	)
+	if candidate == "" {
+		candidate = strings.TrimSpace(fallback)
+	}
+	if !validServiceInstanceID(candidate) {
+		return "", fmt.Errorf(
+			"%w: %s is invalid",
+			errInvalidRuntimeConfiguration,
+			serviceInstanceIDEnvironment,
+		)
+	}
+
+	return candidate, nil
+}
+
+func discoveryServiceInstanceFallback(
+	getenv environmentGetter,
+) string {
+	hostname := strings.TrimSpace(
+		getenv(hostnameEnvironment),
+	)
+	if hostname == "" {
+		return defaultDiscoveryInstanceID
+	}
+
+	return hostname
+}
+
+func validServiceInstanceID(instanceID string) bool {
+	return instanceID != "" &&
+		utf8.ValidString(instanceID) &&
+		len(instanceID) <= maxServiceInstanceIDLength
 }

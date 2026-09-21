@@ -480,8 +480,15 @@ func (operations runtimeOperations) worker(
 				if err != nil {
 					return fmt.Errorf("construct worker heartbeat store: %w", err)
 				}
+				instanceID, err := loadServiceInstanceID(
+					operations.getenv,
+					settings.worker.WorkerID,
+				)
+				if err != nil {
+					return err
+				}
 				heartbeat, err = startServiceHeartbeatWithReporter(
-					ctx, heartbeatStorage, "worker", settings.worker.WorkerID,
+					ctx, heartbeatStorage, "worker", instanceID,
 					serviceHeartbeatInterval,
 					heartbeatErrorReporter(operations.logger),
 				)
