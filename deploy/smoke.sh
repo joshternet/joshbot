@@ -588,7 +588,8 @@ worker_environment="$(
 
 for expected_setting in \
   'JOSHBOT_WEB_BOT_AUTH_MODE=required' \
-  'JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE=/run/secrets/joshbot_web_bot_auth_active_private_key'; do
+  'JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE=/run/secrets/joshbot_web_bot_auth_active_private_key' \
+  'JOSHBOT_SERVICE_INSTANCE_ID=worker'; do
   if ! grep -Fxq \
     "$expected_setting" \
     <<<"$worker_environment"; then
@@ -603,7 +604,8 @@ for expected_setting in \
   'JOSHBOT_CRAWL_REQUEST_DELAY=0s' \
   'JOSHBOT_CRAWL_REDIRECT_LIMIT=3' \
   'JOSHBOT_WEB_BOT_AUTH_MODE=required' \
-  'JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE=/run/secrets/joshbot_web_bot_auth_active_private_key'; do
+  'JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE=/run/secrets/joshbot_web_bot_auth_active_private_key' \
+  'JOSHBOT_SERVICE_INSTANCE_ID=discovery'; do
   if ! grep -Fxq \
     "$expected_setting" \
     <<<"$discovery_environment"; then
@@ -848,7 +850,7 @@ migration_count="$(
 
 assert_equal \
   "$migration_count" \
-  "13" \
+  "14" \
   "source migration count"
 
 pass "known observation, effective state, queue state, and migrations exist"
@@ -1780,7 +1782,7 @@ restored_migration_count="$(
 
 assert_equal \
   "$restored_migration_count" \
-  "13" \
+  "14" \
   "restored migration count"
 
 pass "known observation, discovery provenance, queue modes, and migration metadata survived restore"

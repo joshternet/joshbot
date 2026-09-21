@@ -287,7 +287,9 @@ JoshBot retains origin-level semantic and operational data:
 - per-run admitted/deferred promotions, blocked/failed pages, URLs
   found/enqueued, and remaining frontier at stop;
 - worker and discovery service heartbeats with idle, paused, failed,
-  current-origin, and bounded-message state;
+  current-origin, and bounded-message state; the instance ID is a stable
+  logical service slot, and `started_at` marks the process generation
+  currently occupying that slot;
 - persistent discovery and verification pause state;
 - migration metadata.
 

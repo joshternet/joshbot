@@ -47,6 +47,37 @@ func TestWorkerUsesContainerLivenessInsteadOfDatabaseHealthcheck(
 	}
 }
 
+func TestComposePinsStableServiceInstanceIDs(t *testing.T) {
+	contents, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatalf("read compose.yaml: %v", err)
+	}
+
+	compose := string(contents)
+	worker, workerFound := composeServiceBlock(compose, "worker")
+	discovery, discoveryFound := composeServiceBlock(compose, "discovery")
+	if !workerFound || !discoveryFound {
+		t.Fatal("compose.yaml is missing worker or discovery")
+	}
+
+	if !strings.Contains(
+		worker,
+		"JOSHBOT_SERVICE_INSTANCE_ID: ${JOSHBOT_WORKER_SERVICE_INSTANCE_ID:-worker}",
+	) {
+		t.Error("worker service does not pin a stable heartbeat slot")
+	}
+	if !strings.Contains(
+		discovery,
+		"JOSHBOT_SERVICE_INSTANCE_ID: ${JOSHBOT_DISCOVERY_SERVICE_INSTANCE_ID:-discovery}",
+	) {
+		t.Error("discovery service does not pin a stable heartbeat slot")
+	}
+	if strings.Contains(worker, "JOSHBOT_DISCOVERY_SERVICE_INSTANCE_ID") ||
+		strings.Contains(discovery, "JOSHBOT_WORKER_SERVICE_INSTANCE_ID") {
+		t.Error("worker and discovery heartbeat slots are coupled")
+	}
+}
+
 func composeServiceBlock(
 	compose string,
 	service string,

@@ -538,7 +538,6 @@ func TestDiscoveryRuntimeHeartbeatFailures(t *testing.T) {
 }
 
 func TestDiscoveryRuntimeRecordsHeartbeatLifecycle(t *testing.T) {
-	t.Setenv("HOSTNAME", "")
 	for _, test := range []struct {
 		name      string
 		runErr    error
@@ -572,10 +571,81 @@ func TestDiscoveryRuntimeRecordsHeartbeatLifecycle(t *testing.T) {
 			storage.mu.Lock()
 			defer storage.mu.Unlock()
 			if len(storage.writes) != 2 ||
-				storage.writes[len(storage.writes)-1].State != test.wantState {
+				storage.writes[len(storage.writes)-1].State != test.wantState ||
+				storage.writes[0].InstanceID != defaultDiscoveryInstanceID {
 				t.Errorf("heartbeat writes = %#v", storage.writes)
 			}
 		})
+	}
+}
+
+func TestDiscoveryHeartbeatUsesConfiguredServiceInstance(t *testing.T) {
+	operations, _ := newTestRuntimeOperations(t)
+	base := withCrawlRuntimeEnvironment(operations.getenv)
+	operations.getenv = func(name string) string {
+		switch name {
+		case serviceInstanceIDEnvironment:
+			return "discovery"
+		case hostnameEnvironment:
+			return "recreated-container"
+		default:
+			return base(name)
+		}
+	}
+	storage := &fakeHeartbeatStore{}
+	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+		return storage, nil
+	}
+	if err := operations.discover(context.Background(), true); err != nil {
+		t.Fatalf("discover() error = %v", err)
+	}
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+	if len(storage.writes) == 0 || storage.writes[0].InstanceID != "discovery" {
+		t.Fatalf("heartbeat instance = %#v, want discovery", storage.writes)
+	}
+}
+
+func TestDiscoveryHeartbeatFallsBackToHostname(t *testing.T) {
+	operations, _ := newTestRuntimeOperations(t)
+	base := withCrawlRuntimeEnvironment(operations.getenv)
+	operations.getenv = func(name string) string {
+		if name == hostnameEnvironment {
+			return "ephemeral-host"
+		}
+
+		return base(name)
+	}
+	storage := &fakeHeartbeatStore{}
+	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+		return storage, nil
+	}
+	if err := operations.discover(context.Background(), true); err != nil {
+		t.Fatalf("discover() error = %v", err)
+	}
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+	if len(storage.writes) == 0 || storage.writes[0].InstanceID != "ephemeral-host" {
+		t.Fatalf("heartbeat instance = %#v, want ephemeral-host", storage.writes)
+	}
+}
+
+func TestDiscoveryRuntimeRejectsInvalidServiceInstanceID(t *testing.T) {
+	operations, _ := newTestRuntimeOperations(t)
+	base := withCrawlRuntimeEnvironment(operations.getenv)
+	operations.getenv = func(name string) string {
+		if name == serviceInstanceIDEnvironment {
+			return strings.Repeat("d", maxServiceInstanceIDLength+1)
+		}
+
+		return base(name)
+	}
+	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+		return &fakeHeartbeatStore{}, nil
+	}
+	err := operations.discover(context.Background(), true)
+	if !errors.Is(err, errInvalidRuntimeConfiguration) {
+		t.Fatalf("discover() error = %v", err)
 	}
 }
 
