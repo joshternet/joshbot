@@ -850,7 +850,7 @@ migration_count="$(
 
 assert_equal \
   "$migration_count" \
-  "13" \
+  "14" \
   "source migration count"
 
 pass "known observation, effective state, queue state, and migrations exist"
@@ -1782,7 +1782,7 @@ restored_migration_count="$(
 
 assert_equal \
   "$restored_migration_count" \
-  "13" \
+  "14" \
   "restored migration count"
 
 pass "known observation, discovery provenance, queue modes, and migration metadata survived restore"
