@@ -84,7 +84,6 @@ type CrawlRunnerConfig struct {
 	DiscoveryInterval time.Duration
 	PollInterval      time.Duration
 	LeaseDuration     time.Duration
-	RetryJitter       retry.Jitter
 }
 
 // CrawlReport describes one attempt to claim and crawl a source.
@@ -99,13 +98,17 @@ type CrawlReport struct {
 
 // CrawlRunner coordinates durable source claiming with bounded multi-page
 // crawling.
+//
+// Durable per-source retry delays are owned by lease completion. Run paces
+// processor and infrastructure failures with PollInterval and continues
+// immediately after claimed-work failures so unrelated due sources are not
+// parked.
 type CrawlRunner struct {
-	store       CrawlSourceStore
-	crawler     SourceCrawler
-	config      CrawlRunnerConfig
-	waiter      crawlRunnerWaiter
-	retryPolicy retry.Policy
-	observer    LifecycleObserver
+	store    CrawlSourceStore
+	crawler  SourceCrawler
+	config   CrawlRunnerConfig
+	waiter   crawlRunnerWaiter
+	observer LifecycleObserver
 }
 
 // SetLifecycleObserver attaches process-state observation without changing
@@ -177,11 +180,10 @@ func newCrawlRunner(
 	}
 
 	return &CrawlRunner{
-		store:       store,
-		crawler:     crawler,
-		config:      config,
-		waiter:      waiter,
-		retryPolicy: retry.NewPolicy(config.RetryJitter),
+		store:   store,
+		crawler: crawler,
+		config:  config,
+		waiter:  waiter,
 	}, nil
 }
 
@@ -466,16 +468,19 @@ func (runner *CrawlRunner) noSource(
 	return CrawlReport{}, nil
 }
 
-// Run processes due crawl sources until cancellation or a fatal store,
-// persistence, or crawler error. It waits only when no source was available.
+// Run processes due crawl sources until cancellation.
+//
+// Successful or claimed-work failures immediately lead to another claim
+// attempt. That immediate continue after claimed-work failure is intentional so
+// one source cannot park discovery on the durable source retry schedule. Idle
+// polls and processor failures before a claim wait for PollInterval. Durable
+// source backoff is applied only by lease completion.
 func (runner *CrawlRunner) Run(
 	ctx context.Context,
 ) error {
 	if err := runner.validate(ctx, true); err != nil {
 		return err
 	}
-
-	consecutiveFailures := 0
 
 	for {
 		report, err := runner.RunOnce(ctx)
@@ -485,22 +490,19 @@ func (runner *CrawlRunner) Run(
 				return contextError
 			}
 
-			consecutiveFailures++
+			if report.Worked {
+				continue
+			}
 
 			if waitErr := runner.waiter.Wait(
 				ctx,
-				runner.retryPolicy.Delay(
-					consecutiveFailures,
-					0,
-				),
+				runner.config.PollInterval,
 			); waitErr != nil {
 				return waitErr
 			}
 
 			continue
 		}
-
-		consecutiveFailures = 0
 
 		if report.Worked {
 			continue

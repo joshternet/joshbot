@@ -245,10 +245,14 @@ func TestRunOnceRejectsInsufficientLeaseBudget(
 	t *testing.T,
 ) {
 	source := mustWorkerOrigin(t)
-	lease := workerTestLease(source)
-	lease.ExpiresAt = lease.ClaimedAt.Add(
-		3 * time.Minute,
-	)
+	claimedAt := time.Now().UTC()
+	lease := store.Lease{
+		Origin:     source,
+		WorkerID:   "worker-a",
+		Generation: 1,
+		ClaimedAt:  claimedAt,
+		ExpiresAt:  claimedAt.Add(3 * time.Minute),
+	}
 
 	queue := &fakeQueue{
 		claims: []fakeClaim{
@@ -256,6 +260,12 @@ func TestRunOnceRejectsInsufficientLeaseBudget(
 				lease: lease,
 				found: true,
 			},
+		},
+		renew: func(
+			_ context.Context,
+			current store.Lease,
+		) (store.Lease, error) {
+			return current, nil
 		},
 	}
 	verifier := &fakeVerifier{}
@@ -286,6 +296,13 @@ func TestRunOnceRejectsInsufficientLeaseBudget(
 		t.Errorf(
 			"Verify() calls = %d, want 0",
 			verifier.calls,
+		)
+	}
+
+	if queue.renewCalls != 1 {
+		t.Errorf(
+			"Renew() calls = %d, want 1",
+			queue.renewCalls,
 		)
 	}
 
@@ -781,7 +798,9 @@ func TestRunWaitsOnlyWhenIdle(t *testing.T) {
 	}
 }
 
-func TestRunBacksOffConsecutiveProcessorFailures(t *testing.T) {
+func TestRunProcessorFailuresUsePollInterval(
+	t *testing.T,
+) {
 	processorError := errors.New("store unavailable")
 	stopError := errors.New("stop")
 	queue := &fakeQueue{claims: []fakeClaim{
@@ -805,9 +824,12 @@ func TestRunBacksOffConsecutiveProcessorFailures(t *testing.T) {
 	if err := runtime.Run(context.Background()); !errors.Is(err, stopError) {
 		t.Fatalf("Run() error = %v, want stop", err)
 	}
-	want := []time.Duration{5 * time.Minute, 30 * time.Minute}
+	want := []time.Duration{
+		workerTestConfig().PollInterval,
+		workerTestConfig().PollInterval,
+	}
 	if !reflect.DeepEqual(delays, want) {
-		t.Fatalf("backoff delays = %v, want %v", delays, want)
+		t.Fatalf("processor delays = %v, want %v", delays, want)
 	}
 }
 
@@ -1382,6 +1404,10 @@ type fakeQueue struct {
 	claims           []fakeClaim
 	claimCalls       int
 	claimWorkerIDs   []string
+	renewCalls       int
+	renewedLeases    []store.Lease
+	renewError       error
+	renew            func(context.Context, store.Lease) (store.Lease, error)
 	completeCalls    int
 	completedLeases  []store.Lease
 	completedResults []declaration.Result
@@ -1424,6 +1450,32 @@ func (queue *fakeQueue) Claim(
 	claim := queue.claims[index]
 
 	return claim.lease, claim.found, claim.err
+}
+
+func (queue *fakeQueue) Renew(
+	ctx context.Context,
+	lease store.Lease,
+) (store.Lease, error) {
+	queue.renewCalls++
+	queue.renewedLeases = append(
+		queue.renewedLeases,
+		lease,
+	)
+
+	if queue.renew != nil {
+		return queue.renew(ctx, lease)
+	}
+
+	if queue.renewError != nil {
+		return store.Lease{}, queue.renewError
+	}
+
+	renewed := lease
+	renewed.ExpiresAt = time.Now().UTC().Add(
+		10 * time.Minute,
+	)
+
+	return renewed, nil
 }
 
 func (queue *fakeQueue) CompleteVerification(
@@ -1539,16 +1591,7 @@ func workerTestConfig() Config {
 func workerTestLease(
 	source origin.Origin,
 ) store.Lease {
-	claimedAt := time.Date(
-		2026,
-		time.September,
-		1,
-		12,
-		0,
-		0,
-		0,
-		time.UTC,
-	)
+	claimedAt := time.Now().UTC()
 
 	return store.Lease{
 		Origin:     source,

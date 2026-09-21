@@ -208,7 +208,7 @@ func TestCrawlRunnerDoesNotPersistTransientFailureAfterPartialSuccess(t *testing
 	}
 }
 
-func TestCrawlRunnerContinuesAfterBackedOffFailure(t *testing.T) {
+func TestCrawlRunnerContinuesAfterProcessorFailure(t *testing.T) {
 	stopError := errors.New("stop")
 	waiter := &sequenceCrawlRunnerWaiter{errors: []error{nil, stopError}}
 	runner, err := newCrawlRunner(
@@ -225,9 +225,67 @@ func TestCrawlRunnerContinuesAfterBackedOffFailure(t *testing.T) {
 	if err := runner.Run(context.Background()); !errors.Is(err, stopError) {
 		t.Fatalf("Run() error = %v", err)
 	}
-	want := []time.Duration{5 * time.Minute, testCrawlRunnerConfig().PollInterval}
+	want := []time.Duration{
+		testCrawlRunnerConfig().PollInterval,
+		testCrawlRunnerConfig().PollInterval,
+	}
 	if !reflect.DeepEqual(waiter.durations, want) {
 		t.Fatalf("wait durations = %v, want %v", waiter.durations, want)
+	}
+}
+
+func TestCrawlRunnerClaimedFailureDoesNotParkUnrelatedSource(t *testing.T) {
+	first := mustDiscoveryOrigin(t, "https://first.example")
+	second := mustDiscoveryOrigin(t, "https://second.example")
+	stopError := errors.New("stop")
+
+	store := &fakeCrawlSourceStore{claims: []fakeCrawlSourceClaim{
+		{source: first, found: true},
+		{source: second, found: true},
+	}}
+	crawler := &fakeSourceCrawler{
+		results: []fakeSourceCrawlResult{
+			{err: errors.New("crawl failed after claim")},
+			{result: CrawlResult{PagesAttempted: 1, PagesParsed: 1}},
+		},
+	}
+	waiter := &sequenceCrawlRunnerWaiter{errors: []error{stopError}}
+
+	runner, err := newCrawlRunner(
+		store,
+		crawler,
+		testCrawlRunnerConfig(),
+		waiter,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = runner.Run(context.Background())
+	if !errors.Is(err, stopError) {
+		t.Fatalf("Run() error = %v, want stop", err)
+	}
+
+	if len(crawler.sources) != 2 {
+		t.Fatalf("Crawl() calls = %d, want 2", len(crawler.sources))
+	}
+	if crawler.sources[0] != first || crawler.sources[1] != second {
+		t.Fatalf("Crawl() sources = %#v, want [%v %v]", crawler.sources, first, second)
+	}
+	for _, delay := range waiter.durations {
+		if delay >= 5*time.Minute {
+			t.Fatalf(
+				"wait durations = %v include durable source schedule",
+				waiter.durations,
+			)
+		}
+	}
+	if len(waiter.durations) != 1 ||
+		waiter.durations[0] != testCrawlRunnerConfig().PollInterval {
+		t.Fatalf(
+			"wait durations = %v, want single PollInterval after both sources",
+			waiter.durations,
+		)
 	}
 }
 
@@ -602,8 +660,15 @@ func TestCrawlRunnerRunReturnsRunOnceFailure(
 			stopErr,
 		)
 	}
-	if !reflect.DeepEqual(waiter.durations, []time.Duration{5 * time.Minute}) {
-		t.Errorf("retry durations = %v, want [5m]", waiter.durations)
+	if !reflect.DeepEqual(
+		waiter.durations,
+		[]time.Duration{testCrawlRunnerConfig().PollInterval},
+	) {
+		t.Errorf(
+			"retry durations = %v, want [%v]",
+			waiter.durations,
+			testCrawlRunnerConfig().PollInterval,
+		)
 	}
 }
 

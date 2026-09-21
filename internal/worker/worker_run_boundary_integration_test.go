@@ -34,6 +34,15 @@ func (queue *workerRunBoundaryIntegrationQueue) Claim(
 	return store.Lease{}, false, errWorkerRunBoundaryIntegrationStop
 }
 
+func (queue *workerRunBoundaryIntegrationQueue) Renew(
+	_ context.Context,
+	lease store.Lease,
+) (store.Lease, error) {
+	renewed := lease
+	renewed.ExpiresAt = time.Now().UTC().Add(10 * time.Minute)
+	return renewed, nil
+}
+
 func (queue *workerRunBoundaryIntegrationQueue) CompleteVerification(
 	context.Context,
 	store.Lease,
@@ -77,16 +86,7 @@ func TestWorkerRunBoundaryIntegrationImmediatelyClaimsAfterWork(
 		t.Fatalf("origin.Parse() error = %v", err)
 	}
 
-	claimedAt := time.Date(
-		2026,
-		time.September,
-		19,
-		12,
-		0,
-		0,
-		0,
-		time.UTC,
-	)
+	claimedAt := time.Now().UTC()
 
 	queue := &workerRunBoundaryIntegrationQueue{
 		lease: store.Lease{

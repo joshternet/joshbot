@@ -27,6 +27,13 @@ func (queue *workerRetryContinueIntegrationQueue) Claim(
 	return store.Lease{}, false, errWorkerRetryContinueIntegrationStop
 }
 
+func (*workerRetryContinueIntegrationQueue) Renew(
+	context.Context,
+	store.Lease,
+) (store.Lease, error) {
+	return store.Lease{}, nil
+}
+
 func (*workerRetryContinueIntegrationQueue) CompleteVerification(
 	context.Context,
 	store.Lease,
@@ -46,14 +53,16 @@ func (*workerRetryContinueIntegrationVerifier) Verify(
 }
 
 type workerRetryContinueIntegrationWaiter struct {
-	calls int
+	calls  int
+	delays []time.Duration
 }
 
 func (waiter *workerRetryContinueIntegrationWaiter) Wait(
-	context.Context,
-	time.Duration,
+	_ context.Context,
+	delay time.Duration,
 ) error {
 	waiter.calls++
+	waiter.delays = append(waiter.delays, delay)
 	if waiter.calls == 1 {
 		return nil
 	}
@@ -94,5 +103,14 @@ func TestWorkerRetryContinueIntegration(t *testing.T) {
 	}
 	if waiter.calls != 2 {
 		t.Errorf("Wait() calls = %d, want 2", waiter.calls)
+	}
+	wantDelays := []time.Duration{time.Minute, time.Minute}
+	if len(waiter.delays) != len(wantDelays) {
+		t.Fatalf("Wait delays = %v, want %v", waiter.delays, wantDelays)
+	}
+	for index, delay := range waiter.delays {
+		if delay != wantDelays[index] {
+			t.Fatalf("Wait delays = %v, want %v", waiter.delays, wantDelays)
+		}
 	}
 }

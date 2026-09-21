@@ -197,6 +197,17 @@ schedules future work.
 Execution is at least once. A network request may occur more than once after a
 crash or expired lease. Only the current lease owner may commit completion.
 
+Within one claim, transient verification outcomes receive up to three immediate
+attempts. Before each attempt the worker checks remaining wall-clock lease time
+against one `JobTimeout` plus `CompletionGrace`, renewing only when that budget
+is insufficient. Completion always uses the latest authoritative lease.
+
+Durable per-origin retry delays (`5m`, `30m`, `2h`, `12h`, then `24h`) are
+applied only when queue completion records a transient failure. The worker
+process itself continues claiming unrelated due work after a claimed origin
+fails. Claim and other pre-work processor failures wait for `PollInterval`
+rather than the durable origin schedule.
+
 Recording the observation, releasing the lease, and scheduling subsequent work
 occur transactionally.
 
@@ -220,9 +231,18 @@ The frontier is intentionally in memory. A stopped crawl starts from the root
 during its next attempt.
 
 Only a transient root-page failure receives up to three immediate attempts.
+Redirect-loop detection is local to each fetch attempt so a failed redirect
+cannot poison later root retries; successfully traversed same-origin URLs are
+merged into crawl-wide visited state only after that attempt succeeds. Failed
+attempts do not write hop URLs into crawl-wide visited state.
 Failures after at least one page was parsed remain page telemetry and do not
 turn an otherwise partially successful source crawl into a durable source
 retry.
+
+The discovery runner continues claiming unrelated due sources after a claimed
+source fails. Claim and other pre-work processor failures wait for the
+discovery poll interval. Durable source backoff remains owned by lease
+completion.
 
 ### `internal/reporting`
 
