@@ -263,7 +263,8 @@ func TestRunControlServesAndClosesListener(t *testing.T) {
 
 func TestServeControl(t *testing.T) {
 	listener := &reportTestListener{}
-	if err := serveControl(nil, nil, nil, 0); !errors.Is(err, errInvalidControlConfiguration) {
+	var nilContext context.Context
+	if err := serveControl(nilContext, nil, nil, 0); !errors.Is(err, errInvalidControlConfiguration) {
 		t.Errorf("invalid error = %v", err)
 	}
 	for _, result := range []error{nil, http.ErrServerClosed} {

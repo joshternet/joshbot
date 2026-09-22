@@ -448,7 +448,8 @@ func TestControlStoreHandlesValidationAndMutationFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordRejected(nil, controlAudit("test", "test")); !errors.Is(err, errInvalidContext) {
+	var nilContext context.Context
+	if err := store.RecordRejected(nilContext, controlAudit("test", "test")); !errors.Is(err, errInvalidContext) {
 		t.Errorf("nil context error = %v", err)
 	}
 	canceled, cancel := context.WithCancel(ctx)

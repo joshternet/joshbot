@@ -770,8 +770,9 @@ func TestWebBotAuthConformanceTargetParsing(t *testing.T) {
 		t.Fatal("credential URL error = nil")
 	}
 
+	var nilContext context.Context
 	if _, err := fetchWebBotAuth(
-		nil,
+		nilContext,
 		&conformanceClient{},
 		&url.URL{Scheme: "https", Host: "example.com"},
 		1,

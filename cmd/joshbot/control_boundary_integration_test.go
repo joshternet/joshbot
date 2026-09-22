@@ -281,8 +281,9 @@ func TestControlBoundaryIntegrationSettingsAndTokenFailures(t *testing.T) {
 }
 
 func TestControlBoundaryIntegrationRunControlFailures(t *testing.T) {
+	var nilContext context.Context
 	if err := runControl(
-		nil,
+		nilContext,
 		controlBoundaryIntegrationDependencies(),
 	); !errors.Is(
 		err,
@@ -515,8 +516,9 @@ func TestControlBoundaryIntegrationRunControlServesAndCloses(
 func TestControlBoundaryIntegrationServeControl(t *testing.T) {
 	listener := &controlBoundaryIntegrationListener{}
 
+	var nilContext context.Context
 	if err := serveControl(
-		nil,
+		nilContext,
 		nil,
 		nil,
 		0,

@@ -239,7 +239,8 @@ func TestWorkerFailureIntegrationConstructorAndRuntimeValidation(
 		)
 	}
 
-	if _, err := valid.RunOnce(nil); !errors.Is(
+	var nilContext context.Context
+	if _, err := valid.RunOnce(nilContext); !errors.Is(
 		err,
 		errInvalidContext,
 	) {

@@ -116,8 +116,9 @@ func TestPublicDataReaderFailureIntegrationValidatesContextAndRoot(
 		[]byte("{}\n"),
 	)
 
+	var nilContext context.Context
 	if files, err := ReadDirectory(
-		nil,
+		nilContext,
 		validRoot,
 	); !errors.Is(err, ErrInvalidContext) || files != nil {
 		t.Errorf(

@@ -159,7 +159,8 @@ func TestDeclarationFailureIntegrationValidatesVerifierInputs(
 
 	verifier := declaration.NewVerifier(getter)
 
-	if _, err := verifier.Verify(nil, source); err == nil {
+	var nilContext context.Context
+	if _, err := verifier.Verify(nilContext, source); err == nil {
 		t.Fatal("Verify(nil context) error = nil")
 	}
 

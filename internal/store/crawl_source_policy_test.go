@@ -496,7 +496,8 @@ func TestReconcileAutomaticCrawlPolicyFailures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.ReconcileAutomaticCrawlPolicy(nil); err == nil {
+		var nilContext context.Context
+		if _, err := store.ReconcileAutomaticCrawlPolicy(nilContext); err == nil {
 			t.Error("ReconcileAutomaticCrawlPolicy(nil) error = nil")
 		}
 	})
@@ -580,10 +581,11 @@ func TestCrawlSourcePolicyValidatesInputsAndDatabaseFailures(t *testing.T) {
 	if err := sourceStore.SetCrawlBlocked(ctx, origin.Origin{}, true); err == nil {
 		t.Error("SetCrawlBlocked(empty) error = nil")
 	}
-	if err := sourceStore.SetCrawlBlocked(nil, mustStoreOrigin(t, "https://example.com"), true); err == nil {
+	var nilContext context.Context
+	if err := sourceStore.SetCrawlBlocked(nilContext, mustStoreOrigin(t, "https://example.com"), true); err == nil {
 		t.Error("SetCrawlBlocked(nil context) error = nil")
 	}
-	if _, err := sourceStore.CrawlSources(nil); err == nil {
+	if _, err := sourceStore.CrawlSources(nilContext); err == nil {
 		t.Error("CrawlSources(nil context) error = nil")
 	}
 	if _, err := pool.Exec(ctx, "DROP TABLE discovery_source_state"); err != nil {

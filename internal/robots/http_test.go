@@ -511,7 +511,8 @@ func TestObtainPolicyRejectsInvalidInputs(t *testing.T) {
 	getter := &fakeHopGetter{}
 
 	t.Run("nil context", func(t *testing.T) {
-		policy, err := obtainPolicy(nil, initial, getter)
+		var nilContext context.Context
+		policy, err := obtainPolicy(nilContext, initial, getter)
 		if !errors.Is(err, errInvalidContext) {
 			t.Fatalf(
 				"obtainPolicy() error = %v, want errInvalidContext",
@@ -856,8 +857,9 @@ func TestGuardedHTTPRejectsInvalidInputs(t *testing.T) {
 	})
 
 	t.Run("nil context", func(t *testing.T) {
+		var nilContext context.Context
 		if _, err := getter.get(
-			nil,
+			nilContext,
 			target,
 		); !errors.Is(err, errInvalidContext) {
 			t.Fatalf(

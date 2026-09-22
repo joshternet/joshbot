@@ -326,7 +326,8 @@ func TestCheckerRejectsInvalidInputs(t *testing.T) {
 	})
 
 	t.Run("nil context", func(t *testing.T) {
-		allowed, err := checker.Allowed(nil, target)
+		var nilContext context.Context
+		allowed, err := checker.Allowed(nilContext, target)
 		if allowed {
 			t.Fatal("Checker.Allowed() = true, want false")
 		}

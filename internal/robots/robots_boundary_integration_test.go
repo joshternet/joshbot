@@ -156,8 +156,9 @@ func TestRobotsBoundaryIntegrationCheckerValidationAndCache(
 		)
 	}
 
+	var nilContext context.Context
 	if allowed, err := checker.Allowed(
-		nil,
+		nilContext,
 		target,
 	); allowed || !errors.Is(err, errInvalidContext) {
 		t.Errorf(
@@ -535,8 +536,9 @@ func TestRobotsBoundaryIntegrationObtainPolicyFailures(
 		"https://example.com/private",
 	)
 
+	var nilContext context.Context
 	policy, err := obtainPolicy(
-		nil,
+		nilContext,
 		initial,
 		&robotsBoundaryIntegrationGetter{},
 	)

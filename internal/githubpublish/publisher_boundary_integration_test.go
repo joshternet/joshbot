@@ -169,8 +169,9 @@ func TestGitHubPublishBoundaryIntegrationPublishPreflight(
 		t.Fatalf("New() error = %v", err)
 	}
 
+	var nilContext context.Context
 	if _, err := publisher.Publish(
-		nil,
+		nilContext,
 		githubPublishBoundaryIntegrationSnapshot(),
 	); !errors.Is(err, context.Canceled) {
 		t.Errorf(

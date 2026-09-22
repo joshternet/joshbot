@@ -13,8 +13,8 @@ import (
 const (
 	documentationRepositoryURL = "https://github.com/joshternet/joshbot"
 	documentationSpecURL       = "https://github.com/joshternet/spec"
-	documentationRelease       = "1.0.0"
-	documentationReleaseDate   = "2026-09-05"
+	documentationRelease       = "1.1.0"
+	documentationReleaseDate   = "2026-09-21"
 )
 
 var (
@@ -391,6 +391,7 @@ func testCurrentReleaseLanguage(t *testing.T) {
 		"SECURITY.md",
 		"docs/architecture.md",
 		"docs/crawler.md",
+		"docs/production-soak.md",
 		"deploy/README.md",
 		"deploy/.env.example",
 		"compose.yaml",

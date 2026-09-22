@@ -92,8 +92,9 @@ func TestReportBoundaryIntegrationConstructors(t *testing.T) {
 }
 
 func TestReportBoundaryIntegrationRunReportFailures(t *testing.T) {
+	var nilContext context.Context
 	if err := runReport(
-		nil,
+		nilContext,
 		reportBoundaryIntegrationDependencies(),
 	); !errors.Is(err, errInvalidReportConfiguration) {
 		t.Errorf(
@@ -322,8 +323,9 @@ func TestReportBoundaryIntegrationRunReportServesAndCloses(
 func TestReportBoundaryIntegrationServeReport(t *testing.T) {
 	listener := &reportBoundaryIntegrationListener{}
 
+	var nilContext context.Context
 	if err := serveReport(
-		nil,
+		nilContext,
 		nil,
 		nil,
 		0,

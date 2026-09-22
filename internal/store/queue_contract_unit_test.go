@@ -176,7 +176,8 @@ func TestQueueValidateWithoutDatabase(
 		clock:  queueContractClock{},
 	}
 
-	if err := queue.validate(nil); !errors.Is(
+	var nilContext context.Context
+	if err := queue.validate(nilContext); !errors.Is(
 		err,
 		errInvalidContext,
 	) {

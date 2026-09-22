@@ -66,7 +66,8 @@ func TestStoreValidateWithoutDatabase(
 		&storeFakePostgres{},
 	)
 
-	if err := store.validate(nil); !errors.Is(
+	var nilContext context.Context
+	if err := store.validate(nilContext); !errors.Is(
 		err,
 		errInvalidContext,
 	) {

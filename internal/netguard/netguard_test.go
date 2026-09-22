@@ -506,8 +506,9 @@ func TestResolveRejectsUnsafeOrIncompleteResults(t *testing.T) {
 func TestResolveRejectsInvalidInputsAndCancellation(t *testing.T) {
 	candidate := mustOrigin(t, "https://example.com")
 
+	var nilContext context.Context
 	if _, err := Resolve(
-		nil,
+		nilContext,
 		candidate,
 		nil,
 	); !errors.Is(err, errInvalidContext) {
@@ -765,8 +766,9 @@ func TestDialContextRejectsInvalidInputsAndFailures(t *testing.T) {
 		port: 443,
 	}
 
+	var nilContext context.Context
 	if _, err := safeDestination.DialContext(
-		nil,
+		nilContext,
 		nil,
 	); !errors.Is(err, errInvalidContext) {
 		t.Errorf(

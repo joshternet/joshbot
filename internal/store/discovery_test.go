@@ -1739,8 +1739,9 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 		now,
 	)
 
+	var nilContext context.Context
 	_, _, err = discoveryStore.ClaimDiscoverySourceLease(
-		nil,
+		nilContext,
 		time.Hour,
 		time.Minute,
 	)
@@ -1749,7 +1750,7 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 	}
 
 	_, err = discoveryStore.RecordDiscovery(
-		nil,
+		nilContext,
 		source,
 		nil,
 	)

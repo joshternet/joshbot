@@ -189,7 +189,8 @@ func TestNetguardFailureIntegrationResolveBoundaries(t *testing.T) {
 		"https://example.com:8443",
 	)
 
-	if _, err := Resolve(nil, hostOrigin, nil); !errors.Is(
+	var nilContext context.Context
+	if _, err := Resolve(nilContext, hostOrigin, nil); !errors.Is(
 		err,
 		errInvalidContext,
 	) {
@@ -455,8 +456,9 @@ func TestNetguardFailureIntegrationDialBoundaries(t *testing.T) {
 		port: 443,
 	}
 
+	var nilContext context.Context
 	if _, err := validDestination.DialContext(
-		nil,
+		nilContext,
 		nil,
 	); !errors.Is(err, errInvalidContext) {
 		t.Errorf(

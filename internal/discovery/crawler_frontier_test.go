@@ -1735,8 +1735,9 @@ func TestMultiPageCrawlerValidatesConfigurationAndDependencies(
 		)
 	}
 
+	var nilContext context.Context
 	if _, err := crawler.Crawl(
-		nil,
+		nilContext,
 		source,
 	); !errors.Is(err, errInvalidContext) {
 		t.Errorf(

@@ -455,8 +455,9 @@ func TestWriteDirectoryRejectsNilAndCanceledContexts(
 ) {
 	parent := t.TempDir()
 
+	var nilContext context.Context
 	err := WriteDirectory(
-		nil,
+		nilContext,
 		filepath.Join(parent, "nil-context"),
 		[]File{
 			{

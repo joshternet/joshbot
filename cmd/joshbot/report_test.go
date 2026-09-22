@@ -635,8 +635,9 @@ func TestRunReportRejectsInvalidRuntime(
 		t,
 	)
 
+	var nilContext context.Context
 	if err := runReport(
-		nil,
+		nilContext,
 		dependencies,
 	); !errors.Is(
 		err,
@@ -877,8 +878,9 @@ func TestServeReport(
 ) {
 	listener := &reportTestListener{}
 
+	var nilContext context.Context
 	if err := serveReport(
-		nil,
+		nilContext,
 		nil,
 		nil,
 		0,

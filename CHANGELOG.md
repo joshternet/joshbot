@@ -6,6 +6,8 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-21
+
 ### Added
 
 - `joshbot conformance web-bot-auth` checks the public signature directory
@@ -45,6 +47,8 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 - Dedicated Ed25519 Web Bot Auth signing-key configuration using an external
   PKCS#8 private-key secret, derived public OKP JWK, RFC 7638 thumbprint key
   identifier, and crawler-startup identity validation.
+- Operator production-soak guide covering existing reporting signals, the
+  discovery funnel, curated seed research, and evidence-gated follow-up work.
 
 ### Changed
 
@@ -91,6 +95,9 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   removed.
 - Retry migration constraint checks look up definitions in the current
   test schema so parallel schema teardown cannot yield stale OIDs.
+- Nil-context contract tests pass a typed `nil` `context.Context` variable
+  instead of a bare `nil` literal so `staticcheck` SA1012 stays clean without
+  suppressing the check.
 
 ### Security
 
@@ -132,5 +139,6 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   separate containers.
 - The public registry excludes private discovery and queue state.
 
-[Unreleased]: https://github.com/joshternet/joshbot/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/joshternet/joshbot/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/joshternet/joshbot/releases/tag/v1.1.0
 [1.0.0]: https://github.com/joshternet/joshbot/releases/tag/v1.0.0

@@ -7,7 +7,7 @@ It finds public web origins, verifies their Joshternet declarations, remembers
 operational state in PostgreSQL, and produces a deterministic public registry.
 Publication to GitHub happens through a separate, credential-isolated runtime.
 
-The initial supported release is `v1.0.0`.
+The current supported release is `v1.1.0`.
 
 ## What is the Joshternet?
 
@@ -564,6 +564,16 @@ The public crawler information page is:
 https://joshternet.org/joshbot
 ```
 
+The HTTP Message Signatures directory used for Web Bot Auth is:
+
+```text
+https://joshternet.org/.well-known/http-message-signatures-directory
+```
+
+Cloudflare BotBase registration has been submitted and is awaiting review.
+JoshBot is not Cloudflare Verified until that review completes and
+`joshbot conformance web-bot-auth --expect verified` passes.
+
 To block JoshBot completely, a site can publish:
 
 ```text
@@ -804,6 +814,7 @@ Implementation changes belong here. Protocol changes belong there.
 - [Architecture](docs/architecture.md)
 - [Crawler behavior](docs/crawler.md)
 - [Deployment guide](deploy/README.md)
+- [Production soak](docs/production-soak.md)
 - [Changelog](CHANGELOG.md)
 
 ## Contributing

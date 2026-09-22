@@ -473,8 +473,9 @@ func TestPublisherPreservesContextCancellation(t *testing.T) {
 		)
 	}
 
+	var nilContext context.Context
 	_, err = publisher.Publish(
-		nil,
+		nilContext,
 		testRegistrySnapshot(),
 	)
 	if !errors.Is(err, context.Canceled) {

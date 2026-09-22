@@ -18,7 +18,7 @@ body:
     attributes:
       label: JoshBot version
       description: Provide the release tag or commit SHA.
-      placeholder: v1.0.0
+      placeholder: v1.1.0
     validations:
       required: true
 

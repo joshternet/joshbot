@@ -23,8 +23,9 @@ func TestPublicDataWriterFailureIntegrationValidatesInputs(
 		},
 	}
 
+	var nilContext context.Context
 	if err := WriteDirectory(
-		nil,
+		nilContext,
 		filepath.Join(t.TempDir(), "nil-context"),
 		files,
 	); !errors.Is(err, ErrInvalidContext) {

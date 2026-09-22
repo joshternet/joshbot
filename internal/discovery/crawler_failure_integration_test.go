@@ -126,7 +126,8 @@ func TestCrawlerFailureIntegrationConstructorAndValidationBoundaries(t *testing.
 		t.Fatalf("NewMultiPageCrawler() error = %v", err)
 	}
 
-	if _, err := valid.Crawl(nil, source); !errors.Is(err, errInvalidContext) {
+	var nilContext context.Context
+	if _, err := valid.Crawl(nilContext, source); !errors.Is(err, errInvalidContext) {
 		t.Errorf("Crawl(nil) error = %v, want %v", err, errInvalidContext)
 	}
 

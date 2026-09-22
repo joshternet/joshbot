@@ -505,13 +505,18 @@ require_text \
 	'changelog contains the initial release'
 
 require_text \
+	CHANGELOG.md \
+	'## [1.1.0] - 2026-09-21' \
+	'changelog contains the current release'
+
+require_text \
 	deploy/.env.example \
-	'JOSHBOT_IMAGE=joshbot:v1.0.0' \
+	'JOSHBOT_IMAGE=joshbot:v1.1.0' \
 	'example environment uses the release image label'
 
 require_text \
 	compose.yaml \
-	'image: ${JOSHBOT_IMAGE:-joshbot:v1.0.0}' \
+	'image: ${JOSHBOT_IMAGE:-joshbot:v1.1.0}' \
 	'Compose uses the release image label'
 
 require_text \
