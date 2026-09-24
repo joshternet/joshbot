@@ -537,6 +537,100 @@ func TestPostgresReaderMetricsCountsUnfinishedCrawlRuns(
 	}
 }
 
+func TestPostgresReaderMetricsBreakdowns(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newReportingTestPool(t)
+
+	fixture := seedReportingFixture(
+		t,
+		pool,
+	)
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE crawl_page_attempts
+		SET
+			status_code = 408,
+			outcome = 'http_error',
+			failure_category = 'http_408'
+		WHERE run_id = $1
+	`, fixture.crawlID); err != nil {
+		t.Fatalf(
+			"update crawl page attempt: %v",
+			err,
+		)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE verification_queue
+		SET
+			consecutive_failures = 1,
+			last_failure_category = 'robots_temporary',
+			next_attempt_at = available_at
+		WHERE origin = 'https://seed.example'
+	`); err != nil {
+		t.Fatalf(
+			"update verification queue failure: %v",
+			err,
+		)
+	}
+
+	reader, err := NewPostgresReader(
+		pool,
+		PostgresConfig{
+			MaxPendingProbes: 1,
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"NewPostgresReader() error = %v",
+			err,
+		)
+	}
+
+	metrics, err := reader.Metrics(ctx)
+	if err != nil {
+		t.Fatalf(
+			"Metrics() error = %v",
+			err,
+		)
+	}
+
+	if len(metrics.PageFailureCategories) != 1 ||
+		metrics.PageFailureCategories[0] != (MetricBreakdown{
+			Label: "http_408",
+			Count: 1,
+		}) {
+		t.Errorf(
+			"PageFailureCategories = %#v",
+			metrics.PageFailureCategories,
+		)
+	}
+
+	if len(metrics.HTTPStatuses) != 1 ||
+		metrics.HTTPStatuses[0] != (MetricBreakdown{
+			Label: "408",
+			Count: 1,
+		}) {
+		t.Errorf(
+			"HTTPStatuses = %#v",
+			metrics.HTTPStatuses,
+		)
+	}
+
+	if len(metrics.VerificationQueueFailureCategories) != 1 ||
+		metrics.VerificationQueueFailureCategories[0] != (MetricBreakdown{
+			Label: "robots_temporary",
+			Count: 1,
+		}) {
+		t.Errorf(
+			"VerificationQueueFailureCategories = %#v",
+			metrics.VerificationQueueFailureCategories,
+		)
+	}
+}
+
 func TestPostgresReaderReportsInactiveBackpressure(
 	t *testing.T,
 ) {

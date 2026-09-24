@@ -1013,6 +1013,24 @@ func TestMetricsExposeUnfinishedCrawlRunCount(
 		fakeReader: &fakeReader{},
 		metrics: OperationalMetrics{
 			UnfinishedCrawlRuns: 7,
+			PageFailureCategories: []MetricBreakdown{
+				{
+					Label: "timeout",
+					Count: 2,
+				},
+			},
+			HTTPStatuses: []MetricBreakdown{
+				{
+					Label: "403",
+					Count: 3,
+				},
+			},
+			VerificationQueueFailureCategories: []MetricBreakdown{
+				{
+					Label: "robots_temporary",
+					Count: 4,
+				},
+			},
 		},
 	}
 
@@ -1042,6 +1060,15 @@ func TestMetricsExposeUnfinishedCrawlRunCount(
 		"# HELP joshbot_unfinished_crawl_runs Current unfinished crawl runs.",
 		"# TYPE joshbot_unfinished_crawl_runs gauge",
 		"joshbot_unfinished_crawl_runs 7",
+		"# HELP joshbot_retained_page_attempt_failures Retained page attempts by failure category.",
+		"# TYPE joshbot_retained_page_attempt_failures gauge",
+		`joshbot_retained_page_attempt_failures{failure_category="timeout"} 2`,
+		"# HELP joshbot_retained_page_http_statuses Retained page attempts by HTTP status.",
+		"# TYPE joshbot_retained_page_http_statuses gauge",
+		`joshbot_retained_page_http_statuses{status="403"} 3`,
+		"# HELP joshbot_verification_queue_failures Current verification queue failures by category.",
+		"# TYPE joshbot_verification_queue_failures gauge",
+		`joshbot_verification_queue_failures{failure_category="robots_temporary"} 4`,
 	} {
 		if !strings.Contains(
 			body,

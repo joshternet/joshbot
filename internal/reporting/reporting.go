@@ -909,6 +909,57 @@ func (h *handler) metrics(
 
 	_, _ = fmt.Fprintln(
 		writer,
+		"# HELP joshbot_retained_page_attempt_failures Retained page attempts by failure category.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_retained_page_attempt_failures gauge",
+	)
+	for _, breakdown := range durable.PageFailureCategories {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_retained_page_attempt_failures{failure_category=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
+		"# HELP joshbot_retained_page_http_statuses Retained page attempts by HTTP status.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_retained_page_http_statuses gauge",
+	)
+	for _, breakdown := range durable.HTTPStatuses {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_retained_page_http_statuses{status=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
+		"# HELP joshbot_verification_queue_failures Current verification queue failures by category.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_verification_queue_failures gauge",
+	)
+	for _, breakdown := range durable.VerificationQueueFailureCategories {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_verification_queue_failures{failure_category=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
 		"# HELP joshbot_service_heartbeat_age_seconds Age of the latest service heartbeat.",
 	)
 	_, _ = fmt.Fprintln(
