@@ -954,6 +954,7 @@ func TestMetricsExposeBoundedOperationalState(
 		`joshbot_crawl_sources{classification="verified"} 3`,
 		`joshbot_crawl_sources{classification="blocked"} 4`,
 		`joshbot_crawl_sources{classification="crawl_eligible"} 46`,
+		"joshbot_unfinished_crawl_runs 0",
 		`joshbot_service_heartbeat_age_seconds{service="worker",state="running"} 30`,
 		`joshbot_service_heartbeat_age_seconds{service="discovery",state="idle"} 0`,
 		"# EOF",
@@ -987,6 +988,68 @@ func TestMetricsExposeBoundedOperationalState(
 			t.Errorf(
 				"metrics unexpectedly contain %q:\n%s",
 				forbidden,
+				body,
+			)
+		}
+	}
+}
+
+type fakeMetricsReader struct {
+	*fakeReader
+
+	metrics OperationalMetrics
+}
+
+func (reader *fakeMetricsReader) Metrics(
+	context.Context,
+) (OperationalMetrics, error) {
+	return reader.metrics, nil
+}
+
+func TestMetricsExposeUnfinishedCrawlRunCount(
+	t *testing.T,
+) {
+	reader := &fakeMetricsReader{
+		fakeReader: &fakeReader{},
+		metrics: OperationalMetrics{
+			UnfinishedCrawlRuns: 7,
+		},
+	}
+
+	handler := mustReportingHandler(
+		t,
+		reader,
+	)
+
+	response := performRequest(
+		t,
+		handler,
+		"/metrics",
+		"Bearer "+testToken,
+	)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"metrics status = %d, want %d",
+			response.Code,
+			http.StatusOK,
+		)
+	}
+
+	body := response.Body.String()
+
+	for _, value := range []string{
+		"# HELP joshbot_unfinished_crawl_runs Current unfinished crawl runs.",
+		"# TYPE joshbot_unfinished_crawl_runs gauge",
+		"joshbot_unfinished_crawl_runs 7",
+	} {
+		if !strings.Contains(
+			body,
+			value,
+		) {
+			t.Errorf(
+				"metrics missing %q:\n%s",
+				value,
 				body,
 			)
 		}

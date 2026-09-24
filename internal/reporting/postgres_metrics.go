@@ -7,16 +7,17 @@ import (
 
 // OperationalMetrics contains retained durable crawler measurements.
 type OperationalMetrics struct {
-	Candidates      int64
-	DiscoveryEdges  int64
-	CrawlRuns       int64
-	PagesAttempted  int64
-	PagesParsed     int64
-	OriginsFound    int64
-	OriginsPromoted int64
-	OriginsDeferred int64
-	Failures        int64
-	RobotsDenials   int64
+	Candidates          int64
+	DiscoveryEdges      int64
+	CrawlRuns           int64
+	UnfinishedCrawlRuns int64
+	PagesAttempted      int64
+	PagesParsed         int64
+	OriginsFound        int64
+	OriginsPromoted     int64
+	OriginsDeferred     int64
+	Failures            int64
+	RobotsDenials       int64
 }
 
 type metricsReader interface {
@@ -33,6 +34,7 @@ func (reader *PostgresReader) Metrics(
 			(SELECT count(*) FROM discovery_candidates),
 			(SELECT count(*) FROM discovery_edges),
 			(SELECT count(*) FROM crawl_runs),
+			(SELECT count(*) FROM crawl_runs WHERE finished_at IS NULL),
 			(SELECT COALESCE(sum(pages_attempted), 0) FROM crawl_runs),
 			(SELECT COALESCE(sum(pages_parsed), 0) FROM crawl_runs),
 			(SELECT COALESCE(sum(candidates_discovered), 0) FROM crawl_runs),
@@ -44,6 +46,7 @@ func (reader *PostgresReader) Metrics(
 		&metrics.Candidates,
 		&metrics.DiscoveryEdges,
 		&metrics.CrawlRuns,
+		&metrics.UnfinishedCrawlRuns,
 		&metrics.PagesAttempted,
 		&metrics.PagesParsed,
 		&metrics.OriginsFound,

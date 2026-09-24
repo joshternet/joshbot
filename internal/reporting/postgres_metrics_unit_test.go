@@ -5,14 +5,35 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 )
+
+type metricsQueryCapture struct {
+	*fakeQueryer
+
+	query string
+}
+
+func (queryer *metricsQueryCapture) QueryRow(
+	ctx context.Context,
+	query string,
+	args ...any,
+) pgx.Row {
+	queryer.query = query
+
+	return queryer.fakeQueryer.QueryRow(
+		ctx,
+		query,
+		args...,
+	)
+}
 
 func TestPostgresReaderMetricsWithoutDatabase(
 	t *testing.T,
 ) {
-	reader := mustUnitPostgresReader(
-		t,
-		&fakeQueryer{
+	queryer := &metricsQueryCapture{
+		fakeQueryer: &fakeQueryer{
 			rowResults: []fakeRow{
 				{
 					values: []any{
@@ -26,14 +47,25 @@ func TestPostgresReaderMetricsWithoutDatabase(
 						int64(8),
 						int64(9),
 						int64(10),
+						int64(11),
 					},
 				},
 			},
 		},
+	}
+
+	reader, err := newPostgresReader(
+		queryer,
 		PostgresConfig{
 			MaxPendingProbes: 1,
 		},
 	)
+	if err != nil {
+		t.Fatalf(
+			"newPostgresReader() error = %v",
+			err,
+		)
+	}
 
 	metrics, err := reader.Metrics(
 		context.Background(),
@@ -46,16 +78,17 @@ func TestPostgresReaderMetricsWithoutDatabase(
 	}
 
 	want := OperationalMetrics{
-		Candidates:      1,
-		DiscoveryEdges:  2,
-		CrawlRuns:       3,
-		PagesAttempted:  4,
-		PagesParsed:     5,
-		OriginsFound:    6,
-		OriginsPromoted: 7,
-		OriginsDeferred: 8,
-		Failures:        9,
-		RobotsDenials:   10,
+		Candidates:          1,
+		DiscoveryEdges:      2,
+		CrawlRuns:           3,
+		UnfinishedCrawlRuns: 4,
+		PagesAttempted:      5,
+		PagesParsed:         6,
+		OriginsFound:        7,
+		OriginsPromoted:     8,
+		OriginsDeferred:     9,
+		Failures:            10,
+		RobotsDenials:       11,
 	}
 
 	if metrics != want {
@@ -63,6 +96,21 @@ func TestPostgresReaderMetricsWithoutDatabase(
 			"Metrics() = %#v, want %#v",
 			metrics,
 			want,
+		)
+	}
+
+	normalizedQuery := strings.Join(
+		strings.Fields(queryer.query),
+		" ",
+	)
+
+	if !strings.Contains(
+		normalizedQuery,
+		"(SELECT count(*) FROM crawl_runs WHERE finished_at IS NULL)",
+	) {
+		t.Fatalf(
+			"Metrics() query does not count unfinished crawl runs: %s",
+			normalizedQuery,
 		)
 	}
 }

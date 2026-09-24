@@ -459,6 +459,84 @@ func TestPostgresReaderReturnsOperationalState(
 	}
 }
 
+func TestPostgresReaderMetricsCountsUnfinishedCrawlRuns(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newReportingTestPool(t)
+
+	seedReportingFixture(
+		t,
+		pool,
+	)
+
+	startedAt := time.Now().
+		UTC().
+		Truncate(time.Microsecond)
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO crawl_runs (
+			source_origin,
+			started_at,
+			max_depth,
+			max_pages,
+			max_page_bytes,
+			request_delay_milliseconds,
+			redirect_limit,
+			page_timeout_milliseconds
+		) VALUES (
+			$1,
+			$2,
+			0,
+			1,
+			1,
+			0,
+			0,
+			1
+		)
+	`, "https://seed.example", startedAt); err != nil {
+		t.Fatalf(
+			"insert unfinished crawl run: %v",
+			err,
+		)
+	}
+
+	reader, err := NewPostgresReader(
+		pool,
+		PostgresConfig{
+			MaxPendingProbes: 1,
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"NewPostgresReader() error = %v",
+			err,
+		)
+	}
+
+	metrics, err := reader.Metrics(ctx)
+	if err != nil {
+		t.Fatalf(
+			"Metrics() error = %v",
+			err,
+		)
+	}
+
+	if metrics.CrawlRuns != 2 {
+		t.Errorf(
+			"CrawlRuns = %d, want 2",
+			metrics.CrawlRuns,
+		)
+	}
+
+	if metrics.UnfinishedCrawlRuns != 1 {
+		t.Errorf(
+			"UnfinishedCrawlRuns = %d, want 1",
+			metrics.UnfinishedCrawlRuns,
+		)
+	}
+}
+
 func TestPostgresReaderReportsInactiveBackpressure(
 	t *testing.T,
 ) {

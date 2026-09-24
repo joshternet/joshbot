@@ -892,6 +892,7 @@ func (h *handler) metrics(
 		{"joshbot_retained_candidates", "Retained discovery candidates.", durable.Candidates},
 		{"joshbot_retained_discovery_edges", "Retained discovery edges.", durable.DiscoveryEdges},
 		{"joshbot_retained_crawl_runs", "Retained crawl runs.", durable.CrawlRuns},
+		{"joshbot_unfinished_crawl_runs", "Current unfinished crawl runs.", durable.UnfinishedCrawlRuns},
 		{"joshbot_retained_pages_attempted", "Retained pages attempted.", durable.PagesAttempted},
 		{"joshbot_retained_pages_parsed", "Retained pages parsed.", durable.PagesParsed},
 		{"joshbot_retained_origins_found", "Retained origins found by crawls.", durable.OriginsFound},
