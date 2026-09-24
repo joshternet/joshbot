@@ -563,7 +563,12 @@ func (c *MultiPageCrawler) fetchPage(
 			response.StatusCode >= http.StatusMultipleChoices {
 			attempt.Outcome = PageHTTPError
 			category, transient := retry.HTTPStatusCategory(response.StatusCode)
-			if !transient {
+			if response.StatusCode >= http.StatusBadRequest &&
+				response.StatusCode < http.StatusInternalServerError &&
+				response.StatusCode != http.StatusRequestTimeout &&
+				response.StatusCode != http.StatusTooManyRequests {
+				category = retry.CategoryHTTP4xx
+			} else if !transient {
 				category = retry.CategoryUnsupportedOrigin
 			}
 			return finish(crawledPage{

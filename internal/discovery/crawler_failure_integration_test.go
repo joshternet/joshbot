@@ -245,7 +245,7 @@ func TestCrawlerFailureIntegrationFetchFailures(t *testing.T) {
 			ctx:     context.Background(),
 			getter:  crawlerFailureIntegrationResponseGetter(http.StatusBadRequest, "text/html", "bad"),
 			outcome: PageHTTPError,
-			want:    retry.CategoryUnsupportedOrigin,
+			want:    retry.CategoryHTTP4xx,
 		},
 		{
 			name:    "oversized body",

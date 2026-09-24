@@ -236,10 +236,28 @@ func TestFetchPageSeparatesRetryableAndPermanentCategories(t *testing.T) {
 			want:    retry.CategoryHTTP429,
 		},
 		{
+			name:    "non-4xx permanent HTTP status",
+			getter:  responseGetter(http.StatusContinue, "text/html", "continue"),
+			context: context.Background(),
+			want:    retry.CategoryUnsupportedOrigin,
+		},
+		{
 			name:    "HTTP 400",
 			getter:  responseGetter(http.StatusBadRequest, "text/html", "bad"),
 			context: context.Background(),
-			want:    retry.CategoryUnsupportedOrigin,
+			want:    retry.CategoryHTTP4xx,
+		},
+		{
+			name:    "HTTP 403",
+			getter:  responseGetter(http.StatusForbidden, "text/html", "forbidden"),
+			context: context.Background(),
+			want:    retry.CategoryHTTP4xx,
+		},
+		{
+			name:    "HTTP 404",
+			getter:  responseGetter(http.StatusNotFound, "text/html", "missing"),
+			context: context.Background(),
+			want:    retry.CategoryHTTP4xx,
 		},
 		{
 			name:    "unsupported content",

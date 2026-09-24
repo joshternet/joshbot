@@ -71,6 +71,7 @@ func TestTransientCategories(t *testing.T) {
 		}
 	}
 	permanent := []Category{
+		CategoryHTTP4xx,
 		CategoryUnsafeAddress,
 		CategoryPolicyBlocked,
 		CategoryRobotsDenied,
