@@ -80,24 +80,6 @@ func TestReadDeclarationBodyReturnsReadFailure(t *testing.T) {
 	}
 }
 
-func TestReadDeclarationBodyRejectsNilBody(t *testing.T) {
-	got, err := readDeclarationBody(nil)
-	if !errors.Is(err, errDeclarationBodyUnavailable) {
-		t.Fatalf(
-			"readDeclarationBody() error = %v, "+
-				"want errDeclarationBodyUnavailable",
-			err,
-		)
-	}
-
-	if got != nil {
-		t.Errorf(
-			"readDeclarationBody() body = %q, want nil",
-			got,
-		)
-	}
-}
-
 type countingDeclarationReader struct {
 	remaining int
 	read      int

@@ -62,6 +62,18 @@ func (reader declarationFailureIntegrationErrorReader) Read(
 	return 0, reader.err
 }
 
+type declarationFailureIntegrationCancelReader struct {
+	cancel context.CancelFunc
+	err    error
+}
+
+func (reader declarationFailureIntegrationCancelReader) Read(
+	[]byte,
+) (int, error) {
+	reader.cancel()
+	return 0, reader.err
+}
+
 func TestDeclarationFailureIntegrationRejectsMalformedDeclarations(
 	t *testing.T,
 ) {
@@ -284,6 +296,42 @@ func TestDeclarationFailureIntegrationClassifiesGetterAndResponseFailures(
 				) (*http.Response, error) {
 					cancel()
 					return nil, errors.New("integration getter failure")
+				},
+			},
+		)
+
+		_, err := verifier.Verify(ctx, source)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf(
+				"Verify() error = %v, want context.Canceled",
+				err,
+			)
+		}
+	})
+
+	t.Run("parent cancellation wins body read failure", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+
+		readFailure := errors.New(
+			"integration declaration body read failure",
+		)
+
+		verifier := declaration.NewVerifier(
+			declarationFailureIntegrationGetter{
+				get: func(
+					context.Context,
+					*url.URL,
+				) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body: io.NopCloser(
+							declarationFailureIntegrationCancelReader{
+								cancel: cancel,
+								err:    readFailure,
+							},
+						),
+					}, nil
 				},
 			},
 		)
@@ -567,6 +615,12 @@ func TestDeclarationFailureIntegrationEnforcesRedirectAuthority(
 		{
 			name:     "malformed location",
 			location: "%zz",
+			want:     declaration.OutcomeUnavailable,
+			category: retry.CategoryMalformedOrigin,
+		},
+		{
+			name:     "unsupported redirect scheme",
+			location: "ftp://example.com/.well-known/josh",
 			want:     declaration.OutcomeUnavailable,
 			category: retry.CategoryMalformedOrigin,
 		},
