@@ -191,6 +191,10 @@ func (c *MultiPageCrawler) Crawl(
 		} else if result.BudgetExhausted {
 			outcome = CrawlRunBudgetExhausted
 			reason = "crawl_budget"
+		} else if result.PagesParsed == 0 &&
+			result.FailureCategory != retry.CategoryNone {
+			outcome = CrawlRunFailed
+			reason = "root_failure"
 		}
 		finishContext := context.WithoutCancel(ctx)
 		var finishErr error

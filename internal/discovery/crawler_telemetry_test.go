@@ -127,6 +127,56 @@ func TestMultiPageCrawlerCarriesTransientRootFailure(t *testing.T) {
 	}
 }
 
+func TestMultiPageCrawlerMarksRootFailureFailed(t *testing.T) {
+	source := mustDiscoveryOrigin(t, "https://source.example")
+	telemetry := &recordingSummaryTelemetry{
+		recordingTelemetry: recordingTelemetry{runID: 92},
+	}
+
+	crawler, err := NewMultiPageCrawlerWithTelemetry(
+		responseGetter(
+			http.StatusServiceUnavailable,
+			"text/html",
+			"unavailable",
+		),
+		&frontierCandidateSink{},
+		telemetry,
+		frontierCrawlConfig(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := crawler.Crawl(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.PagesParsed != 0 {
+		t.Fatalf("pages parsed = %d, want 0", result.PagesParsed)
+	}
+	if result.FailureCategory != retry.CategoryHTTP5xx {
+		t.Fatalf(
+			"failure category = %q, want %q",
+			result.FailureCategory,
+			retry.CategoryHTTP5xx,
+		)
+	}
+	if telemetry.outcome != CrawlRunFailed {
+		t.Errorf(
+			"outcome = %q, want %q",
+			telemetry.outcome,
+			CrawlRunFailed,
+		)
+	}
+	if telemetry.stopReason != "root_failure" {
+		t.Errorf(
+			"stop reason = %q, want root_failure",
+			telemetry.stopReason,
+		)
+	}
+}
+
 func TestMultiPageCrawlerUsesSummaryTelemetry(t *testing.T) {
 	source := mustDiscoveryOrigin(t, "https://source.example")
 	telemetry := &recordingSummaryTelemetry{
