@@ -7,7 +7,7 @@ registry data through the GitHub API. Please report vulnerabilities privately.
 
 | Version | Supported |
 | --- | --- |
-| 1.0.x | Yes |
+| 1.1.x | Yes |
 | Earlier versions | No |
 
 Security fixes are made against the latest supported release and the current
