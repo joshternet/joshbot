@@ -515,6 +515,7 @@ func parseQueueQuery(
 		"mode",
 		map[string]struct{}{
 			"probe":     {},
+			"reprobe":   {},
 			"recurring": {},
 		},
 	)
@@ -578,6 +579,7 @@ func parseQueueEventQuery(
 		"mode",
 		map[string]struct{}{
 			"probe":     {},
+			"reprobe":   {},
 			"recurring": {},
 		},
 	)

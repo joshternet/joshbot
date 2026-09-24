@@ -252,29 +252,56 @@ func TestValidProbePromotesToRecurring(t *testing.T) {
 	}
 }
 
-func TestEveryNonValidProbeEndsOrRetries(t *testing.T) {
-	outcomes := []declaration.Outcome{
-		declaration.OutcomeAbsent,
-		declaration.OutcomeInvalid,
-		declaration.OutcomeUnsupportedVersion,
-		declaration.OutcomeUnavailable,
-		declaration.OutcomeRobotsDenied,
-		declaration.OutcomeCrossOriginRedirect,
+func TestNonValidProbeRetentionPolicy(t *testing.T) {
+	tests := []struct {
+		outcome   declaration.Outcome
+		wantMode  string
+		wantQueue bool
+	}{
+		{
+			outcome:   declaration.OutcomeAbsent,
+			wantMode:  "reprobe",
+			wantQueue: true,
+		},
+		{
+			outcome:   declaration.OutcomeInvalid,
+			wantMode:  "reprobe",
+			wantQueue: true,
+		},
+		{
+			outcome:   declaration.OutcomeUnsupportedVersion,
+			wantMode:  "reprobe",
+			wantQueue: true,
+		},
+		{
+			outcome:   declaration.OutcomeUnavailable,
+			wantMode:  "probe",
+			wantQueue: true,
+		},
+		{
+			outcome: declaration.OutcomeRobotsDenied,
+		},
+		{
+			outcome:   declaration.OutcomeCrossOriginRedirect,
+			wantMode:  "reprobe",
+			wantQueue: true,
+		},
 	}
 
-	for _, outcome := range outcomes {
+	for _, test := range tests {
 		t.Run(
-			queueDiscoveryOutcomeName(outcome),
+			queueDiscoveryOutcomeName(test.outcome),
 			func(t *testing.T) {
 				fixture := newProbeCompletionFixture(t)
+				completedAt := fixture.lease.ClaimedAt.Add(
+					time.Minute,
+				)
 				fixture.queue.clock = fixedQueueClock{
-					now: fixture.lease.ClaimedAt.Add(
-						time.Minute,
-					),
+					now: completedAt,
 				}
 
 				result := declaration.Result{
-					Outcome: outcome,
+					Outcome: test.outcome,
 					Origin:  fixture.source,
 				}
 
@@ -308,18 +335,57 @@ func TestEveryNonValidProbeEndsOrRetries(t *testing.T) {
 				}
 
 				wantQueueCount := 0
-				if outcome == declaration.OutcomeUnavailable {
+				if test.wantQueue {
 					wantQueueCount = 1
 				}
 				if queueCount != wantQueueCount {
-					t.Errorf(
+					t.Fatalf(
 						"queue row count = %d, want %d",
 						queueCount,
 						wantQueueCount,
 					)
 				}
 
-				if outcome == declaration.OutcomeUnavailable {
+				if test.wantQueue {
+					assertQueueMode(
+						t,
+						fixture.ctx,
+						fixture.pool,
+						fixture.source.String(),
+						test.wantMode,
+					)
+				}
+
+				if shouldReprobeOutcome(test.outcome) {
+					state := readCompletionQueueState(
+						t,
+						fixture,
+					)
+					wantAvailableAt := completedAt.Add(
+						24 * time.Hour,
+					)
+
+					if !state.availableAt.Equal(
+						wantAvailableAt,
+					) {
+						t.Errorf(
+							"available_at = %v, want %v",
+							state.availableAt,
+							wantAvailableAt,
+						)
+					}
+
+					if state.consecutiveFailures != 0 ||
+						state.lastFailureCategory != nil ||
+						state.nextAttemptAt != nil {
+						t.Errorf(
+							"reprobe retry state = %#v",
+							state,
+						)
+					}
+				}
+
+				if test.outcome == declaration.OutcomeUnavailable {
 					state := readCompletionQueueState(
 						t,
 						fixture,
@@ -347,6 +413,164 @@ func TestEveryNonValidProbeEndsOrRetries(t *testing.T) {
 					)
 				}
 			},
+		)
+	}
+}
+
+func TestAbsentProbeCanBeClaimedAndBecomeValidAfterReprobeWindow(
+	t *testing.T,
+) {
+	fixture := newProbeCompletionFixture(t)
+	recheckAfter := 24 * time.Hour
+	completedAt := fixture.lease.ClaimedAt.Add(
+		time.Minute,
+	)
+	fixture.queue.clock = fixedQueueClock{
+		now: completedAt,
+	}
+
+	if err := fixture.queue.CompleteVerification(
+		fixture.ctx,
+		fixture.lease,
+		declaration.Result{
+			Outcome: declaration.OutcomeAbsent,
+			Origin:  fixture.source,
+		},
+		recheckAfter,
+	); err != nil {
+		t.Fatalf(
+			"CompleteVerification(absent) error = %v, want nil",
+			err,
+		)
+	}
+
+	state := readQueueDiscoveryLeaseState(
+		t,
+		fixture.ctx,
+		fixture.pool,
+		fixture.source.String(),
+	)
+	wantDueAt := completedAt.Add(recheckAfter)
+
+	if state.mode != "reprobe" {
+		t.Fatalf(
+			"queue mode = %q, want reprobe",
+			state.mode,
+		)
+	}
+
+	if !state.availableAt.Equal(wantDueAt) {
+		t.Fatalf(
+			"available_at = %v, want %v",
+			state.availableAt,
+			wantDueAt,
+		)
+	}
+
+	fixture.queue.clock = fixedQueueClock{
+		now: wantDueAt.Add(-time.Nanosecond),
+	}
+
+	earlyLease, found, err := fixture.queue.Claim(
+		fixture.ctx,
+		"worker-b",
+	)
+	if err != nil {
+		t.Fatalf(
+			"early Claim() error = %v, want nil",
+			err,
+		)
+	}
+	if found {
+		t.Fatalf(
+			"early Claim() = %#v, true; want no claim",
+			earlyLease,
+		)
+	}
+
+	fixture.queue.clock = fixedQueueClock{
+		now: wantDueAt,
+	}
+
+	reprobeLease, found, err := fixture.queue.Claim(
+		fixture.ctx,
+		"worker-b",
+	)
+	if err != nil {
+		t.Fatalf(
+			"due Claim() error = %v, want nil",
+			err,
+		)
+	}
+	if !found {
+		t.Fatal(
+			"due Claim() found = false, want true",
+		)
+	}
+
+	validAt := wantDueAt.Add(time.Minute)
+	fixture.queue.clock = fixedQueueClock{
+		now: validAt,
+	}
+
+	if err := fixture.queue.CompleteVerification(
+		fixture.ctx,
+		reprobeLease,
+		declaration.Result{
+			Outcome: declaration.OutcomeValid,
+			Origin:  fixture.source,
+			Declaration: declaration.Declaration{
+				Version:  1,
+				Identity: declaration.IdentityAffirmed,
+			},
+		},
+		recheckAfter,
+	); err != nil {
+		t.Fatalf(
+			"CompleteVerification(valid) error = %v, want nil",
+			err,
+		)
+	}
+
+	assertQueueMode(
+		t,
+		fixture.ctx,
+		fixture.pool,
+		fixture.source.String(),
+		"recurring",
+	)
+
+	if got := completionObservationCount(
+		t,
+		fixture,
+	); got != 2 {
+		t.Errorf(
+			"observation count = %d, want 2",
+			got,
+		)
+	}
+
+	originState, found, err := New(
+		fixture.pool,
+	).OriginState(
+		fixture.ctx,
+		fixture.source,
+	)
+	if err != nil {
+		t.Fatalf(
+			"OriginState() error = %v, want nil",
+			err,
+		)
+	}
+	if !found {
+		t.Fatal(
+			"OriginState() found = false, want true",
+		)
+	}
+	if originState.Effective.State != StateVerified {
+		t.Errorf(
+			"effective state = %v, want StateVerified",
+			originState.Effective.State,
 		)
 	}
 }

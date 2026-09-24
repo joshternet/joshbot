@@ -502,7 +502,7 @@ func TestCuratedSeedCrawlToPublicRegistryEndToEnd(
 
 	var (
 		validRecurringCount int
-		absentQueueCount    int
+		absentReprobeCount  int
 		remainingProbeCount int
 		observationCount    int
 	)
@@ -521,6 +521,7 @@ func TestCuratedSeedCrawlToPublicRegistryEndToEnd(
 					SELECT count(*)
 					FROM verification_queue
 					WHERE origin = $2
+						AND mode = 'reprobe'
 				),
 				(
 					SELECT count(*)
@@ -537,7 +538,7 @@ func TestCuratedSeedCrawlToPublicRegistryEndToEnd(
 		absentCandidate.String(),
 	).Scan(
 		&validRecurringCount,
-		&absentQueueCount,
+		&absentReprobeCount,
 		&remainingProbeCount,
 		&observationCount,
 	)
@@ -555,10 +556,10 @@ func TestCuratedSeedCrawlToPublicRegistryEndToEnd(
 		)
 	}
 
-	if absentQueueCount != 0 {
+	if absentReprobeCount != 1 {
 		t.Errorf(
-			"absent queue count = %d, want 0",
-			absentQueueCount,
+			"absent reprobe count = %d, want 1",
+			absentReprobeCount,
 		)
 	}
 

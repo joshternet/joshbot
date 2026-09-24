@@ -104,7 +104,8 @@ func (s *ControlStore) SetProcessorPaused(
 }
 
 // AddDomainAvoid inserts a domain policy, reconciles matching automatic
-// non-seed sources, removes their probes, and atomically appends the audit.
+// non-seed sources, removes their non-recurring verification work, and
+// atomically appends the audit.
 func (s *ControlStore) AddDomainAvoid(
 	ctx context.Context,
 	pattern string,

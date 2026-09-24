@@ -267,6 +267,38 @@ func TestPagedHandlersPreserveArrayBodiesAndExposeNextCursor(
 			},
 		},
 		{
+			name:       "queue reprobe",
+			path:       "/api/v1/queue?mode=reprobe",
+			wantCursor: "next-queue",
+			wantBody:   `"origin":"https://queued.example"`,
+			check: func(t *testing.T) {
+				t.Helper()
+
+				if reader.queueQuery.Mode != "reprobe" {
+					t.Errorf(
+						"queue mode = %q, want reprobe",
+						reader.queueQuery.Mode,
+					)
+				}
+			},
+		},
+		{
+			name:       "queue event reprobe",
+			path:       "/api/v1/queue/events?mode=reprobe",
+			wantCursor: "next-event",
+			wantBody:   `"event":"claimed"`,
+			check: func(t *testing.T) {
+				t.Helper()
+
+				if reader.queueEventQuery.Mode != "reprobe" {
+					t.Errorf(
+						"queue event mode = %q, want reprobe",
+						reader.queueEventQuery.Mode,
+					)
+				}
+			},
+		},
+		{
 			name: "queue events",
 			path: "/api/v1/queue/events?limit=10" +
 				"&origin=https%3A%2F%2Fevent.example" +

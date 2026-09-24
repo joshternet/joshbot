@@ -129,6 +129,11 @@ func (reader *PostgresReader) Status(
 				(
 					SELECT COUNT(*)
 					FROM verification_queue
+					WHERE mode = 'reprobe'
+				),
+				(
+					SELECT COUNT(*)
+					FROM verification_queue
 					WHERE mode = 'recurring'
 				),
 				(
@@ -187,6 +192,7 @@ func (reader *PostgresReader) Status(
 
 		&status.Queue.Total,
 		&status.Queue.Probe,
+		&status.Queue.Reprobe,
 		&status.Queue.Recurring,
 		&status.Queue.Leased,
 		&status.Queue.OldestAvailableAt,

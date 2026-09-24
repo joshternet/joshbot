@@ -378,24 +378,25 @@ func TestDiscoveredCandidateBecomesPublicOnlyAfterValidProbe(
 		)
 	}
 
-	var queueCount int
+	var absentReprobeCount int
 	err = pool.QueryRow(
 		ctx,
 		`
 			SELECT count(*)
 			FROM verification_queue
 			WHERE origin = $1
+				AND mode = 'reprobe'
 		`,
 		candidate.String(),
-	).Scan(&queueCount)
+	).Scan(&absentReprobeCount)
 	if err != nil {
-		t.Fatalf("count completed probe queue rows: %v", err)
+		t.Fatalf("count absent reprobe rows: %v", err)
 	}
 
-	if queueCount != 0 {
+	if absentReprobeCount != 1 {
 		t.Errorf(
-			"completed absent probe queue rows = %d, want 0",
-			queueCount,
+			"absent reprobe rows = %d, want 1",
+			absentReprobeCount,
 		)
 	}
 
@@ -406,7 +407,27 @@ func TestDiscoveredCandidateBecomesPublicOnlyAfterValidProbe(
 		t.Error("absent candidate changed public snapshot")
 	}
 
-	recordCandidate()
+	_, err = pool.Exec(
+		ctx,
+		`
+			UPDATE verification_queue
+			SET
+				available_at =
+					statement_timestamp() - interval '2 minutes',
+				last_claimed_at =
+					statement_timestamp() - interval '2 minutes'
+			WHERE origin = $1
+				AND mode = 'reprobe'
+		`,
+		candidate.String(),
+	)
+	if err != nil {
+		t.Fatalf(
+			"make reprobe due: %v",
+			err,
+		)
+	}
+
 	validLease := claimCandidate("candidate-probe-valid")
 	err = queue.CompleteVerification(
 		ctx,
@@ -594,45 +615,14 @@ func newPublicDataTestPool(
 		}
 	})
 
-	migrationFiles := []string{
-		"../store/migrations/0001_initial.sql",
-		"../store/migrations/0002_verification_queue.sql",
-		"../store/migrations/0003_discovery.sql",
-		"../store/migrations/0004_crawl_sources.sql",
-		"../store/migrations/0005_automatic_crawl_sources.sql",
-		"../store/migrations/0006_crawl_observability.sql",
-		"../store/migrations/0007_crawl_observability_permissions.sql",
-		"../store/migrations/0008_crawl_domain_avoid_rules.sql",
-		"../store/migrations/0009_automatic_admission.sql",
-		"../store/migrations/0010_retry_state.sql",
-		"../store/migrations/0011_operator_audit_events.sql",
-		"../store/migrations/0012_observability_reporting.sql",
-	}
-
-	for _, migrationFile := range migrationFiles {
-		migration, readErr := os.ReadFile(
-			migrationFile,
+	if err := store.Migrate(
+		context.Background(),
+		testPool,
+	); err != nil {
+		t.Fatalf(
+			"migrate isolated publicdata test schema: %v",
+			err,
 		)
-		if readErr != nil {
-			t.Fatalf(
-				"read migration %q: %v",
-				migrationFile,
-				readErr,
-			)
-		}
-
-		_, execErr := testPool.Exec(
-			context.Background(),
-			string(migration),
-			pgx.QueryExecModeSimpleProtocol,
-		)
-		if execErr != nil {
-			t.Fatalf(
-				"apply migration %q: %v",
-				migrationFile,
-				execErr,
-			)
-		}
 	}
 
 	return testPool

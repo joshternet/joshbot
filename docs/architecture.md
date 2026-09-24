@@ -329,10 +329,15 @@ approved paths so a new client cannot quietly bypass the crawler boundary.
 Manually scheduled work is recurring.
 
 A discovered candidate begins as a one-shot probe. A valid declaration
-promotes it to recurring work. A non-valid result records the observation and
-removes the completed one-shot queue state transactionally unless the result is
-a transient unavailable outcome, in which case the probe remains queued with
-durable retry state.
+promotes it to recurring work. An absent, invalid, unsupported-version, or
+cross-origin result converts a fresh probe into delayed reprobe work so the
+origin can be checked again at the configured recheck interval. Reprobe work
+does not consume pending-probe backpressure capacity. A later valid reprobe
+promotes the origin to recurring work.
+
+A transient unavailable outcome retains the current queue mode with durable
+retry state. A robots-denied fresh probe leaves the queue, while existing
+recurring or reprobe work remains scheduled.
 
 Transient work receives at most three immediate verification attempts per
 claim. Consecutive transient failures persist their category and next due time

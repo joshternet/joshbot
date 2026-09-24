@@ -23,8 +23,11 @@ schedules future recurring work in one PostgreSQL transaction.
 
 Manually scheduled work is recurring. A discovered candidate starts as a
 one-shot probe. A valid declaration promotes the origin to recurring work.
-Every non-valid probe records its observation and removes completed one-shot
-queue state transactionally.
+Absent, invalid, unsupported-version, and cross-origin results convert fresh
+probes into delayed reprobes at the configured recheck interval. Reprobes do
+not consume pending-probe backpressure capacity and become recurring if a later
+verification is valid. Transient unavailable work retains its queue mode with
+retry state, while robots-denied fresh probes leave the queue.
 
 JoshBot does not promise exactly-once network requests.
 

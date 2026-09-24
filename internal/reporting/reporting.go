@@ -57,6 +57,7 @@ type BackpressureStatus struct {
 type QueueSummary struct {
 	Total             int64      `json:"total"`
 	Probe             int64      `json:"probe"`
+	Reprobe           int64      `json:"reprobe"`
 	Recurring         int64      `json:"recurring"`
 	Leased            int64      `json:"leased"`
 	OldestAvailableAt *time.Time `json:"oldest_available_at,omitempty"`
@@ -824,6 +825,11 @@ func (h *handler) metrics(
 		writer,
 		"joshbot_verification_queue{mode=\"probe\"} %d\n",
 		status.Queue.Probe,
+	)
+	_, _ = fmt.Fprintf(
+		writer,
+		"joshbot_verification_queue{mode=\"reprobe\"} %d\n",
+		status.Queue.Reprobe,
 	)
 	_, _ = fmt.Fprintf(
 		writer,
