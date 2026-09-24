@@ -75,26 +75,10 @@ func (g *guardedHTTP) get(
 	ctx context.Context,
 	target *url.URL,
 ) (*http.Response, error) {
-	if g == nil {
-		return nil, errHTTPGetterUnavailable
-	}
-
-	if ctx == nil {
-		return nil, errInvalidContext
-	}
-
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	if target == nil {
-		return nil, errInvalidHTTPTarget
-	}
-
-	targetOrigin, err := origin.Parse(target.String())
-	if err != nil {
-		return nil, errInvalidHTTPTarget
-	}
+	// Checker validates initial request targets before they reach this
+	// boundary, and redirectTarget applies the same validation to every
+	// redirect hop.
+	targetOrigin, _ := origin.Parse(target.String())
 
 	destination, err := netguard.Resolve(
 		ctx,

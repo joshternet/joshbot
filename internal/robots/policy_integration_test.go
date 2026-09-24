@@ -332,3 +332,192 @@ Crawl-delay: 2
 		})
 	}
 }
+
+func TestRobotsPolicyIntegrationUsesWildcardAndIgnoresInvalidDirectives(
+	t *testing.T,
+) {
+	policyData := []byte(
+		"User-agent: Bad Bot\n" +
+			"Disallow: /ignored-invalid-agent\n" +
+			"\n" +
+			"User-agent: *\n" +
+			"Disallow:\n" +
+			"Disallow: private\n" +
+			"Disallow: /bad%ZZ\n" +
+			"Disallow: /wildcard\n" +
+			"Bad\x00Field: ignored\n",
+	)
+
+	policy := robots.Parse(policyData)
+
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{
+			name:   "wildcard group applies",
+			rawURL: "https://example.com/wildcard/page",
+			want:   false,
+		},
+		{
+			name:   "invalid user agent group is ignored",
+			rawURL: "https://example.com/ignored-invalid-agent",
+			want:   true,
+		},
+		{
+			name:   "empty disallow is ignored",
+			rawURL: "https://example.com/",
+			want:   true,
+		},
+		{
+			name:   "rule without leading slash or wildcard is ignored",
+			rawURL: "https://example.com/private",
+			want:   true,
+		},
+		{
+			name:   "malformed percent rule is ignored",
+			rawURL: "https://example.com/bad",
+			want:   true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			target, err := url.Parse(test.rawURL)
+			if err != nil {
+				t.Fatalf(
+					"url.Parse(%q) error = %v",
+					test.rawURL,
+					err,
+				)
+			}
+
+			if got := policy.Allowed(target); got != test.want {
+				t.Errorf(
+					"Allowed(%q) = %v, want %v",
+					test.rawURL,
+					got,
+					test.want,
+				)
+			}
+		})
+	}
+}
+
+func TestRobotsPolicyIntegrationNormalizesRootUnicodeAndTrailingWildcard(
+	t *testing.T,
+) {
+	policy := robots.Parse([]byte(`
+User-agent: Joshternet-Joshbot
+Disallow: /$
+Disallow: /raw-unicode/ツ$
+Disallow: /trail*
+`))
+
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{
+			name:   "empty URL path normalizes to root",
+			rawURL: "https://example.com",
+			want:   false,
+		},
+		{
+			name:   "raw unicode rule normalizes to percent encoding",
+			rawURL: "https://example.com/raw-unicode/ツ",
+			want:   false,
+		},
+		{
+			name:   "trailing wildcard matches empty suffix",
+			rawURL: "https://example.com/trail",
+			want:   false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			target, err := url.Parse(test.rawURL)
+			if err != nil {
+				t.Fatalf(
+					"url.Parse(%q) error = %v",
+					test.rawURL,
+					err,
+				)
+			}
+
+			if got := policy.Allowed(target); got != test.want {
+				t.Errorf(
+					"Allowed(%q) = %v, want %v",
+					test.rawURL,
+					got,
+					test.want,
+				)
+			}
+		})
+	}
+}
+
+func TestRobotsPolicyIntegrationRejectsIntegerCrawlDelayOverflow(
+	t *testing.T,
+) {
+	tests := []string{
+		"18446744073709551616",
+		"9223372037",
+	}
+
+	for _, value := range tests {
+		t.Run(value, func(t *testing.T) {
+			policy := robots.Parse([]byte(
+				"User-agent: Joshternet-Joshbot\n" +
+					"Crawl-delay: " + value + "\n",
+			))
+
+			delay, err := policy.CrawlDelay()
+			if !errors.Is(
+				err,
+				robots.ErrInvalidCrawlDelay,
+			) {
+				t.Errorf(
+					"CrawlDelay(%q) error = %v, want %v",
+					value,
+					err,
+					robots.ErrInvalidCrawlDelay,
+				)
+			}
+
+			if delay != 0 {
+				t.Errorf(
+					"CrawlDelay(%q) = %v, want 0",
+					value,
+					delay,
+				)
+			}
+		})
+	}
+}
+
+func TestRobotsPolicyIntegrationRejectsInvalidUTF8Target(
+	t *testing.T,
+) {
+	policy := robots.Parse([]byte(
+		"User-agent: Joshternet-Joshbot\n" +
+			"Allow: /\n",
+	))
+
+	target := &url.URL{
+		Scheme: "https",
+		Host:   "example.com",
+		Path:   "/search",
+		RawQuery: "value=" +
+			string([]byte{0xff}),
+	}
+
+	if policy.Allowed(target) {
+		t.Fatal(
+			"Allowed(invalid UTF-8 target) = true, want false",
+		)
+	}
+}

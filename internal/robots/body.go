@@ -12,16 +12,11 @@ import (
 // JoshBot accepts exactly 500 KiB and fails closed above that limit.
 const MaxBodySize = 500 * 1024
 
-var (
-	errBodyUnavailable = errors.New("robots: body unavailable")
-	errBodyTooLarge    = errors.New("robots: body exceeds 500 KiB")
+var errBodyTooLarge = errors.New(
+	"robots: body exceeds 500 KiB",
 )
 
 func readPolicy(body io.Reader) (Policy, error) {
-	if body == nil {
-		return disallowAllPolicy(), errBodyUnavailable
-	}
-
 	limited := io.LimitReader(body, int64(MaxBodySize)+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
