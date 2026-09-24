@@ -27,9 +27,6 @@ var (
 	errTokenUnavailable = errors.New(
 		"reporting: authentication token is unavailable",
 	)
-	errClockUnavailable = errors.New(
-		"reporting: clock is unavailable",
-	)
 	errInvalidLimit = errors.New(
 		"reporting: invalid limit",
 	)
@@ -276,10 +273,6 @@ func newHandler(
 
 	if strings.TrimSpace(token) == "" {
 		return nil, errTokenUnavailable
-	}
-
-	if now == nil {
-		return nil, errClockUnavailable
 	}
 
 	runtime := &handler{

@@ -2,6 +2,7 @@ package reporting
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -1116,5 +1117,269 @@ func reportingPaginationIntegrationGET(
 		StatusCode: response.StatusCode,
 		Header:     response.Header.Clone(),
 		body:       string(body),
+	}
+}
+
+func TestReportingPaginationIntegrationRejectsEndpointSpecificInvalidQueries(
+	t *testing.T,
+) {
+	reader := &reportingPaginationIntegrationReader{}
+
+	server := newReportingPaginationIntegrationServer(
+		t,
+		reader,
+	)
+	defer server.Close()
+
+	sourceEmptyOriginCursor := encodeCursor(
+		cursorPayload{
+			Version: cursorVersion,
+			Kind:    "sources",
+		},
+	)
+
+	sourceMalformedOriginCursor := encodeCursor(
+		cursorPayload{
+			Version: cursorVersion,
+			Kind:    "sources",
+			Origin:  "not-an-origin",
+		},
+	)
+
+	crawlInvalidTimeCursor := encodeCursor(
+		cursorPayload{
+			Version: cursorVersion,
+			Kind:    "crawls",
+			At:      "not-a-time",
+			ID:      1,
+		},
+	)
+
+	queueUnexpectedIDCursor := encodeCursor(
+		cursorPayload{
+			Version: cursorVersion,
+			Kind:    "queue",
+			Origin:  "https://example.com",
+			At: reportingPaginationIntegrationTime.Format(
+				time.RFC3339Nano,
+			),
+			ID: 1,
+		},
+	)
+
+	queueInvalidTimeCursor := encodeCursor(
+		cursorPayload{
+			Version: cursorVersion,
+			Kind:    "queue",
+			Origin:  "https://example.com",
+			At:      "not-a-time",
+		},
+	)
+
+	eventUnexpectedOriginCursor := encodeCursor(
+		cursorPayload{
+			Version: cursorVersion,
+			Kind:    "queue_events",
+			Origin:  "https://example.com",
+			At: reportingPaginationIntegrationTime.Format(
+				time.RFC3339Nano,
+			),
+			ID: 1,
+		},
+	)
+
+	eventInvalidTimeCursor := encodeCursor(
+		cursorPayload{
+			Version: cursorVersion,
+			Kind:    "queue_events",
+			At:      "not-a-time",
+			ID:      1,
+		},
+	)
+
+	auditInvalidTimeCursor := encodeCursor(
+		cursorPayload{
+			Version: cursorVersion,
+			Kind:    "audit",
+			At:      "not-a-time",
+			ID:      1,
+		},
+	)
+
+	trailingJSONCursor := base64.RawURLEncoding.EncodeToString(
+		[]byte(
+			`{"v":1,"kind":"audit","at":"2026-09-19T12:30:00Z","id":1} {}`,
+		),
+	)
+
+	tests := []struct {
+		name string
+		path string
+		code string
+	}{
+		{
+			name: "invalid automatic source filter",
+			path: "/api/v1/sources?automatic=maybe",
+			code: "invalid_filter",
+		},
+		{
+			name: "invalid verified source filter",
+			path: "/api/v1/sources?verified=maybe",
+			code: "invalid_filter",
+		},
+		{
+			name: "invalid blocked source filter",
+			path: "/api/v1/sources?blocked=maybe",
+			code: "invalid_filter",
+		},
+		{
+			name: "invalid crawl eligible source filter",
+			path: "/api/v1/sources?crawl_eligible=maybe",
+			code: "invalid_filter",
+		},
+		{
+			name: "source cursor empty origin",
+			path: "/api/v1/sources?cursor=" +
+				url.QueryEscape(
+					sourceEmptyOriginCursor,
+				),
+			code: "invalid_cursor",
+		},
+		{
+			name: "source cursor malformed origin",
+			path: "/api/v1/sources?cursor=" +
+				url.QueryEscape(
+					sourceMalformedOriginCursor,
+				),
+			code: "invalid_cursor",
+		},
+		{
+			name: "invalid crawl limit",
+			path: "/api/v1/crawls?limit=0",
+			code: "invalid_limit",
+		},
+		{
+			name: "invalid crawl origin",
+			path: "/api/v1/crawls" +
+				"?origin=ftp%3A%2F%2Fexample.com",
+			code: "invalid_origin",
+		},
+		{
+			name: "crawl cursor invalid time",
+			path: "/api/v1/crawls?cursor=" +
+				url.QueryEscape(
+					crawlInvalidTimeCursor,
+				),
+			code: "invalid_cursor",
+		},
+		{
+			name: "invalid queue limit",
+			path: "/api/v1/queue?limit=0",
+			code: "invalid_limit",
+		},
+		{
+			name: "invalid queue origin",
+			path: "/api/v1/queue" +
+				"?origin=ftp%3A%2F%2Fexample.com",
+			code: "invalid_origin",
+		},
+		{
+			name: "queue cursor unexpected ID",
+			path: "/api/v1/queue?cursor=" +
+				url.QueryEscape(
+					queueUnexpectedIDCursor,
+				),
+			code: "invalid_cursor",
+		},
+		{
+			name: "queue cursor invalid time",
+			path: "/api/v1/queue?cursor=" +
+				url.QueryEscape(
+					queueInvalidTimeCursor,
+				),
+			code: "invalid_cursor",
+		},
+		{
+			name: "invalid queue event limit",
+			path: "/api/v1/queue/events?limit=0",
+			code: "invalid_limit",
+		},
+		{
+			name: "invalid queue event origin",
+			path: "/api/v1/queue/events" +
+				"?origin=ftp%3A%2F%2Fexample.com",
+			code: "invalid_origin",
+		},
+		{
+			name: "queue event cursor unexpected origin",
+			path: "/api/v1/queue/events?cursor=" +
+				url.QueryEscape(
+					eventUnexpectedOriginCursor,
+				),
+			code: "invalid_cursor",
+		},
+		{
+			name: "queue event cursor invalid time",
+			path: "/api/v1/queue/events?cursor=" +
+				url.QueryEscape(
+					eventInvalidTimeCursor,
+				),
+			code: "invalid_cursor",
+		},
+		{
+			name: "invalid audit limit",
+			path: "/api/v1/audit?limit=0",
+			code: "invalid_limit",
+		},
+		{
+			name: "audit cursor invalid time",
+			path: "/api/v1/audit?cursor=" +
+				url.QueryEscape(
+					auditInvalidTimeCursor,
+				),
+			code: "invalid_cursor",
+		},
+		{
+			name: "cursor with trailing JSON",
+			path: "/api/v1/audit?cursor=" +
+				url.QueryEscape(
+					trailingJSONCursor,
+				),
+			code: "invalid_cursor",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				response := reportingPaginationIntegrationGET(
+					t,
+					server,
+					test.path,
+				)
+
+				if response.StatusCode !=
+					http.StatusBadRequest {
+					t.Fatalf(
+						"status = %d, want %d; body = %q",
+						response.StatusCode,
+						http.StatusBadRequest,
+						response.body,
+					)
+				}
+
+				if !strings.Contains(
+					response.body,
+					test.code,
+				) {
+					t.Errorf(
+						"body = %q, want %q",
+						response.body,
+						test.code,
+					)
+				}
+			},
+		)
 	}
 }

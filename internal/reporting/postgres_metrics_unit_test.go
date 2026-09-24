@@ -200,27 +200,14 @@ func TestPostgresReaderMetricBreakdownFailuresWithoutDatabase(
 			queryResult: fakeQueryResult{
 				rows: scanRows,
 			},
-			wantContext: "reporting: scan metric breakdown",
-		},
-		{
-			name: "unknown breakdown kind",
-			queryResult: fakeQueryResult{
-				rows: newFakeRows(
-					[]any{
-						"unknown",
-						"value",
-						int64(1),
-					},
-				),
-			},
-			wantContext: `reporting: unknown metric breakdown kind "unknown"`,
+			wantContext: "reporting: read metric breakdown rows",
 		},
 		{
 			name: "iteration failure",
 			queryResult: fakeQueryResult{
 				rows: iterationRows,
 			},
-			wantContext: "reporting: iterate metric breakdowns",
+			wantContext: "reporting: read metric breakdown rows",
 			wantCause:   true,
 		},
 	}

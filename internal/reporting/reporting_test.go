@@ -148,18 +148,6 @@ func TestNewHandlerValidatesDependencies(
 		)
 	}
 
-	if _, err := newHandler(
-		reader,
-		testToken,
-		nil,
-	); !errors.Is(err, errClockUnavailable) {
-		t.Errorf(
-			"newHandler(nil clock) error = %v, want %v",
-			err,
-			errClockUnavailable,
-		)
-	}
-
 	handler, err := NewHandler(
 		reader,
 		testToken,

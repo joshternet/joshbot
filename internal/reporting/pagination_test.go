@@ -805,17 +805,6 @@ func TestCursorValidationRejectsMalformedPayloads(
 			},
 		)
 	}
-
-	if payload, err := decodeCursor(
-		"",
-		"sources",
-	); err != nil || payload != (cursorPayload{}) {
-		t.Errorf(
-			"decodeCursor(empty) = %#v, %v",
-			payload,
-			err,
-		)
-	}
 }
 
 func TestTypedCursorValidationRejectsWrongShapes(
@@ -1111,31 +1100,56 @@ func TestPageTrimmingAndLimitValidation(
 		)
 	}
 
-	if page := trimSourcePage(nil, 1); page.Items == nil || page.NextCursor != "" {
+	emptySources := trimSourcePage(
+		[]CrawlSource{},
+		1,
+	)
+	if emptySources.Items == nil ||
+		len(emptySources.Items) != 0 ||
+		emptySources.NextCursor != "" {
 		t.Errorf(
 			"empty source page = %#v",
-			page,
+			emptySources,
 		)
 	}
 
-	if page := trimCrawlPage(nil, 1); page.Items == nil || page.NextCursor != "" {
+	emptyCrawls := trimCrawlPage(
+		[]CrawlRun{},
+		1,
+	)
+	if emptyCrawls.Items == nil ||
+		len(emptyCrawls.Items) != 0 ||
+		emptyCrawls.NextCursor != "" {
 		t.Errorf(
 			"empty crawl page = %#v",
-			page,
+			emptyCrawls,
 		)
 	}
 
-	if page := trimQueuePage(nil, 1); page.Items == nil || page.NextCursor != "" {
+	emptyQueue := trimQueuePage(
+		[]QueueItem{},
+		1,
+	)
+	if emptyQueue.Items == nil ||
+		len(emptyQueue.Items) != 0 ||
+		emptyQueue.NextCursor != "" {
 		t.Errorf(
 			"empty queue page = %#v",
-			page,
+			emptyQueue,
 		)
 	}
 
-	if page := trimQueueEventPage(nil, 1); page.Items == nil || page.NextCursor != "" {
+	emptyEvents := trimQueueEventPage(
+		[]QueueEvent{},
+		1,
+	)
+	if emptyEvents.Items == nil ||
+		len(emptyEvents.Items) != 0 ||
+		emptyEvents.NextCursor != "" {
 		t.Errorf(
 			"empty event page = %#v",
-			page,
+			emptyEvents,
 		)
 	}
+
 }

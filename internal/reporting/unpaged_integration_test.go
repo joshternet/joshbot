@@ -695,3 +695,301 @@ func unpagedReportingIntegrationGET(
 	return response.StatusCode,
 		string(body)
 }
+
+type unpagedReportingMetricsIntegrationReader struct {
+	*unpagedReportingIntegrationReader
+
+	status     reporting.Status
+	statusErr  error
+	metrics    reporting.OperationalMetrics
+	metricsErr error
+}
+
+func (
+	reader *unpagedReportingMetricsIntegrationReader,
+) Status(
+	context.Context,
+) (reporting.Status, error) {
+	if reader.statusErr != nil {
+		return reporting.Status{}, reader.statusErr
+	}
+
+	return reader.status, nil
+}
+
+func (
+	reader *unpagedReportingMetricsIntegrationReader,
+) Metrics(
+	context.Context,
+) (reporting.OperationalMetrics, error) {
+	if reader.metricsErr != nil {
+		return reporting.OperationalMetrics{},
+			reader.metricsErr
+	}
+
+	return reader.metrics, nil
+}
+
+func TestUnpagedReportingIntegrationRejectsHandlerConfiguration(
+	t *testing.T,
+) {
+	if _, err := reporting.NewHandler(
+		nil,
+		unpagedReportingIntegrationToken,
+	); err == nil {
+		t.Fatal(
+			"NewHandler(nil reader) error = nil, want non-nil",
+		)
+	}
+
+	if _, err := reporting.NewHandler(
+		&unpagedReportingIntegrationReader{},
+		" \t ",
+	); err == nil {
+		t.Fatal(
+			"NewHandler(blank token) error = nil, want non-nil",
+		)
+	}
+}
+
+func TestUnpagedReportingIntegrationRejectsCollectionLimits(
+	t *testing.T,
+) {
+	reader := &unpagedReportingIntegrationReader{}
+
+	server := newUnpagedReportingIntegrationServer(
+		t,
+		reader,
+	)
+	defer server.Close()
+
+	paths := []string{
+		"/api/v1/sources?limit=0",
+		"/api/v1/crawls?limit=0",
+		"/api/v1/queue?limit=0",
+		"/api/v1/queue/events?limit=0",
+		"/api/v1/audit?limit=0",
+	}
+
+	for _, path := range paths {
+		t.Run(
+			path,
+			func(t *testing.T) {
+				status, body :=
+					unpagedReportingIntegrationGET(
+						t,
+						server,
+						path,
+					)
+
+				if status != http.StatusBadRequest {
+					t.Fatalf(
+						"status = %d, want %d; body = %q",
+						status,
+						http.StatusBadRequest,
+						body,
+					)
+				}
+
+				if !strings.Contains(
+					body,
+					"invalid_limit",
+				) {
+					t.Errorf(
+						"body = %q, want invalid_limit",
+						body,
+					)
+				}
+			},
+		)
+	}
+}
+
+func TestUnpagedReportingIntegrationMetricsSanitizesFailures(
+	t *testing.T,
+) {
+	t.Run(
+		"status",
+		func(t *testing.T) {
+			reader := &unpagedReportingIntegrationReader{
+				failure: "status",
+			}
+
+			server := newUnpagedReportingIntegrationServer(
+				t,
+				reader,
+			)
+			defer server.Close()
+
+			status, body :=
+				unpagedReportingIntegrationGET(
+					t,
+					server,
+					"/metrics",
+				)
+
+			if status !=
+				http.StatusInternalServerError {
+				t.Fatalf(
+					"status = %d, want %d; body = %q",
+					status,
+					http.StatusInternalServerError,
+					body,
+				)
+			}
+
+			if body !=
+				"{\"error\":\"internal_error\"}\n" {
+				t.Errorf(
+					"body = %q",
+					body,
+				)
+			}
+
+			if strings.Contains(
+				body,
+				"private",
+			) {
+				t.Errorf(
+					"response exposed status failure: %q",
+					body,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"durable metrics",
+		func(t *testing.T) {
+			reader :=
+				&unpagedReportingMetricsIntegrationReader{
+					unpagedReportingIntegrationReader: &unpagedReportingIntegrationReader{},
+					metricsErr: errors.New(
+						"private durable metrics failure",
+					),
+				}
+
+			server := newUnpagedReportingIntegrationServer(
+				t,
+				reader,
+			)
+			defer server.Close()
+
+			status, body :=
+				unpagedReportingIntegrationGET(
+					t,
+					server,
+					"/metrics",
+				)
+
+			if status !=
+				http.StatusInternalServerError {
+				t.Fatalf(
+					"status = %d, want %d; body = %q",
+					status,
+					http.StatusInternalServerError,
+					body,
+				)
+			}
+
+			if body !=
+				"{\"error\":\"internal_error\"}\n" {
+				t.Errorf(
+					"body = %q",
+					body,
+				)
+			}
+
+			if strings.Contains(
+				body,
+				"private",
+			) {
+				t.Errorf(
+					"response exposed metrics failure: %q",
+					body,
+				)
+			}
+		},
+	)
+}
+
+func TestUnpagedReportingIntegrationMetricsEmitsDurableBreakdowns(
+	t *testing.T,
+) {
+	reader := &unpagedReportingMetricsIntegrationReader{
+		unpagedReportingIntegrationReader: &unpagedReportingIntegrationReader{},
+		status: reporting.Status{
+			Services: []reporting.ServiceStatus{
+				{
+					Service: "future-worker",
+					State:   "running",
+					UpdatedAt: time.Now().
+						Add(24 * time.Hour).
+						UTC(),
+				},
+			},
+		},
+		metrics: reporting.OperationalMetrics{
+			PageFailureCategories: []reporting.MetricBreakdown{
+				{
+					Label: "transport",
+					Count: 2,
+				},
+			},
+			HTTPStatuses: []reporting.MetricBreakdown{
+				{
+					Label: "503",
+					Count: 3,
+				},
+			},
+			VerificationQueueFailureCategories: []reporting.MetricBreakdown{
+				{
+					Label: "robots_temporary",
+					Count: 4,
+				},
+			},
+		},
+	}
+
+	server := newUnpagedReportingIntegrationServer(
+		t,
+		reader,
+	)
+	defer server.Close()
+
+	status, body := unpagedReportingIntegrationGET(
+		t,
+		server,
+		"/metrics",
+	)
+
+	if status != http.StatusOK {
+		t.Fatalf(
+			"status = %d, want %d; body = %q",
+			status,
+			http.StatusOK,
+			body,
+		)
+	}
+
+	fragments := []string{
+		`joshbot_retained_page_attempt_failures{failure_category="transport"} 2`,
+		`joshbot_retained_page_http_statuses{status="503"} 3`,
+		`joshbot_verification_queue_failures{failure_category="robots_temporary"} 4`,
+		`joshbot_service_heartbeat_age_seconds{service="future-worker",state="running"} 0`,
+		"# EOF",
+	}
+
+	for _, fragment := range fragments {
+		if !strings.Contains(
+			body,
+			fragment,
+		) {
+			t.Errorf(
+				"metrics body missing %q:\n%s",
+				fragment,
+				body,
+			)
+		}
+	}
+}

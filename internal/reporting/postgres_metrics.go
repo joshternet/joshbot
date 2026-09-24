@@ -3,6 +3,14 @@ package reporting
 import (
 	"context"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
+)
+
+const (
+	metricKindPageFailureCategory              = "page_failure_category"
+	metricKindHTTPStatus                       = "http_status"
+	metricKindVerificationQueueFailureCategory = "verification_queue_failure_category"
 )
 
 // MetricBreakdown is one labeled count within an operational metric family.
@@ -31,6 +39,12 @@ type OperationalMetrics struct {
 
 type metricsReader interface {
 	Metrics(context.Context) (OperationalMetrics, error)
+}
+
+type metricBreakdownRow struct {
+	Kind  string
+	Label string
+	Count int64
 }
 
 // Metrics returns aggregate gauges over the retained durable telemetry window.
@@ -71,99 +85,98 @@ func (reader *PostgresReader) Metrics(
 		)
 	}
 
-	rows, err := reader.pool.Query(ctx, `
-		SELECT metric, label, value
-		FROM (
-			SELECT
-				'page_failure_category'::text AS metric,
-				failure_category AS label,
-				count(*)::bigint AS value
-			FROM crawl_page_attempts
-			WHERE failure_category <> 'none'
-			GROUP BY failure_category
+	rows, err := reader.pool.Query(
+		ctx,
+		`
+			SELECT metric, label, value
+			FROM (
+				SELECT
+					$1::text AS metric,
+					failure_category AS label,
+					count(*)::bigint AS value
+				FROM crawl_page_attempts
+				WHERE failure_category <> 'none'
+				GROUP BY failure_category
 
-			UNION ALL
+				UNION ALL
 
-			SELECT
-				'http_status'::text,
-				status_code::text,
-				count(*)::bigint
-			FROM crawl_page_attempts
-			WHERE status_code IS NOT NULL
-			GROUP BY status_code
+				SELECT
+					$2::text,
+					status_code::text,
+					count(*)::bigint
+				FROM crawl_page_attempts
+				WHERE status_code IS NOT NULL
+				GROUP BY status_code
 
-			UNION ALL
+				UNION ALL
 
-			SELECT
-				'verification_queue_failure_category'::text,
-				last_failure_category,
-				count(*)::bigint
-			FROM verification_queue
-			WHERE last_failure_category IS NOT NULL
-			GROUP BY last_failure_category
-		) AS breakdowns
-		ORDER BY metric, label
-	`)
+				SELECT
+					$3::text,
+					last_failure_category,
+					count(*)::bigint
+				FROM verification_queue
+				WHERE last_failure_category IS NOT NULL
+				GROUP BY last_failure_category
+			) AS breakdowns
+			ORDER BY metric, label
+		`,
+		metricKindPageFailureCategory,
+		metricKindHTTPStatus,
+		metricKindVerificationQueueFailureCategory,
+	)
 	if err != nil {
 		return OperationalMetrics{}, fmt.Errorf(
 			"reporting: read metric breakdowns: %w",
 			err,
 		)
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var (
-			kind  string
-			label string
-			count int64
-		)
+	breakdowns, err := pgx.CollectRows(
+		rows,
+		func(
+			row pgx.CollectableRow,
+		) (metricBreakdownRow, error) {
+			var breakdown metricBreakdownRow
 
-		if err := rows.Scan(
-			&kind,
-			&label,
-			&count,
-		); err != nil {
-			return OperationalMetrics{}, fmt.Errorf(
-				"reporting: scan metric breakdown: %w",
-				err,
+			err := row.Scan(
+				&breakdown.Kind,
+				&breakdown.Label,
+				&breakdown.Count,
 			)
-		}
 
+			return breakdown, err
+		},
+	)
+	if err != nil {
+		return OperationalMetrics{}, fmt.Errorf(
+			"reporting: read metric breakdown rows: %w",
+			err,
+		)
+	}
+
+	for _, row := range breakdowns {
 		breakdown := MetricBreakdown{
-			Label: label,
-			Count: count,
+			Label: row.Label,
+			Count: row.Count,
 		}
 
-		switch kind {
-		case "page_failure_category":
+		switch row.Kind {
+		case metricKindPageFailureCategory:
 			metrics.PageFailureCategories = append(
 				metrics.PageFailureCategories,
 				breakdown,
 			)
-		case "http_status":
+		case metricKindHTTPStatus:
 			metrics.HTTPStatuses = append(
 				metrics.HTTPStatuses,
 				breakdown,
 			)
-		case "verification_queue_failure_category":
+		case metricKindVerificationQueueFailureCategory:
 			metrics.VerificationQueueFailureCategories = append(
 				metrics.VerificationQueueFailureCategories,
 				breakdown,
 			)
-		default:
-			return OperationalMetrics{}, fmt.Errorf(
-				"reporting: unknown metric breakdown kind %q",
-				kind,
-			)
 		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return OperationalMetrics{}, fmt.Errorf(
-			"reporting: iterate metric breakdowns: %w",
-			err,
-		)
 	}
 
 	return metrics, nil

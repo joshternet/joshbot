@@ -989,3 +989,118 @@ func TestPostgresReaderPaginationWrapsCollectionFailures(
 		)
 	}
 }
+
+func TestPostgresReaderPaginationReturnsEmptyPages(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newReportingTestPool(t)
+
+	reader, err := NewPostgresReader(
+		pool,
+		PostgresConfig{
+			MaxPendingProbes: 1,
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"NewPostgresReader() error = %v",
+			err,
+		)
+	}
+
+	sources, err := reader.SourcesPage(
+		ctx,
+		sourceQuery{Limit: 1},
+	)
+	if err != nil {
+		t.Fatalf(
+			"SourcesPage() error = %v",
+			err,
+		)
+	}
+	if sources.Items == nil ||
+		len(sources.Items) != 0 ||
+		sources.NextCursor != "" {
+		t.Errorf(
+			"SourcesPage() = %#v, want empty page",
+			sources,
+		)
+	}
+
+	crawls, err := reader.CrawlsPage(
+		ctx,
+		crawlQuery{Limit: 1},
+	)
+	if err != nil {
+		t.Fatalf(
+			"CrawlsPage() error = %v",
+			err,
+		)
+	}
+	if crawls.Items == nil ||
+		len(crawls.Items) != 0 ||
+		crawls.NextCursor != "" {
+		t.Errorf(
+			"CrawlsPage() = %#v, want empty page",
+			crawls,
+		)
+	}
+
+	queue, err := reader.QueuePage(
+		ctx,
+		queueQuery{Limit: 1},
+	)
+	if err != nil {
+		t.Fatalf(
+			"QueuePage() error = %v",
+			err,
+		)
+	}
+	if queue.Items == nil ||
+		len(queue.Items) != 0 ||
+		queue.NextCursor != "" {
+		t.Errorf(
+			"QueuePage() = %#v, want empty page",
+			queue,
+		)
+	}
+
+	events, err := reader.QueueEventsPage(
+		ctx,
+		queueEventQuery{Limit: 1},
+	)
+	if err != nil {
+		t.Fatalf(
+			"QueueEventsPage() error = %v",
+			err,
+		)
+	}
+	if events.Items == nil ||
+		len(events.Items) != 0 ||
+		events.NextCursor != "" {
+		t.Errorf(
+			"QueueEventsPage() = %#v, want empty page",
+			events,
+		)
+	}
+
+	audits, err := reader.AuditsPage(
+		ctx,
+		auditQuery{Limit: 1},
+	)
+	if err != nil {
+		t.Fatalf(
+			"AuditsPage() error = %v",
+			err,
+		)
+	}
+	if audits.Items == nil ||
+		len(audits.Items) != 0 ||
+		audits.NextCursor != "" {
+		t.Errorf(
+			"AuditsPage() = %#v, want empty page",
+			audits,
+		)
+	}
+}
