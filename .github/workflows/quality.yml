@@ -108,6 +108,14 @@ jobs:
             > "$REPORT_DIR/vet.txt"
           cat "$REPORT_DIR/vet.txt"
 
+      - name: Run vulnerability scan
+        id: govulncheck
+        shell: bash
+        run: |
+          set -o pipefail
+          ./scripts/govulncheck.sh \
+            2>&1 | tee "$REPORT_DIR/govulncheck.txt"
+
       - name: Verify PostgreSQL integration
         id: postgres
         shell: bash
@@ -217,6 +225,7 @@ jobs:
           | Formatting | \`${{ steps.formatting.outcome }}\` |
           | Module tidiness | \`${{ steps.tidy.outcome }}\` |
           | Vet | \`${{ steps.vet.outcome }}\` |
+          | Vulnerability scan | \`${{ steps.govulncheck.outcome }}\` |
           | PostgreSQL integration | \`${{ steps.postgres.outcome }}\` |
           | Normal tests | \`${{ steps.normal.outcome }}\` |
           | Test JSON | \`${{ steps.test_json.outcome }}\` |
