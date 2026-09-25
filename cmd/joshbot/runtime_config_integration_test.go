@@ -155,11 +155,16 @@ func TestRuntimeConfigurationIntegrationLoadsOperationalSettingsAndWebBotAuth(
 		)
 	}
 
-	signer, err := identity.Signer()
+	signer, err := loadWebBotAuthSigner(getenv)
 	if err != nil {
 		t.Fatalf(
-			"Identity.Signer() error = %v",
+			"loadWebBotAuthSigner() error = %v",
 			err,
+		)
+	}
+	if signer == nil {
+		t.Fatal(
+			"loadWebBotAuthSigner() returned nil",
 		)
 	}
 

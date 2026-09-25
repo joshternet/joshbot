@@ -338,6 +338,11 @@ func TestCrawlerFailureIntegrationRedirectBoundaries(t *testing.T) {
 	}{
 		{name: "missing location", want: retry.CategoryMalformedOrigin},
 		{name: "malformed location", location: "%zz", want: retry.CategoryMalformedOrigin},
+		{
+			name:     "unsupported redirect scheme",
+			location: "mailto:josh@example.com",
+			want:     retry.CategoryMalformedOrigin,
+		},
 	}
 
 	for _, test := range tests {

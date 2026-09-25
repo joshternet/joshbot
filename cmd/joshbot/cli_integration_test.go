@@ -578,3 +578,55 @@ func assertCLIIntegrationCommand(
 		)
 	}
 }
+
+func TestCLIIntegrationMainEntrypoint(
+	t *testing.T,
+) {
+	originalArguments := commandArguments
+	originalOutput := commandOutput
+	originalErrors := commandErrors
+	originalExit := exitProcess
+
+	t.Cleanup(func() {
+		commandArguments = originalArguments
+		commandOutput = originalOutput
+		commandErrors = originalErrors
+		exitProcess = originalExit
+	})
+
+	var stdout strings.Builder
+	var stderr strings.Builder
+
+	exitCode := -1
+
+	commandArguments = []string{"help"}
+	commandOutput = &stdout
+	commandErrors = &stderr
+	exitProcess = func(code int) {
+		exitCode = code
+	}
+
+	main()
+
+	if exitCode != exitSuccess {
+		t.Errorf(
+			"exit code = %d, want %d",
+			exitCode,
+			exitSuccess,
+		)
+	}
+
+	if stdout.String() != helpText {
+		t.Errorf(
+			"stdout = %q, want help text",
+			stdout.String(),
+		)
+	}
+
+	if stderr.Len() != 0 {
+		t.Errorf(
+			"stderr = %q, want empty",
+			stderr.String(),
+		)
+	}
+}

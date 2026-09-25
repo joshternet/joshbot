@@ -344,6 +344,100 @@ func TestRuntimeConfigFailureIntegrationWebBotAuthSettings(t *testing.T) {
 		t.Errorf("loadWebBotAuthIdentity(conflict) = %#v, %v", identity, err)
 	}
 
+	validKey := writeRuntimeConfigurationIntegrationKey(t)
+
+	invalidMode := runtimeConfigFailureIntegrationEnvironment{
+		webBotAuthModeEnvironment: "sometimes",
+	}
+	if identity, err := loadWebBotAuthIdentity(
+		invalidMode.get,
+	); !errors.Is(
+		err,
+		errInvalidWebBotAuthConfiguration,
+	) || identity != nil {
+		t.Errorf(
+			"loadWebBotAuthIdentity(invalid mode) = %#v, %v",
+			identity,
+			err,
+		)
+	}
+
+	invalidTransitionPath := runtimeConfigFailureIntegrationEnvironment{
+		webBotAuthModeEnvironment:                     webBotAuthModeRequired,
+		webBotAuthActivePrivateKeyFileEnvironment:     validKey,
+		webBotAuthTransitionPrivateKeyFileEnvironment: " /secret/transition ",
+	}
+	if identity, err := loadWebBotAuthIdentity(
+		invalidTransitionPath.get,
+	); !errors.Is(
+		err,
+		errInvalidWebBotAuthConfiguration,
+	) || identity != nil {
+		t.Errorf(
+			"loadWebBotAuthIdentity(invalid transition path) = %#v, %v",
+			identity,
+			err,
+		)
+	}
+
+	missingTransition := filepath.Join(
+		t.TempDir(),
+		"missing-transition-private-key.pem",
+	)
+	missingTransitionEnvironment :=
+		runtimeConfigFailureIntegrationEnvironment{
+			webBotAuthModeEnvironment:                     webBotAuthModeRequired,
+			webBotAuthActivePrivateKeyFileEnvironment:     validKey,
+			webBotAuthTransitionPrivateKeyFileEnvironment: missingTransition,
+		}
+	if identity, err := loadWebBotAuthIdentity(
+		missingTransitionEnvironment.get,
+	); !errors.Is(
+		err,
+		errOpenWebBotAuthPrivateKeyFile,
+	) || identity != nil {
+		t.Errorf(
+			"loadWebBotAuthIdentity(missing transition) = %#v, %v",
+			identity,
+			err,
+		)
+	}
+
+	duplicateIdentity := runtimeConfigFailureIntegrationEnvironment{
+		webBotAuthModeEnvironment:                     webBotAuthModeRequired,
+		webBotAuthActivePrivateKeyFileEnvironment:     validKey,
+		webBotAuthTransitionPrivateKeyFileEnvironment: validKey,
+	}
+	if identity, err := loadWebBotAuthIdentity(
+		duplicateIdentity.get,
+	); !errors.Is(
+		err,
+		errDuplicateWebBotAuthIdentities,
+	) || identity != nil {
+		t.Errorf(
+			"loadWebBotAuthIdentity(duplicate identities) = %#v, %v",
+			identity,
+			err,
+		)
+	}
+
+	invalidLegacyPath := runtimeConfigFailureIntegrationEnvironment{
+		webBotAuthModeEnvironment:           webBotAuthModeRequired,
+		webBotAuthPrivateKeyFileEnvironment: " /secret/legacy ",
+	}
+	if identity, err := loadWebBotAuthIdentity(
+		invalidLegacyPath.get,
+	); !errors.Is(
+		err,
+		errInvalidWebBotAuthConfiguration,
+	) || identity != nil {
+		t.Errorf(
+			"loadWebBotAuthIdentity(invalid legacy path) = %#v, %v",
+			identity,
+			err,
+		)
+	}
+
 	missing := filepath.Join(t.TempDir(), "missing-private-key.pem")
 	if identity, err := readWebBotAuthIdentityFile(missing); !errors.Is(err, errOpenWebBotAuthPrivateKeyFile) || identity != nil {
 		t.Errorf("readWebBotAuthIdentityFile(missing) = %#v, %v", identity, err)
