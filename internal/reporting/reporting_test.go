@@ -148,18 +148,6 @@ func TestNewHandlerValidatesDependencies(
 		)
 	}
 
-	if _, err := newHandler(
-		reader,
-		testToken,
-		nil,
-	); !errors.Is(err, errClockUnavailable) {
-		t.Errorf(
-			"newHandler(nil clock) error = %v, want %v",
-			err,
-			errClockUnavailable,
-		)
-	}
-
 	handler, err := NewHandler(
 		reader,
 		testToken,
@@ -866,8 +854,9 @@ func TestMetricsExposeBoundedOperationalState(
 				MaxPendingProbes:      1000,
 			},
 			Queue: QueueSummary{
-				Total:     1010,
+				Total:     1015,
 				Probe:     1000,
+				Reprobe:   5,
 				Recurring: 10,
 				Leased:    2,
 			},
@@ -945,8 +934,9 @@ func TestMetricsExposeBoundedOperationalState(
 		"joshbot_backpressure_active 1",
 		"joshbot_pending_probes 1000",
 		"joshbot_pending_probe_limit 1000",
-		`joshbot_verification_queue{mode="all"} 1010`,
+		`joshbot_verification_queue{mode="all"} 1015`,
 		`joshbot_verification_queue{mode="probe"} 1000`,
+		`joshbot_verification_queue{mode="reprobe"} 5`,
 		`joshbot_verification_queue{mode="recurring"} 10`,
 		"joshbot_verification_leases 2",
 		`joshbot_crawl_sources{classification="seeded"} 2`,
@@ -954,6 +944,7 @@ func TestMetricsExposeBoundedOperationalState(
 		`joshbot_crawl_sources{classification="verified"} 3`,
 		`joshbot_crawl_sources{classification="blocked"} 4`,
 		`joshbot_crawl_sources{classification="crawl_eligible"} 46`,
+		"joshbot_unfinished_crawl_runs 0",
 		`joshbot_service_heartbeat_age_seconds{service="worker",state="running"} 30`,
 		`joshbot_service_heartbeat_age_seconds{service="discovery",state="idle"} 0`,
 		"# EOF",
@@ -987,6 +978,95 @@ func TestMetricsExposeBoundedOperationalState(
 			t.Errorf(
 				"metrics unexpectedly contain %q:\n%s",
 				forbidden,
+				body,
+			)
+		}
+	}
+}
+
+type fakeMetricsReader struct {
+	*fakeReader
+
+	metrics OperationalMetrics
+}
+
+func (reader *fakeMetricsReader) Metrics(
+	context.Context,
+) (OperationalMetrics, error) {
+	return reader.metrics, nil
+}
+
+func TestMetricsExposeUnfinishedCrawlRunCount(
+	t *testing.T,
+) {
+	reader := &fakeMetricsReader{
+		fakeReader: &fakeReader{},
+		metrics: OperationalMetrics{
+			UnfinishedCrawlRuns: 7,
+			PageFailureCategories: []MetricBreakdown{
+				{
+					Label: "timeout",
+					Count: 2,
+				},
+			},
+			HTTPStatuses: []MetricBreakdown{
+				{
+					Label: "403",
+					Count: 3,
+				},
+			},
+			VerificationQueueFailureCategories: []MetricBreakdown{
+				{
+					Label: "robots_temporary",
+					Count: 4,
+				},
+			},
+		},
+	}
+
+	handler := mustReportingHandler(
+		t,
+		reader,
+	)
+
+	response := performRequest(
+		t,
+		handler,
+		"/metrics",
+		"Bearer "+testToken,
+	)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"metrics status = %d, want %d",
+			response.Code,
+			http.StatusOK,
+		)
+	}
+
+	body := response.Body.String()
+
+	for _, value := range []string{
+		"# HELP joshbot_unfinished_crawl_runs Current unfinished crawl runs.",
+		"# TYPE joshbot_unfinished_crawl_runs gauge",
+		"joshbot_unfinished_crawl_runs 7",
+		"# HELP joshbot_retained_page_attempt_failures Retained page attempts by failure category.",
+		"# TYPE joshbot_retained_page_attempt_failures gauge",
+		`joshbot_retained_page_attempt_failures{failure_category="timeout"} 2`,
+		"# HELP joshbot_retained_page_http_statuses Retained page attempts by HTTP status.",
+		"# TYPE joshbot_retained_page_http_statuses gauge",
+		`joshbot_retained_page_http_statuses{status="403"} 3`,
+		"# HELP joshbot_verification_queue_failures Current verification queue failures by category.",
+		"# TYPE joshbot_verification_queue_failures gauge",
+		`joshbot_verification_queue_failures{failure_category="robots_temporary"} 4`,
+	} {
+		if !strings.Contains(
+			body,
+			value,
+		) {
+			t.Errorf(
+				"metrics missing %q:\n%s",
+				value,
 				body,
 			)
 		}

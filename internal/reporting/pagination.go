@@ -515,6 +515,7 @@ func parseQueueQuery(
 		"mode",
 		map[string]struct{}{
 			"probe":     {},
+			"reprobe":   {},
 			"recurring": {},
 		},
 	)
@@ -578,6 +579,7 @@ func parseQueueEventQuery(
 		"mode",
 		map[string]struct{}{
 			"probe":     {},
+			"reprobe":   {},
 			"recurring": {},
 		},
 	)
@@ -691,10 +693,6 @@ func decodeCursor(
 	raw string,
 	kind string,
 ) (cursorPayload, error) {
-	if raw == "" {
-		return cursorPayload{}, nil
-	}
-
 	decoded, err := base64.RawURLEncoding.DecodeString(
 		raw,
 	)
@@ -985,10 +983,6 @@ func trimSourcePage(
 	items []CrawlSource,
 	limit int,
 ) sourcePage {
-	if items == nil {
-		items = []CrawlSource{}
-	}
-
 	if len(items) <= limit {
 		return sourcePage{Items: items}
 	}
@@ -1007,10 +1001,6 @@ func trimCrawlPage(
 	items []CrawlRun,
 	limit int,
 ) crawlPage {
-	if items == nil {
-		items = []CrawlRun{}
-	}
-
 	if len(items) <= limit {
 		return crawlPage{Items: items}
 	}
@@ -1029,10 +1019,6 @@ func trimQueuePage(
 	items []QueueItem,
 	limit int,
 ) queuePage {
-	if items == nil {
-		items = []QueueItem{}
-	}
-
 	if len(items) <= limit {
 		return queuePage{Items: items}
 	}
@@ -1051,10 +1037,6 @@ func trimQueueEventPage(
 	items []QueueEvent,
 	limit int,
 ) queueEventPage {
-	if items == nil {
-		items = []QueueEvent{}
-	}
-
 	if len(items) <= limit {
 		return queueEventPage{Items: items}
 	}
@@ -1070,9 +1052,6 @@ func trimQueueEventPage(
 }
 
 func trimAuditPage(items []AuditEvent, limit int) auditPage {
-	if items == nil {
-		items = []AuditEvent{}
-	}
 	if len(items) <= limit {
 		return auditPage{Items: items}
 	}

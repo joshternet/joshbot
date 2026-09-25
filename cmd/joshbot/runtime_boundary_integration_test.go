@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -606,6 +607,45 @@ func TestRuntimeBoundaryIntegrationWorkerFailures(
 				"worker() error = %v, want %v",
 				err,
 				errRuntimeBoundaryIntegration,
+			)
+		}
+	})
+
+	t.Run("invalid heartbeat service instance", func(t *testing.T) {
+		operations, _ :=
+			runtimeBoundaryIntegrationOperations(t)
+
+		baseGetenv := operations.getenv
+		operations.getenv = func(name string) string {
+			if name == serviceInstanceIDEnvironment {
+				return strings.Repeat(
+					"w",
+					maxServiceInstanceIDLength+1,
+				)
+			}
+
+			return baseGetenv(name)
+		}
+
+		operations.newHeartbeatStore = func(
+			*pgxpool.Pool,
+		) (heartbeatStore, error) {
+			return &runtimeBoundaryIntegrationHeartbeatStore{},
+				nil
+		}
+
+		err := operations.worker(
+			context.Background(),
+		)
+
+		if !errors.Is(
+			err,
+			errInvalidRuntimeConfiguration,
+		) {
+			t.Errorf(
+				"worker() error = %v, want %v",
+				err,
+				errInvalidRuntimeConfiguration,
 			)
 		}
 	})

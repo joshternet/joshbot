@@ -132,8 +132,8 @@ func newQueue(
 //
 // Scheduling demand for an origin with an active unexpired lease is coalesced
 // into that in-flight lease without changing its availability or authority.
-// Explicit operator scheduling promotes a probe to recurring without replacing
-// its active lease.
+// Explicit operator scheduling promotes probe or reprobe work to recurring
+// without replacing an active lease.
 func (q *Queue) Schedule(
 	ctx context.Context,
 	source origin.Origin,
@@ -512,9 +512,10 @@ func (q *Queue) Reschedule(
 // CompleteVerification atomically records a verification result and finalizes
 // the active queue lease.
 //
-// Recurring work and valid probes remain queued for recurring verification.
-// Non-valid probes record their observation and leave the queue in the same
-// transaction.
+// Recurring work remains queued. Valid probes and reprobes become recurring.
+// Authoritative non-participation outcomes from fresh probes become delayed
+// reprobes. Transient unavailable work retains its queue mode with retry state,
+// while robots-denied fresh probes leave the queue.
 func (q *Queue) CompleteVerification(
 	ctx context.Context,
 	lease Lease,
@@ -553,6 +554,7 @@ func (q *Queue) CompleteVerification(
 	}
 	transient := result.Outcome == declaration.OutcomeUnavailable &&
 		failureCategory.Transient()
+	reprobe := shouldReprobeOutcome(result.Outcome)
 
 	err := pgx.BeginFunc(
 		ctx,
@@ -616,6 +618,13 @@ func (q *Queue) CompleteVerification(
 							mode = CASE
 								WHEN $7 = 'valid'
 								THEN 'recurring'
+								WHEN
+									queued.mode IN (
+										'probe',
+										'reprobe'
+									)
+									AND $13::boolean
+								THEN 'reprobe'
 								ELSE queued.mode
 							END,
 							available_at = GREATEST(
@@ -646,10 +655,13 @@ func (q *Queue) CompleteVerification(
 						WHERE queued.origin =
 								leased_queue.origin
 							AND (
-								leased_queue.mode =
-								'recurring'
+								leased_queue.mode IN (
+									'recurring',
+									'reprobe'
+								)
 								OR $7 = 'valid'
 								OR $12::boolean
+								OR $13::boolean
 							)
 						RETURNING queued.origin
 					),
@@ -661,6 +673,7 @@ func (q *Queue) CompleteVerification(
 							AND leased_queue.mode = 'probe'
 							AND $7 <> 'valid'
 							AND NOT $12::boolean
+							AND NOT $13::boolean
 						RETURNING verification_queue.origin
 					),
 					completed_queue AS (
@@ -715,6 +728,7 @@ func (q *Queue) CompleteVerification(
 				nextFailures,
 				nullableFailureCategory(transient, failureCategory),
 				transient,
+				reprobe,
 			)
 			if execErr != nil {
 				return execErr
@@ -746,6 +760,20 @@ func nullableFailureCategory(transient bool, category retry.Category) any {
 		return nil
 	}
 	return string(category)
+}
+
+func shouldReprobeOutcome(
+	outcome declaration.Outcome,
+) bool {
+	switch outcome {
+	case declaration.OutcomeAbsent,
+		declaration.OutcomeInvalid,
+		declaration.OutcomeUnsupportedVersion,
+		declaration.OutcomeCrossOriginRedirect:
+		return true
+	default:
+		return false
+	}
 }
 
 func (q *Queue) validate(ctx context.Context) error {

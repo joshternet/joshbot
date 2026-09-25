@@ -156,6 +156,7 @@ deploy/.env.example
 .github/ISSUE_TEMPLATE/config.yml
 .github/pull_request_template.md
 .github/workflows/quality.yml
+scripts/govulncheck.sh
 scripts/release-check.sh
 '
 
@@ -169,6 +170,7 @@ deploy/postgres/init/010-joshbot-roles.sh
 deploy/publish.sh
 deploy/publish_test.sh
 deploy/smoke.sh
+scripts/govulncheck.sh
 scripts/release-check.sh
 '
 
@@ -182,6 +184,7 @@ deploy/postgres/init/010-joshbot-roles.sh
 deploy/publish.sh
 deploy/publish_test.sh
 deploy/smoke.sh
+scripts/govulncheck.sh
 scripts/release-check.sh
 '
 
@@ -214,6 +217,19 @@ for path in $shell_files; do
 		fail "shell syntax is invalid: $path"
 	fi
 done
+
+require_text \
+	scripts/govulncheck.sh \
+	'govulncheck_version=v1.8.0' \
+	'govulncheck version is pinned to v1.8.0'
+
+if [ -x scripts/govulncheck.sh ]; then
+	if scripts/govulncheck.sh; then
+		pass "govulncheck reported no vulnerabilities"
+	else
+		fail "govulncheck reported vulnerabilities or could not complete"
+	fi
+fi
 
 require_text \
 	.github/workflows/quality.yml \

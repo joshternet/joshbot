@@ -210,6 +210,13 @@ func TestServiceHeartbeatIntegrationDefaultStartAndNilStop(
 	}
 
 	var missing *serviceHeartbeat
+
+	missing.Observe(
+		"running",
+		origin.Origin{},
+		"ignored",
+	)
+
 	if err := missing.stop(
 		context.Background(),
 		"stopping",

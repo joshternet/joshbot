@@ -27,9 +27,6 @@ var (
 	errTokenUnavailable = errors.New(
 		"reporting: authentication token is unavailable",
 	)
-	errClockUnavailable = errors.New(
-		"reporting: clock is unavailable",
-	)
 	errInvalidLimit = errors.New(
 		"reporting: invalid limit",
 	)
@@ -57,6 +54,7 @@ type BackpressureStatus struct {
 type QueueSummary struct {
 	Total             int64      `json:"total"`
 	Probe             int64      `json:"probe"`
+	Reprobe           int64      `json:"reprobe"`
 	Recurring         int64      `json:"recurring"`
 	Leased            int64      `json:"leased"`
 	OldestAvailableAt *time.Time `json:"oldest_available_at,omitempty"`
@@ -275,10 +273,6 @@ func newHandler(
 
 	if strings.TrimSpace(token) == "" {
 		return nil, errTokenUnavailable
-	}
-
-	if now == nil {
-		return nil, errClockUnavailable
 	}
 
 	runtime := &handler{
@@ -827,6 +821,11 @@ func (h *handler) metrics(
 	)
 	_, _ = fmt.Fprintf(
 		writer,
+		"joshbot_verification_queue{mode=\"reprobe\"} %d\n",
+		status.Queue.Reprobe,
+	)
+	_, _ = fmt.Fprintf(
+		writer,
 		"joshbot_verification_queue{mode=\"recurring\"} %d\n",
 		status.Queue.Recurring,
 	)
@@ -892,6 +891,7 @@ func (h *handler) metrics(
 		{"joshbot_retained_candidates", "Retained discovery candidates.", durable.Candidates},
 		{"joshbot_retained_discovery_edges", "Retained discovery edges.", durable.DiscoveryEdges},
 		{"joshbot_retained_crawl_runs", "Retained crawl runs.", durable.CrawlRuns},
+		{"joshbot_unfinished_crawl_runs", "Current unfinished crawl runs.", durable.UnfinishedCrawlRuns},
 		{"joshbot_retained_pages_attempted", "Retained pages attempted.", durable.PagesAttempted},
 		{"joshbot_retained_pages_parsed", "Retained pages parsed.", durable.PagesParsed},
 		{"joshbot_retained_origins_found", "Retained origins found by crawls.", durable.OriginsFound},
@@ -904,6 +904,57 @@ func (h *handler) metrics(
 		_, _ = fmt.Fprintf(writer, "# HELP %s %s\n", metric.name, metric.help)
 		_, _ = fmt.Fprintf(writer, "# TYPE %s gauge\n", metric.name)
 		_, _ = fmt.Fprintf(writer, "%s %d\n", metric.name, metric.value)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
+		"# HELP joshbot_retained_page_attempt_failures Retained page attempts by failure category.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_retained_page_attempt_failures gauge",
+	)
+	for _, breakdown := range durable.PageFailureCategories {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_retained_page_attempt_failures{failure_category=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
+		"# HELP joshbot_retained_page_http_statuses Retained page attempts by HTTP status.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_retained_page_http_statuses gauge",
+	)
+	for _, breakdown := range durable.HTTPStatuses {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_retained_page_http_statuses{status=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
+		"# HELP joshbot_verification_queue_failures Current verification queue failures by category.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_verification_queue_failures gauge",
+	)
+	for _, breakdown := range durable.VerificationQueueFailureCategories {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_verification_queue_failures{failure_category=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
 	}
 
 	_, _ = fmt.Fprintln(

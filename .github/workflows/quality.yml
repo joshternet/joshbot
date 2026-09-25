@@ -95,6 +95,14 @@ jobs:
             > "$REPORT_DIR/module-tidiness.txt"
           cat "$REPORT_DIR/module-tidiness.txt"
 
+      - name: Run static analysis
+        id: staticcheck
+        shell: bash
+        run: |
+          set -o pipefail
+          ./scripts/staticcheck.sh \
+            2>&1 | tee "$REPORT_DIR/staticcheck.txt"
+
       - name: Run vet
         id: vet
         shell: bash
@@ -107,6 +115,14 @@ jobs:
           printf 'PASS: go vet reported no findings\n' \
             > "$REPORT_DIR/vet.txt"
           cat "$REPORT_DIR/vet.txt"
+
+      - name: Run vulnerability scan
+        id: govulncheck
+        shell: bash
+        run: |
+          set -o pipefail
+          ./scripts/govulncheck.sh \
+            2>&1 | tee "$REPORT_DIR/govulncheck.txt"
 
       - name: Verify PostgreSQL integration
         id: postgres
@@ -216,7 +232,9 @@ jobs:
           | Release readiness | \`${{ steps.release.outcome }}\` |
           | Formatting | \`${{ steps.formatting.outcome }}\` |
           | Module tidiness | \`${{ steps.tidy.outcome }}\` |
+          | Static analysis | \`${{ steps.staticcheck.outcome }}\` |
           | Vet | \`${{ steps.vet.outcome }}\` |
+          | Vulnerability scan | \`${{ steps.govulncheck.outcome }}\` |
           | PostgreSQL integration | \`${{ steps.postgres.outcome }}\` |
           | Normal tests | \`${{ steps.normal.outcome }}\` |
           | Test JSON | \`${{ steps.test_json.outcome }}\` |

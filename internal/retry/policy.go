@@ -22,6 +22,7 @@ const (
 	CategoryRobotsTemporary        Category = "robots_temporary"
 	CategoryHTTP408                Category = "http_408"
 	CategoryHTTP429                Category = "http_429"
+	CategoryHTTP4xx                Category = "http_4xx"
 	CategoryHTTP5xx                Category = "http_5xx"
 	CategoryDeclarationUnavailable Category = "declaration_unavailable"
 	CategoryProcessor              Category = "processor"
@@ -78,7 +79,7 @@ func (category Category) Valid() bool {
 	switch category {
 	case CategoryNone, CategoryDNS, CategoryTransport, CategoryTimeout,
 		CategoryRobotsTemporary, CategoryHTTP408, CategoryHTTP429,
-		CategoryHTTP5xx, CategoryDeclarationUnavailable,
+		CategoryHTTP4xx, CategoryHTTP5xx, CategoryDeclarationUnavailable,
 		CategoryProcessor, CategoryStore, CategoryUnsafeAddress,
 		CategoryPolicyBlocked, CategoryRobotsDenied, CategoryMalformedOrigin,
 		CategoryUnsupportedOrigin, CategoryOversizedContent,

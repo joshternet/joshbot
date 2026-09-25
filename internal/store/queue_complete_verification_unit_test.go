@@ -19,6 +19,34 @@ type completeVerificationClock struct {
 	err error
 }
 
+type completeVerificationCaptureTx struct {
+	*discoveryPolicyUnitTx
+
+	execQueries   []string
+	execArguments [][]any
+}
+
+func (tx *completeVerificationCaptureTx) Exec(
+	ctx context.Context,
+	query string,
+	arguments ...any,
+) (pgconn.CommandTag, error) {
+	tx.execQueries = append(
+		tx.execQueries,
+		query,
+	)
+	tx.execArguments = append(
+		tx.execArguments,
+		append([]any(nil), arguments...),
+	)
+
+	return tx.discoveryPolicyUnitTx.Exec(
+		ctx,
+		query,
+		arguments...,
+	)
+}
+
 func (clock completeVerificationClock) Now(
 	context.Context,
 	*pgxpool.Pool,
@@ -604,4 +632,174 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 			}
 		},
 	)
+}
+
+func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	now := time.Date(
+		2026,
+		time.September,
+		23,
+		19,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+	lease := queueUnitLease(
+		t,
+		now.Add(-5*time.Minute),
+		now.Add(5*time.Minute),
+	)
+
+	baseTx := &discoveryPolicyUnitTx{
+		rowResults: []discoveryUnitRow{
+			{
+				values: []any{
+					0,
+				},
+			},
+		},
+		execResults: []discoveryUnitExecResult{
+			{
+				tag: pgconn.NewCommandTag(
+					"UPDATE 1",
+				),
+			},
+		},
+	}
+	tx := &completeVerificationCaptureTx{
+		discoveryPolicyUnitTx: baseTx,
+	}
+
+	queue := queueSimpleDatabaseStore(
+		discoveryPolicyDatabase(tx),
+		completeVerificationClock{
+			now: now,
+		},
+	)
+
+	err := queue.CompleteVerification(
+		ctx,
+		lease,
+		declaration.Result{
+			Outcome: declaration.OutcomeAbsent,
+			Origin:  lease.Origin,
+		},
+		24*time.Hour,
+	)
+	if err != nil {
+		t.Fatalf(
+			"CompleteVerification() error = %v",
+			err,
+		)
+	}
+
+	if len(tx.execArguments) != 1 {
+		t.Fatalf(
+			"completion Exec count = %d, want 1",
+			len(tx.execArguments),
+		)
+	}
+
+	arguments := tx.execArguments[0]
+	if len(arguments) != 13 {
+		t.Fatalf(
+			"completion argument count = %d, want 13",
+			len(arguments),
+		)
+	}
+
+	reprobe, ok := arguments[12].(bool)
+	if !ok || !reprobe {
+		t.Fatalf(
+			"reprobe argument = %#v, want true",
+			arguments[12],
+		)
+	}
+
+	if len(tx.execQueries) != 1 {
+		t.Fatalf(
+			"completion query count = %d, want 1",
+			len(tx.execQueries),
+		)
+	}
+
+	normalizedQuery := strings.Join(
+		strings.Fields(tx.execQueries[0]),
+		" ",
+	)
+	if !strings.Contains(
+		normalizedQuery,
+		"leased_queue.mode IN (",
+	) ||
+		!strings.Contains(
+			normalizedQuery,
+			"'recurring', 'reprobe'",
+		) {
+		t.Fatalf(
+			"completion query does not retain existing reprobes",
+		)
+	}
+}
+
+func TestShouldReprobeOutcome(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome declaration.Outcome
+		want    bool
+	}{
+		{
+			name:    "valid",
+			outcome: declaration.OutcomeValid,
+		},
+		{
+			name:    "absent",
+			outcome: declaration.OutcomeAbsent,
+			want:    true,
+		},
+		{
+			name:    "invalid",
+			outcome: declaration.OutcomeInvalid,
+			want:    true,
+		},
+		{
+			name:    "unsupported version",
+			outcome: declaration.OutcomeUnsupportedVersion,
+			want:    true,
+		},
+		{
+			name:    "unavailable",
+			outcome: declaration.OutcomeUnavailable,
+		},
+		{
+			name:    "robots denied",
+			outcome: declaration.OutcomeRobotsDenied,
+		},
+		{
+			name:    "cross-origin redirect",
+			outcome: declaration.OutcomeCrossOriginRedirect,
+			want:    true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				if got := shouldReprobeOutcome(
+					test.outcome,
+				); got != test.want {
+					t.Fatalf(
+						"shouldReprobeOutcome(%v) = %v, want %v",
+						test.outcome,
+						got,
+						test.want,
+					)
+				}
+			},
+		)
+	}
 }

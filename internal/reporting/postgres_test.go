@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -455,6 +456,178 @@ func TestPostgresReaderReturnsOperationalState(
 		t.Errorf(
 			"Services() = %#v",
 			services,
+		)
+	}
+}
+
+func TestPostgresReaderMetricsCountsUnfinishedCrawlRuns(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newReportingTestPool(t)
+
+	seedReportingFixture(
+		t,
+		pool,
+	)
+
+	startedAt := time.Now().
+		UTC().
+		Truncate(time.Microsecond)
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO crawl_runs (
+			source_origin,
+			started_at,
+			max_depth,
+			max_pages,
+			max_page_bytes,
+			request_delay_milliseconds,
+			redirect_limit,
+			page_timeout_milliseconds
+		) VALUES (
+			$1,
+			$2,
+			0,
+			1,
+			1,
+			0,
+			0,
+			1
+		)
+	`, "https://seed.example", startedAt); err != nil {
+		t.Fatalf(
+			"insert unfinished crawl run: %v",
+			err,
+		)
+	}
+
+	reader, err := NewPostgresReader(
+		pool,
+		PostgresConfig{
+			MaxPendingProbes: 1,
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"NewPostgresReader() error = %v",
+			err,
+		)
+	}
+
+	metrics, err := reader.Metrics(ctx)
+	if err != nil {
+		t.Fatalf(
+			"Metrics() error = %v",
+			err,
+		)
+	}
+
+	if metrics.CrawlRuns != 2 {
+		t.Errorf(
+			"CrawlRuns = %d, want 2",
+			metrics.CrawlRuns,
+		)
+	}
+
+	if metrics.UnfinishedCrawlRuns != 1 {
+		t.Errorf(
+			"UnfinishedCrawlRuns = %d, want 1",
+			metrics.UnfinishedCrawlRuns,
+		)
+	}
+}
+
+func TestPostgresReaderMetricsBreakdowns(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newReportingTestPool(t)
+
+	fixture := seedReportingFixture(
+		t,
+		pool,
+	)
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE crawl_page_attempts
+		SET
+			status_code = 408,
+			outcome = 'http_error',
+			failure_category = 'http_408'
+		WHERE run_id = $1
+	`, fixture.crawlID); err != nil {
+		t.Fatalf(
+			"update crawl page attempt: %v",
+			err,
+		)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE verification_queue
+		SET
+			consecutive_failures = 1,
+			last_failure_category = 'robots_temporary',
+			next_attempt_at = available_at
+		WHERE origin = 'https://seed.example'
+	`); err != nil {
+		t.Fatalf(
+			"update verification queue failure: %v",
+			err,
+		)
+	}
+
+	reader, err := NewPostgresReader(
+		pool,
+		PostgresConfig{
+			MaxPendingProbes: 1,
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"NewPostgresReader() error = %v",
+			err,
+		)
+	}
+
+	metrics, err := reader.Metrics(ctx)
+	if err != nil {
+		t.Fatalf(
+			"Metrics() error = %v",
+			err,
+		)
+	}
+
+	if len(metrics.PageFailureCategories) != 1 ||
+		metrics.PageFailureCategories[0] != (MetricBreakdown{
+			Label: "http_408",
+			Count: 1,
+		}) {
+		t.Errorf(
+			"PageFailureCategories = %#v",
+			metrics.PageFailureCategories,
+		)
+	}
+
+	if len(metrics.HTTPStatuses) != 1 ||
+		metrics.HTTPStatuses[0] != (MetricBreakdown{
+			Label: "408",
+			Count: 1,
+		}) {
+		t.Errorf(
+			"HTTPStatuses = %#v",
+			metrics.HTTPStatuses,
+		)
+	}
+
+	if len(metrics.VerificationQueueFailureCategories) != 1 ||
+		metrics.VerificationQueueFailureCategories[0] != (MetricBreakdown{
+			Label: "robots_temporary",
+			Count: 1,
+		}) {
+		t.Errorf(
+			"VerificationQueueFailureCategories = %#v",
+			metrics.VerificationQueueFailureCategories,
 		)
 	}
 }
@@ -1361,5 +1534,174 @@ func TestServicesReturnsAgedCurrentHeartbeat(t *testing.T) {
 		!service.StartedAt.Equal(started) ||
 		!service.UpdatedAt.Equal(updated) {
 		t.Fatalf("Services() = %#v", service)
+	}
+}
+
+func TestPostgresReaderMetricsPreservesBreakdownQueryFailure(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newReportingTestPool(t)
+
+	seedReportingFixture(
+		t,
+		pool,
+	)
+
+	reader, err := NewPostgresReader(
+		pool,
+		PostgresConfig{
+			MaxPendingProbes: 1,
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"NewPostgresReader() error = %v",
+			err,
+		)
+	}
+
+	if _, err := pool.Exec(
+		ctx,
+		`ALTER TABLE crawl_page_attempts
+		 RENAME TO crawl_page_attempts_unavailable`,
+	); err != nil {
+		t.Fatalf(
+			"rename crawl_page_attempts: %v",
+			err,
+		)
+	}
+
+	metrics, err := reader.Metrics(ctx)
+	if err == nil {
+		t.Fatal(
+			"Metrics() error = nil, want breakdown query failure",
+		)
+	}
+
+	if !strings.Contains(
+		err.Error(),
+		"reporting: read metric breakdowns",
+	) {
+		t.Fatalf(
+			"Metrics() error = %v, want breakdown query context",
+			err,
+		)
+	}
+
+	if metrics.Candidates != 0 ||
+		metrics.CrawlRuns != 0 ||
+		metrics.PagesAttempted != 0 ||
+		len(metrics.PageFailureCategories) != 0 ||
+		len(metrics.HTTPStatuses) != 0 ||
+		len(metrics.VerificationQueueFailureCategories) != 0 {
+		t.Errorf(
+			"Metrics() on breakdown failure = %#v, want zero metrics",
+			metrics,
+		)
+	}
+}
+
+func TestPostgresReaderMetricsPreservesRowStreamFailure(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newReportingTestPool(t)
+
+	reader, err := NewPostgresReader(
+		pool,
+		PostgresConfig{
+			MaxPendingProbes: 1,
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"NewPostgresReader() error = %v",
+			err,
+		)
+	}
+
+	if _, err := pool.Exec(
+		ctx,
+		`ALTER TABLE verification_queue
+		 RENAME TO verification_queue_backing`,
+	); err != nil {
+		t.Fatalf(
+			"rename verification_queue: %v",
+			err,
+		)
+	}
+
+	if _, err := pool.Exec(
+		ctx,
+		`
+			CREATE FUNCTION reporting_metrics_stream_failure()
+			RETURNS TEXT
+			LANGUAGE plpgsql
+			AS $$
+			BEGIN
+				RAISE EXCEPTION
+					'forced reporting metric row failure';
+			END;
+			$$
+		`,
+	); err != nil {
+		t.Fatalf(
+			"create metrics failure function: %v",
+			err,
+		)
+	}
+
+	if _, err := pool.Exec(
+		ctx,
+		`
+			CREATE VIEW verification_queue AS
+			SELECT
+				reporting_metrics_stream_failure()
+					AS last_failure_category
+		`,
+	); err != nil {
+		t.Fatalf(
+			"create metrics failure view: %v",
+			err,
+		)
+	}
+
+	metrics, err := reader.Metrics(ctx)
+	if err == nil {
+		t.Fatal(
+			"Metrics() error = nil, want row stream failure",
+		)
+	}
+
+	if !strings.Contains(
+		err.Error(),
+		"reporting: read metric breakdown rows",
+	) {
+		t.Fatalf(
+			"Metrics() error = %v, want row stream context",
+			err,
+		)
+	}
+
+	if !strings.Contains(
+		err.Error(),
+		"forced reporting metric row failure",
+	) {
+		t.Fatalf(
+			"Metrics() error = %v, want PostgreSQL failure",
+			err,
+		)
+	}
+
+	if metrics.Candidates != 0 ||
+		metrics.CrawlRuns != 0 ||
+		len(metrics.PageFailureCategories) != 0 ||
+		len(metrics.HTTPStatuses) != 0 ||
+		len(metrics.VerificationQueueFailureCategories) != 0 {
+		t.Errorf(
+			"Metrics() on row failure = %#v, want zero metrics",
+			metrics,
+		)
 	}
 }

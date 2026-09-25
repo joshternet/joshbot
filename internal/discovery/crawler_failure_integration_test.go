@@ -245,7 +245,7 @@ func TestCrawlerFailureIntegrationFetchFailures(t *testing.T) {
 			ctx:     context.Background(),
 			getter:  crawlerFailureIntegrationResponseGetter(http.StatusBadRequest, "text/html", "bad"),
 			outcome: PageHTTPError,
-			want:    retry.CategoryUnsupportedOrigin,
+			want:    retry.CategoryHTTP4xx,
 		},
 		{
 			name:    "oversized body",
@@ -338,6 +338,11 @@ func TestCrawlerFailureIntegrationRedirectBoundaries(t *testing.T) {
 	}{
 		{name: "missing location", want: retry.CategoryMalformedOrigin},
 		{name: "malformed location", location: "%zz", want: retry.CategoryMalformedOrigin},
+		{
+			name:     "unsupported redirect scheme",
+			location: "mailto:josh@example.com",
+			want:     retry.CategoryMalformedOrigin,
+		},
 	}
 
 	for _, test := range tests {

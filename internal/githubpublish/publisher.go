@@ -895,9 +895,7 @@ func validPublicationPath(path string) bool {
 }
 
 func lowerHex(value string) bool {
-	if value == "" {
-		return false
-	}
+	valid := value != ""
 
 	for index := 0; index < len(value); index++ {
 		character := value[index]
@@ -907,7 +905,7 @@ func lowerHex(value string) bool {
 		}
 	}
 
-	return true
+	return valid
 }
 
 func validConfig(config Config) bool {

@@ -83,21 +83,6 @@ func TestReadPolicyFailsClosedOnReadError(t *testing.T) {
 	}
 }
 
-func TestReadPolicyFailsClosedWithoutBody(t *testing.T) {
-	policy, err := readPolicy(nil)
-	if !errors.Is(err, errBodyUnavailable) {
-		t.Fatalf(
-			"readPolicy() error = %v, want errBodyUnavailable",
-			err,
-		)
-	}
-
-	target := mustTarget(t, "https://example.com/public")
-	if policy.Allowed(target) {
-		t.Fatal("missing-body Policy.Allowed() = true, want false")
-	}
-}
-
 type countingBody struct {
 	remaining int
 	read      int

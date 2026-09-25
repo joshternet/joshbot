@@ -191,6 +191,10 @@ func (c *MultiPageCrawler) Crawl(
 		} else if result.BudgetExhausted {
 			outcome = CrawlRunBudgetExhausted
 			reason = "crawl_budget"
+		} else if result.PagesParsed == 0 &&
+			result.FailureCategory != retry.CategoryNone {
+			outcome = CrawlRunFailed
+			reason = "root_failure"
 		}
 		finishContext := context.WithoutCancel(ctx)
 		var finishErr error
@@ -563,7 +567,12 @@ func (c *MultiPageCrawler) fetchPage(
 			response.StatusCode >= http.StatusMultipleChoices {
 			attempt.Outcome = PageHTTPError
 			category, transient := retry.HTTPStatusCategory(response.StatusCode)
-			if !transient {
+			if response.StatusCode >= http.StatusBadRequest &&
+				response.StatusCode < http.StatusInternalServerError &&
+				response.StatusCode != http.StatusRequestTimeout &&
+				response.StatusCode != http.StatusTooManyRequests {
+				category = retry.CategoryHTTP4xx
+			} else if !transient {
 				category = retry.CategoryUnsupportedOrigin
 			}
 			return finish(crawledPage{

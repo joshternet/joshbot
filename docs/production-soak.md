@@ -33,7 +33,8 @@ Use the private reporting service (default `127.0.0.1:8788`, bearer token from
 5. Watch pages attempted versus pages parsed on recent runs.
 6. Watch external origins found and candidates retained.
 7. Watch automatic promotions versus deferred candidates and pending probes.
-8. Watch verification queue depth for `probe` and `recurring` modes.
+8. Watch verification queue depth for `probe`, `reprobe`, and `recurring`
+   modes.
 9. Sample retry streaks and failure categories from queue items and source
    detail where available.
 10. Sample robots decisions from crawl page attempts and source detail

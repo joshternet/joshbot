@@ -143,3 +143,113 @@ func TestQueueCoalescesDuplicateSchedulesAtEarliestTime(
 		})
 	}
 }
+
+func TestQueueSchedulePromotesReprobeToRecurring(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newStoreTestPool(t)
+
+	queue, err := NewQueue(
+		pool,
+		QueueConfig{
+			LeaseDuration:     10 * time.Minute,
+			MinOriginInterval: time.Hour,
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"NewQueue() error = %v, want nil",
+			err,
+		)
+	}
+
+	source := mustStoreOrigin(
+		t,
+		"https://example.com",
+	)
+
+	later := time.Date(
+		2026,
+		time.September,
+		25,
+		12,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+	earlier := later.Add(-time.Hour)
+
+	_, err = pool.Exec(
+		ctx,
+		`
+			INSERT INTO verification_queue (
+				origin,
+				available_at,
+				mode
+			)
+			VALUES ($1, $2, 'reprobe')
+		`,
+		source.String(),
+		later,
+	)
+	if err != nil {
+		t.Fatalf(
+			"seed reprobe work: %v",
+			err,
+		)
+	}
+
+	if err := queue.Schedule(
+		ctx,
+		source,
+		earlier,
+	); err != nil {
+		t.Fatalf(
+			"Schedule() error = %v, want nil",
+			err,
+		)
+	}
+
+	var (
+		mode        string
+		availableAt time.Time
+	)
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT
+				mode,
+				available_at
+			FROM verification_queue
+			WHERE origin = $1
+		`,
+		source.String(),
+	).Scan(
+		&mode,
+		&availableAt,
+	)
+	if err != nil {
+		t.Fatalf(
+			"read scheduled reprobe: %v",
+			err,
+		)
+	}
+
+	if mode != "recurring" {
+		t.Errorf(
+			"queue mode = %q, want recurring",
+			mode,
+		)
+	}
+
+	if !availableAt.Equal(earlier) {
+		t.Errorf(
+			"available_at = %v, want %v",
+			availableAt,
+			earlier,
+		)
+	}
+}

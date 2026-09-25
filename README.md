@@ -282,6 +282,12 @@ JOSHBOT_CRAWL_TELEMETRY_RETENTION
 JoshBot records verification queue transitions so operators can understand how
 work moves through the system.
 
+Verification work has three queue modes. Fresh discovered candidates use
+`probe`, authoritative non-participation outcomes are retained as delayed
+`reprobe` work, and verified participants use `recurring`. Reprobe work is
+scheduled at the normal recheck interval but does not consume pending-probe
+backpressure capacity.
+
 Queue events include transitions such as:
 
 - scheduled;
@@ -420,14 +426,18 @@ joshbot_automatic_crawl_enabled
 joshbot_backpressure_active
 joshbot_pending_probes
 joshbot_pending_probe_limit
-joshbot_verification_queue{mode="all|probe|recurring"}
+joshbot_verification_queue{mode="all|probe|reprobe|recurring"}
 joshbot_verification_leases
+joshbot_verification_queue_failures{failure_category}
 joshbot_crawl_sources{classification="all|seeded|automatic|verified|blocked|crawl_eligible"}
 joshbot_retained_candidates
 joshbot_retained_discovery_edges
 joshbot_retained_crawl_runs
+joshbot_unfinished_crawl_runs
 joshbot_retained_pages_attempted
 joshbot_retained_pages_parsed
+joshbot_retained_page_attempt_failures{failure_category}
+joshbot_retained_page_http_statuses{status}
 joshbot_retained_origins_found
 joshbot_retained_origins_promoted
 joshbot_retained_origins_deferred

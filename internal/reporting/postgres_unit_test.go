@@ -104,8 +104,9 @@ func TestPostgresReaderStatusWithoutDatabase(
 					true,
 					false,
 					now,
-					int64(7),
+					int64(9),
 					int64(3),
+					int64(2),
 					int64(4),
 					int64(2),
 					&now,
@@ -171,6 +172,17 @@ func TestPostgresReaderStatusWithoutDatabase(
 		)
 	}
 
+	if status.Queue.Total != 9 ||
+		status.Queue.Probe != 3 ||
+		status.Queue.Reprobe != 2 ||
+		status.Queue.Recurring != 4 ||
+		status.Queue.Leased != 2 {
+		t.Errorf(
+			"queue = %#v",
+			status.Queue,
+		)
+	}
+
 	if len(status.Services) != 1 ||
 		status.Services[0].Service != "worker" {
 		t.Errorf(
@@ -232,6 +244,7 @@ func TestPostgresReaderStatusFailuresWithoutDatabase(
 								false,
 								false,
 								now,
+								int64(0),
 								int64(0),
 								int64(0),
 								int64(0),

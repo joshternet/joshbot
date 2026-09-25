@@ -94,6 +94,118 @@ func TestCrawlSourcePolicyAndClassification(t *testing.T) {
 	}
 }
 
+func TestExactCrawlBlockRemovesNonRecurringVerificationWork(
+	t *testing.T,
+) {
+	tests := []struct {
+		name       string
+		mode       string
+		wantQueued bool
+	}{
+		{
+			name:       "probe",
+			mode:       "probe",
+			wantQueued: false,
+		},
+		{
+			name:       "reprobe",
+			mode:       "reprobe",
+			wantQueued: false,
+		},
+		{
+			name:       "recurring",
+			mode:       "recurring",
+			wantQueued: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				ctx := context.Background()
+				pool := newCrawlSourceMigrationTestPool(t)
+				source := mustStoreOrigin(
+					t,
+					"https://"+test.mode+".example",
+				)
+
+				store, err := NewDiscoveryStore(pool)
+				if err != nil {
+					t.Fatalf(
+						"NewDiscoveryStore() error = %v",
+						err,
+					)
+				}
+
+				_, err = pool.Exec(
+					ctx,
+					`
+						INSERT INTO verification_queue (
+							origin,
+							available_at,
+							mode
+						)
+						VALUES (
+							$1,
+							statement_timestamp(),
+							$2
+						)
+					`,
+					source.String(),
+					test.mode,
+				)
+				if err != nil {
+					t.Fatalf(
+						"seed %s verification work: %v",
+						test.mode,
+						err,
+					)
+				}
+
+				if err := store.SetCrawlBlocked(
+					ctx,
+					source,
+					true,
+				); err != nil {
+					t.Fatalf(
+						"SetCrawlBlocked(true) error = %v",
+						err,
+					)
+				}
+
+				var queued bool
+				err = pool.QueryRow(
+					ctx,
+					`
+						SELECT EXISTS (
+							SELECT 1
+							FROM verification_queue
+							WHERE origin = $1
+						)
+					`,
+					source.String(),
+				).Scan(&queued)
+				if err != nil {
+					t.Fatalf(
+						"read verification work: %v",
+						err,
+					)
+				}
+
+				if queued != test.wantQueued {
+					t.Errorf(
+						"queued = %t, want %t for mode %q",
+						queued,
+						test.wantQueued,
+						test.mode,
+					)
+				}
+			},
+		)
+	}
+}
+
 func TestReconcileAutomaticCrawlPolicyBlocksLegacyExcludedSources(t *testing.T) {
 	ctx := context.Background()
 	pool := newCrawlSourceMigrationTestPool(t)
@@ -114,7 +226,7 @@ func TestReconcileAutomaticCrawlPolicyBlocksLegacyExcludedSources(t *testing.T) 
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO verification_queue (origin, available_at, mode)
 		VALUES
-			($1, CURRENT_TIMESTAMP, 'probe'),
+			($1, CURRENT_TIMESTAMP, 'reprobe'),
 			($2, CURRENT_TIMESTAMP, 'probe'),
 			($3, CURRENT_TIMESTAMP, 'probe')
 	`, excluded.String(), curated.String(), allowed.String()); err != nil {

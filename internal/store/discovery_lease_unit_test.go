@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/joshternet/joshbot/internal/database"
 )
 
@@ -48,8 +49,33 @@ func claimDiscoveryUnitStore(
 type discoveryLeaseCaptureTx struct {
 	*discoveryPolicyUnitTx
 
-	claimQuery string
-	claimArgs  []any
+	claimQuery   string
+	claimArgs    []any
+	cleanupQuery string
+	cleanupArgs  []any
+}
+
+func (tx *discoveryLeaseCaptureTx) Exec(
+	ctx context.Context,
+	query string,
+	args ...any,
+) (pgconn.CommandTag, error) {
+	if strings.Contains(
+		query,
+		"UPDATE crawl_runs",
+	) {
+		tx.cleanupQuery = query
+		tx.cleanupArgs = append(
+			[]any(nil),
+			args...,
+		)
+	}
+
+	return tx.discoveryPolicyUnitTx.Exec(
+		ctx,
+		query,
+		args...,
+	)
 }
 
 func (tx *discoveryLeaseCaptureTx) QueryRow(
@@ -629,6 +655,83 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 	)
 
 	t.Run(
+		"crawl run cleanup failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test abandoned crawl cleanup failure",
+			)
+			expiresAt := now.Add(leaseDuration)
+
+			tx := &discoveryPolicyUnitTx{
+				execResults: []discoveryUnitExecResult{
+					{},
+					{
+						err: testErr,
+					},
+				},
+				rowResults: []discoveryUnitRow{
+					{
+						values: []any{
+							false,
+						},
+					},
+					{
+						values: []any{
+							"https://example.com",
+							int64(7),
+							now,
+							expiresAt,
+						},
+					},
+				},
+			}
+
+			store := claimDiscoveryUnitStore(
+				t,
+				discoveryPolicyDatabase(tx),
+				claimDiscoveryClock{
+					now: now,
+				},
+			)
+
+			lease, found, err :=
+				store.ClaimDiscoverySourceLease(
+					ctx,
+					interval,
+					leaseDuration,
+				)
+
+			if found {
+				t.Fatal(
+					"ClaimDiscoverySourceLease() found = true, want false",
+				)
+			}
+
+			if lease != (firstLeaseZero()) {
+				t.Fatalf(
+					"ClaimDiscoverySourceLease() lease = %#v, want zero",
+					lease,
+				)
+			}
+
+			if !errors.Is(err, testErr) ||
+				!strings.Contains(
+					err.Error(),
+					"store: cancel abandoned crawl runs",
+				) ||
+				!strings.Contains(
+					err.Error(),
+					"store: claim discovery source lease",
+				) {
+				t.Fatalf(
+					"ClaimDiscoverySourceLease() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
 		"success preserves attempt scheduling",
 		func(t *testing.T) {
 			location := time.FixedZone(
@@ -642,6 +745,7 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			baseTx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
+					{},
 					{},
 				},
 				rowResults: []discoveryUnitRow{
@@ -762,6 +866,56 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				t.Fatalf(
 					"claim query consumes last_attempted_at: %s",
 					normalizedQuery,
+				)
+			}
+
+			normalizedCleanupQuery := strings.Join(
+				strings.Fields(tx.cleanupQuery),
+				" ",
+			)
+
+			if !strings.Contains(
+				normalizedCleanupQuery,
+				"UPDATE crawl_runs SET finished_at = $2, outcome = 'canceled', stop_reason = 'lease_reclaimed'",
+			) {
+				t.Fatalf(
+					"claim does not cancel abandoned crawl runs: %s",
+					normalizedCleanupQuery,
+				)
+			}
+
+			if !strings.Contains(
+				normalizedCleanupQuery,
+				"WHERE source_origin = $1 AND outcome = 'running' AND finished_at IS NULL",
+			) {
+				t.Fatalf(
+					"crawl-run cleanup is not bounded to the claimed origin: %s",
+					normalizedCleanupQuery,
+				)
+			}
+
+			if len(tx.cleanupArgs) != 2 {
+				t.Fatalf(
+					"cleanup argument count = %d, want 2",
+					len(tx.cleanupArgs),
+				)
+			}
+
+			if got, ok := tx.cleanupArgs[0].(string); !ok ||
+				got != "https://example.com" {
+				t.Fatalf(
+					"cleanup origin argument = %#v, want %q",
+					tx.cleanupArgs[0],
+					"https://example.com",
+				)
+			}
+
+			if got, ok := tx.cleanupArgs[1].(time.Time); !ok ||
+				!got.Equal(now) {
+				t.Fatalf(
+					"cleanup time argument = %#v, want %v",
+					tx.cleanupArgs[1],
+					now,
 				)
 			}
 

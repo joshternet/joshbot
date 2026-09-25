@@ -308,6 +308,27 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 				)
 			}
 
+			if _, err := tx.Exec(
+				ctx,
+				`
+					UPDATE crawl_runs
+					SET
+						finished_at = $2,
+						outcome = 'canceled',
+						stop_reason = 'lease_reclaimed'
+					WHERE source_origin = $1
+						AND outcome = 'running'
+						AND finished_at IS NULL
+				`,
+				source.String(),
+				now,
+			); err != nil {
+				return fmt.Errorf(
+					"store: cancel abandoned crawl runs: %w",
+					err,
+				)
+			}
+
 			lease.Origin = source
 			lease.ClaimedAt = lease.ClaimedAt.UTC()
 			lease.ExpiresAt = lease.ExpiresAt.UTC()

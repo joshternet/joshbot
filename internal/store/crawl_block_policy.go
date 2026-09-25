@@ -53,7 +53,8 @@ func setExactCrawlBlockTransaction(
 	if effectiveBlocked {
 		if _, err := tx.Exec(ctx, `
 			DELETE FROM verification_queue
-			WHERE origin = $1 AND mode = 'probe'
+			WHERE origin = $1
+				AND mode IN ('probe', 'reprobe')
 		`, source.String()); err != nil {
 			return fmt.Errorf("remove blocked origin probe: %w", err)
 		}
@@ -122,7 +123,8 @@ func recomputeAutomaticCrawlBlocksTransaction(
 	if len(blockedOrigins) > 0 {
 		if _, err := tx.Exec(ctx, `
 			DELETE FROM verification_queue
-			WHERE origin = ANY($1::text[]) AND mode = 'probe'
+			WHERE origin = ANY($1::text[])
+				AND mode IN ('probe', 'reprobe')
 		`, blockedOrigins); err != nil {
 			return 0, fmt.Errorf("remove blocked automatic probes: %w", err)
 		}

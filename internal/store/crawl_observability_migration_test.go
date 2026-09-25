@@ -123,6 +123,133 @@ func TestObservabilityReportingMigrationIsAdditive(t *testing.T) {
 	}
 }
 
+func TestHTTP4xxFailureCategoryMigrationExpandsObservabilityContract(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newEmptyStoreTestPool(t)
+
+	for _, migration := range []string{
+		"migrations/0001_initial.sql",
+		"migrations/0002_verification_queue.sql",
+		"migrations/0003_discovery.sql",
+		"migrations/0004_crawl_sources.sql",
+		"migrations/0005_automatic_crawl_sources.sql",
+		"migrations/0006_crawl_observability.sql",
+		"migrations/0007_crawl_observability_permissions.sql",
+		"migrations/0008_crawl_domain_avoid_rules.sql",
+		"migrations/0009_automatic_admission.sql",
+		"migrations/0010_retry_state.sql",
+		"migrations/0011_operator_audit_events.sql",
+		"migrations/0012_observability_reporting.sql",
+		"migrations/0013_discovery_source_lease.sql",
+		"migrations/0014_clear_ephemeral_service_heartbeats.sql",
+	} {
+		applyRawStoreMigration(t, ctx, pool, migration)
+	}
+
+	var runID int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO crawl_runs (
+			source_origin, started_at, max_depth, max_pages,
+			max_page_bytes, request_delay_milliseconds,
+			redirect_limit, page_timeout_milliseconds
+		) VALUES (
+			'https://source.example', statement_timestamp(), 0, 1,
+			1, 0, 0, 1
+		)
+		RETURNING id
+	`).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO crawl_page_attempts (
+			run_id, sequence, requested_url, final_url, depth,
+			started_at, duration_milliseconds, response_bytes,
+			content_type, redirect_count, robots_decision,
+			internal_link_count, external_link_count, outcome
+		) VALUES (
+			$1, 1, 'https://source.example/', 'https://source.example/',
+			0, statement_timestamp(), 1, 1, 'text/html', 0, 'allowed',
+			0, 0, 'http_error'
+		)
+	`, runID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE crawl_runs
+		SET failure_category = 'http_4xx'
+		WHERE id = $1
+	`, runID); err == nil {
+		t.Fatal("pre-0015 crawl_runs accepted http_4xx")
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE crawl_page_attempts
+		SET failure_category = 'http_4xx'
+		WHERE run_id = $1
+	`, runID); err == nil {
+		t.Fatal("pre-0015 crawl_page_attempts accepted http_4xx")
+	}
+
+	applyRawStoreMigration(
+		t,
+		ctx,
+		pool,
+		"migrations/0015_http_4xx_failure_category.sql",
+	)
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE crawl_runs
+		SET failure_category = 'http_4xx'
+		WHERE id = $1
+	`, runID); err != nil {
+		t.Fatalf("post-0015 crawl_runs rejected http_4xx: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE crawl_page_attempts
+		SET failure_category = 'http_4xx'
+		WHERE run_id = $1
+	`, runID); err != nil {
+		t.Fatalf(
+			"post-0015 crawl_page_attempts rejected http_4xx: %v",
+			err,
+		)
+	}
+
+	var (
+		runCategory  string
+		pageCategory string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			(SELECT failure_category FROM crawl_runs WHERE id = $1),
+			(
+				SELECT failure_category
+				FROM crawl_page_attempts
+				WHERE run_id = $1
+			)
+	`, runID).Scan(&runCategory, &pageCategory); err != nil {
+		t.Fatal(err)
+	}
+
+	if runCategory != "http_4xx" {
+		t.Errorf(
+			"crawl_runs failure_category = %q, want http_4xx",
+			runCategory,
+		)
+	}
+	if pageCategory != "http_4xx" {
+		t.Errorf(
+			"crawl_page_attempts failure_category = %q, want http_4xx",
+			pageCategory,
+		)
+	}
+}
+
 func TestEphemeralServiceHeartbeatMigrationClearsGhostRows(t *testing.T) {
 	ctx := context.Background()
 	pool := newEmptyStoreTestPool(t)

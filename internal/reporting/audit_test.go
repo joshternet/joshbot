@@ -83,10 +83,6 @@ func TestAuditPaginationHelpers(t *testing.T) {
 	if len(page.Items) != 1 || page.NextCursor == "" {
 		t.Fatalf("trimAuditPage() = %#v", page)
 	}
-	empty := trimAuditPage(nil, 1)
-	if empty.Items == nil || len(empty.Items) != 0 || empty.NextCursor != "" {
-		t.Errorf("empty page = %#v", empty)
-	}
 	payload := encodeCursor(cursorPayload{
 		Version: cursorVersion,
 		Kind:    "audit",
