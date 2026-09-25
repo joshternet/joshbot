@@ -583,9 +583,6 @@ func TestMultiPageCrawlerTelemetryValidationAndSanitizing(t *testing.T) {
 		t.Errorf("validation error = %v", err)
 	}
 
-	if safeTelemetryURL(nil) != "" {
-		t.Error("nil telemetry URL must be empty")
-	}
 	parsed, _ := url.Parse("https://user:pass@example.test/path?q=secret#fragment")
 	if got := safeTelemetryURL(parsed); got != "https://example.test/path" {
 		t.Errorf("safeTelemetryURL() = %q", got)

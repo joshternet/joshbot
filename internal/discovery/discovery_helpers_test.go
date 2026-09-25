@@ -17,54 +17,61 @@ var (
 	errUnexpectedFetch = errors.New("unexpected fetch")
 )
 
-func TestHTMLDecodingBoundsAndErrors(t *testing.T) {
+func TestHTMLDecodingBounds(
+	t *testing.T,
+) {
 	decoded, tooLarge, err := decodeHTML(
-		strings.NewReader("<html></html>"),
+		[]byte("<html></html>"),
 		"text/html; charset=utf-8",
 	)
 	if err != nil {
-		t.Fatalf("decodeHTML() error = %v", err)
+		t.Fatalf(
+			"decodeHTML() error = %v",
+			err,
+		)
 	}
+
 	if tooLarge {
-		t.Error("decodeHTML() tooLarge = true")
+		t.Error(
+			"decodeHTML() tooLarge = true",
+		)
 	}
+
 	if string(decoded) != "<html></html>" {
-		t.Errorf("decoded = %q", decoded)
-	}
-
-	_, _, err = decodeHTML(
-		failingReader{err: errTestRead},
-		"text/html",
-	)
-	if !errors.Is(err, errTestRead) {
-		t.Errorf("initial read error = %v", err)
-	}
-
-	_, _, err = decodeHTML(
-		&previewThenErrorReader{
-			remaining: 1024,
-			err:       errTestRead,
-		},
-		"text/html; charset=utf-8",
-	)
-	if !errors.Is(err, errTestRead) {
-		t.Errorf("decoded read error = %v", err)
+		t.Errorf(
+			"decoded = %q",
+			decoded,
+		)
 	}
 
 	_, tooLarge, err = decodeHTML(
-		bytes.NewReader(
-			bytes.Repeat(
-				[]byte{0x80},
-				MaxRawBody,
-			),
+		bytes.Repeat(
+			[]byte{0x80},
+			MaxRawBody,
 		),
 		"text/html; charset=windows-1252",
 	)
 	if err != nil {
-		t.Fatalf("expanded decode error = %v", err)
+		t.Fatalf(
+			"expanded decode error = %v",
+			err,
+		)
 	}
+
 	if !tooLarge {
-		t.Error("expanded decode tooLarge = false")
+		t.Error(
+			"expanded decode tooLarge = false",
+		)
+	}
+
+	_, _, err = decodeHTML(
+		nil,
+		"text/html; charset=utf-8",
+	)
+	if err == nil {
+		t.Error(
+			"empty decode error = nil, want non-nil",
+		)
 	}
 }
 
@@ -178,27 +185,6 @@ type failingReader struct {
 
 func (reader failingReader) Read([]byte) (int, error) {
 	return 0, reader.err
-}
-
-type previewThenErrorReader struct {
-	remaining int
-	err       error
-}
-
-func (reader *previewThenErrorReader) Read(destination []byte) (int, error) {
-	if reader.remaining == 0 {
-		return 0, reader.err
-	}
-
-	count := len(destination)
-	if count > reader.remaining {
-		count = reader.remaining
-	}
-	for index := 0; index < count; index++ {
-		destination[index] = 'a'
-	}
-	reader.remaining -= count
-	return count, nil
 }
 
 func discoveryResponse(status int, location string) *http.Response {

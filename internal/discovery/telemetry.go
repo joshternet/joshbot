@@ -92,10 +92,6 @@ type crawlSummaryTelemetry interface {
 }
 
 func safeTelemetryURL(pageURL *url.URL) string {
-	if pageURL == nil {
-		return ""
-	}
-
 	safe := *pageURL
 	safe.User = nil
 	safe.RawQuery = ""

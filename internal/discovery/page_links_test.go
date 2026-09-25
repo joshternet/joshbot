@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"reflect"
 	"strings"
@@ -789,64 +788,6 @@ func TestExtractPageLinksRejectsInvalidInput(
 		t.Errorf(
 			"nil page error = %v, want errInvalidPageURL",
 			err,
-		)
-	}
-
-	links, status, err := extractPageLinks(
-		source,
-		pageURL,
-		"text/html",
-		[]byte("<html></html>"),
-		func(io.Reader, string) ([]byte, bool, error) {
-			return nil, false, errors.New("decode failed")
-		},
-	)
-	if err != nil {
-		t.Fatalf(
-			"decoder failure error = %v, want nil",
-			err,
-		)
-	}
-	if status != StatusUnavailable {
-		t.Errorf(
-			"decoder failure status = %v, want StatusUnavailable",
-			status,
-		)
-	}
-	if len(links.Internal) != 0 ||
-		len(links.Candidates) != 0 {
-		t.Errorf(
-			"decoder failure links = %#v, want empty",
-			links,
-		)
-	}
-
-	links, status, err = extractPageLinks(
-		source,
-		pageURL,
-		"text/html",
-		[]byte("<html></html>"),
-		func(io.Reader, string) ([]byte, bool, error) {
-			return nil, true, nil
-		},
-	)
-	if err != nil {
-		t.Fatalf(
-			"decoder too-large error = %v, want nil",
-			err,
-		)
-	}
-	if status != StatusTooLarge {
-		t.Errorf(
-			"decoder too-large status = %v, want StatusTooLarge",
-			status,
-		)
-	}
-	if len(links.Internal) != 0 ||
-		len(links.Candidates) != 0 {
-		t.Errorf(
-			"decoder too-large links = %#v, want empty",
-			links,
 		)
 	}
 

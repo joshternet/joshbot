@@ -87,7 +87,6 @@ func ExtractPageLinks(
 		pageURL,
 		contentType,
 		body,
-		decodeHTML,
 	)
 	if err != nil {
 		return PageLinks{}, 0, err
@@ -111,7 +110,6 @@ func extractPageLinks(
 	pageURL *url.URL,
 	contentType string,
 	body []byte,
-	decoder func(io.Reader, string) ([]byte, bool, error),
 ) (PageLinks, Status, error) {
 	if source.String() == "" {
 		return PageLinks{}, 0, errInvalidSource
@@ -142,11 +140,11 @@ func extractPageLinks(
 			nil
 	}
 
-	decoded, tooLarge, err := decoder(
-		bytes.NewReader(body),
+	decoded, tooLarge, decodeErr := decodeHTML(
+		body,
 		effectiveContentType,
 	)
-	if err != nil {
+	if decodeErr != nil {
 		return PageLinks{}, StatusUnavailable, nil
 	}
 
@@ -242,11 +240,11 @@ func extractPageLinks(
 }
 
 func decodeHTML(
-	reader io.Reader,
+	body []byte,
 	contentType string,
 ) ([]byte, bool, error) {
 	decodedReader, err := charset.NewReader(
-		reader,
+		bytes.NewReader(body),
 		contentType,
 	)
 	if err != nil {
