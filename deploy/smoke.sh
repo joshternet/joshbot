@@ -19,6 +19,16 @@ repository_root="$(
 )"
 readonly repository_root
 
+migration_files=("$repository_root"/internal/store/migrations/*.sql)
+if [[ ! -e "${migration_files[0]}" ]]; then
+  printf 'FAIL: no store migrations found\n' >&2
+  exit 1
+fi
+
+expected_migration_count="${#migration_files[@]}"
+readonly expected_migration_count
+unset migration_files
+
 compose_file="$repository_root/compose.yaml"
 readonly compose_file
 
@@ -850,7 +860,7 @@ migration_count="$(
 
 assert_equal \
   "$migration_count" \
-  "14" \
+  "$expected_migration_count" \
   "source migration count"
 
 pass "known observation, effective state, queue state, and migrations exist"
@@ -1782,7 +1792,7 @@ restored_migration_count="$(
 
 assert_equal \
   "$restored_migration_count" \
-  "14" \
+  "$migration_count" \
   "restored migration count"
 
 pass "known observation, discovery provenance, queue modes, and migration metadata survived restore"
