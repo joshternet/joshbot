@@ -171,6 +171,23 @@ cross-origin redirect.
 
 Raw declaration bodies and unknown JSON members are not retained.
 
+Declaration retrieval applies the RFC-JOSH-0002 consumer safety posture at the
+same guarded network boundary used by other crawler traffic. Declaration bodies
+are limited to 64 KiB, and verification follows at most five redirects. The
+five-redirect bound is a JoshBot resource-safety policy rather than a protocol
+limit defined by RFC-JOSH-0002.
+
+Each verification attempt is bounded by the worker's `JOSHBOT_JOB_TIMEOUT`,
+which defaults to two minutes. Network destinations are resolved and validated
+by `internal/netguard`, and connections are made to validated IP literals so a
+second DNS lookup cannot change the destination after validation. HTTPS retains
+the logical hostname and uses normal TLS certificate and hostname validation.
+
+Together these controls bound declaration response size, redirect traversal,
+retrieval time, and SSRF-style network exposure, including DNS-rebinding risk.
+The security policy documents the operator-facing mapping of these controls to
+RFC-JOSH-0002.
+
 ### `internal/store`
 
 Owns PostgreSQL persistence.
