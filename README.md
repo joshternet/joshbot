@@ -146,6 +146,16 @@ than requiring the response to carry that Content-Type header. An otherwise
 valid declaration is therefore not rejected solely because the Content-Type
 header is missing or different.
 
+Participation withdrawal is explicit. A `404 Not Found` or `410 Gone` response
+from the declaration URI establishes that the origin no longer has a Joshternet
+declaration. JoshBot treats that result as nonparticipation.
+
+Temporary retrieval failures do not establish withdrawal. A timeout, DNS
+failure, `5xx` response, or similar transient failure means that JoshBot could
+not determine the declaration state during that verification attempt. It does
+not turn the origin's last successfully established participation state into an
+authoritative withdrawal.
+
 Version 1 uses an integer JSON number. JoshBot accepts `{"version":1}`. Values
 such as `{"version":1.0}` and `{"version":1e0}` are not valid version 1
 declarations.
