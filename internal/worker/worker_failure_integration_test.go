@@ -16,6 +16,7 @@ import (
 type workerFailureIntegrationQueue struct {
 	claim    func(context.Context, string) (store.Lease, bool, error)
 	renew    func(context.Context, store.Lease) (store.Lease, error)
+	abandon  func(context.Context, store.Lease) error
 	complete func(
 		context.Context,
 		store.Lease,
@@ -47,6 +48,17 @@ func (queue *workerFailureIntegrationQueue) Renew(
 	}
 
 	return queue.renew(ctx, lease)
+}
+
+func (queue *workerFailureIntegrationQueue) AbandonVerification(
+	ctx context.Context,
+	lease store.Lease,
+) error {
+	if queue.abandon == nil {
+		return nil
+	}
+
+	return queue.abandon(ctx, lease)
 }
 
 func (queue *workerFailureIntegrationQueue) CompleteVerification(
@@ -734,6 +746,8 @@ func TestWorkerFailureIntegrationRunOnceErrorBoundaries(
 		config := workerFailureIntegrationConfig()
 		config.JobTimeout = 5 * time.Millisecond
 
+		abandonCalls := 0
+
 		runtime := workerFailureIntegrationWorker(
 			t,
 			&workerFailureIntegrationQueue{
@@ -747,6 +761,29 @@ func TestWorkerFailureIntegrationRunOnceErrorBoundaries(
 					time.Duration,
 				) error {
 					return expected
+				},
+				abandon: func(
+					ctx context.Context,
+					abandonedLease store.Lease,
+				) error {
+					abandonCalls++
+
+					if err := ctx.Err(); err != nil {
+						t.Errorf(
+							"abandon context error = %v, want nil",
+							err,
+						)
+					}
+
+					if abandonedLease != lease {
+						t.Errorf(
+							"abandoned lease = %#v, want %#v",
+							abandonedLease,
+							lease,
+						)
+					}
+
+					return nil
 				},
 			},
 			workerFailureIntegrationVerifier{
@@ -779,6 +816,13 @@ func TestWorkerFailureIntegrationRunOnceErrorBoundaries(
 				"RunOnce() error = %v, want %v",
 				err,
 				expected,
+			)
+		}
+
+		if abandonCalls != 1 {
+			t.Errorf(
+				"AbandonVerification() calls = %d, want 1",
+				abandonCalls,
 			)
 		}
 	})
