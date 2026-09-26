@@ -121,6 +121,40 @@ Robots permission and Joshternet participation are separate. A declaration
 does not override `robots.txt`, and `robots.txt` does not create or remove a
 Joshternet declaration.
 
+### RFC-JOSH-0002 consumer contract
+
+JoshBot implements the version 1 declaration protocol defined by
+[RFC-JOSH-0002](https://github.com/joshternet/spec/blob/ee57ea7c0b1427c100008ca41647ed4dbd50b05d/rfcs/0002-well-known-josh.md).
+That revision contains the IANA-preparation update currently implemented by
+JoshBot.
+
+For an origin under evaluation, JoshBot retrieves the declaration from
+`/.well-known/josh` using the same scheme, host, and port as that origin. A
+non-default port remains part of the origin and is used for declaration
+retrieval. JoshBot does not probe alternate ports in an attempt to locate a
+declaration, and a declaration from one port does not apply to another port on
+the same host.
+
+The declaration URI uses the canonical `/.well-known/josh` path without a
+trailing slash. It contains no query or fragment. Redirect handling remains
+origin-scoped: a cross-origin redirect is not treated as a declaration for the
+original origin.
+
+The associated media type is `application/json`, and publishers SHOULD serve
+that Content-Type. JoshBot validates the returned representation itself rather
+than requiring the response to carry that Content-Type header. An otherwise
+valid declaration is therefore not rejected solely because the Content-Type
+header is missing or different.
+
+Version 1 uses an integer JSON number. JoshBot accepts `{"version":1}`. Values
+such as `{"version":1.0}` and `{"version":1e0}` are not valid version 1
+declarations.
+
+These retrieval and representation rules preserve the origin-scoped semantics
+of RFC-JOSH-0002. JoshBot's crawler, discovery system, registry, and other
+operational behavior do not extend the authority of a declaration beyond the
+origin that serves it.
+
 ## Crawl sources
 
 JoshBot distinguishes crawl-source status from Joshternet participation.
