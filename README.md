@@ -165,6 +165,49 @@ of RFC-JOSH-0002. JoshBot's crawler, discovery system, registry, and other
 operational behavior do not extend the authority of a declaration beyond the
 origin that serves it.
 
+### RFC-JOSH-0002 conformance suite
+
+The canonical language-neutral RFC-JOSH-0002 version 1 conformance corpus lives
+in the
+[Joshternet specification repository](https://github.com/joshternet/spec/tree/5728bf19b0d193db026cdb5f283ab998cc6bc03d/conformance/rfc-josh-0002/v1).
+
+JoshBot does not maintain a separate copy of those protocol fixtures. Its test
+adapter loads the canonical corpus and maps JoshBot's internal declaration
+outcomes to the neutral conformance vocabulary defined by the specification
+repository.
+
+The currently reviewed corpus is pinned to:
+
+```text
+5728bf19b0d193db026cdb5f283ab998cc6bc03d
+```
+
+Normal `go test ./...` does not require a checkout of the specification
+repository. The canonical conformance test skips when its external fixture path
+is not supplied.
+
+With `joshternet/spec` checked out beside this repository, run the canonical
+suite locally with:
+
+```bash
+JOSHBOT_RFC_JOSH_0002_CONFORMANCE_DIR="$(cd ../spec/conformance/rfc-josh-0002/v1/fixtures && pwd)" \
+  go test -v ./internal/declaration \
+  -run '^TestRFCJOSH0002CanonicalConformance$'
+```
+
+The quality workflow checks out the specification repository separately at the
+same pinned commit and requires the canonical consumer corpus to pass. The
+checkout path is supplied explicitly to the test, so conformance testing does
+not depend on live websites or network retrieval after the repositories have
+been checked out.
+
+JoshBot claims the optional `same-origin-redirects` capability, so that fixture
+is run rather than skipped.
+
+Updating the pinned specification commit is an intentional compatibility
+change. A newer corpus must be reviewed before JoshBot CI begins treating it as
+the conformance target.
+
 ## Crawl sources
 
 JoshBot distinguishes crawl-source status from Joshternet participation.

@@ -22,6 +22,7 @@ jobs:
     env:
       JOSHBOT_TEST_DATABASE_URL: postgres://joshbot:joshbot-ci-only@127.0.0.1:5432/joshbot_test?sslmode=disable
       JOSHBOT_REQUIRE_DATABASE_TESTS: "1"
+      RFC_JOSH_0002_SPEC_COMMIT: 5728bf19b0d193db026cdb5f283ab998cc6bc03d
 
     services:
       postgres:
@@ -51,6 +52,15 @@ jobs:
         id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+
+      - name: Check out RFC-JOSH-0002 conformance corpus
+        id: spec_checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: joshternet/spec
+          ref: ${{ env.RFC_JOSH_0002_SPEC_COMMIT }}
+          path: external/spec
           persist-credentials: false
 
       - name: Set up Go
@@ -143,6 +153,33 @@ jobs:
           set -o pipefail
           go test ./... 2>&1 | tee "$REPORT_DIR/normal-tests.txt"
 
+      - name: Verify RFC-JOSH-0002 conformance
+        id: conformance
+        shell: bash
+        run: |
+          set -o pipefail
+
+          spec_commit="$(git -C external/spec rev-parse HEAD)"
+
+          {
+            printf 'RFC-JOSH-0002 spec commit: %s\n' "$spec_commit"
+
+            if [[ "$spec_commit" != "$RFC_JOSH_0002_SPEC_COMMIT" ]]; then
+              printf \
+                'spec commit = %s, want %s\n' \
+                "$spec_commit" \
+                "$RFC_JOSH_0002_SPEC_COMMIT"
+              exit 1
+            fi
+
+            JOSHBOT_RFC_JOSH_0002_CONFORMANCE_DIR="$GITHUB_WORKSPACE/external/spec/conformance/rfc-josh-0002/v1/fixtures" \
+              go test \
+                -count=1 \
+                -v \
+                ./internal/declaration \
+                -run '^TestRFCJOSH0002CanonicalConformance$'
+          } 2>&1 | tee "$REPORT_DIR/rfc-josh-0002-conformance.txt"
+
       - name: Generate machine-readable test results
         id: test_json
         shell: bash
@@ -228,6 +265,7 @@ jobs:
           | --- | --- |
           | Report preparation | \`${{ steps.prepare.outcome }}\` |
           | Checkout | \`${{ steps.checkout.outcome }}\` |
+          | RFC-JOSH-0002 corpus checkout | \`${{ steps.spec_checkout.outcome }}\` |
           | Go setup | \`${{ steps.setup.outcome }}\` |
           | Release readiness | \`${{ steps.release.outcome }}\` |
           | Formatting | \`${{ steps.formatting.outcome }}\` |
@@ -237,6 +275,7 @@ jobs:
           | Vulnerability scan | \`${{ steps.govulncheck.outcome }}\` |
           | PostgreSQL integration | \`${{ steps.postgres.outcome }}\` |
           | Normal tests | \`${{ steps.normal.outcome }}\` |
+          | RFC-JOSH-0002 conformance | \`${{ steps.conformance.outcome }}\` |
           | Test JSON | \`${{ steps.test_json.outcome }}\` |
           | Discovery fuzzing | \`${{ steps.discovery_fuzz.outcome }}\` |
           | Race and repeatability | \`${{ steps.race.outcome }}\` |
