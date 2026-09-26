@@ -58,6 +58,39 @@ Reports are especially useful when they demonstrate a failure in:
 - GitHub publication target validation;
 - exclusion of private operational data from public output.
 
+## RFC-JOSH-0002 declaration safety controls
+
+RFC-JOSH-0002 recommends that consumers bound declaration retrieval and protect
+network access against resource-exhaustion and SSRF-style risks. JoshBot maps
+those recommendations to explicit runtime controls.
+
+Declaration response bodies are limited to 64 KiB. A larger body is rejected
+before the complete response can be read into memory.
+
+Declaration verification follows at most five redirects. This is a JoshBot
+resource-safety limit, not a protocol limit imposed by RFC-JOSH-0002.
+Cross-origin declaration redirects are handled separately and do not grant the
+redirect target authority to declare participation for the original origin.
+
+Verification work is also bounded by `JOSHBOT_JOB_TIMEOUT`, which defaults to
+two minutes. The worker applies that timeout to each verification attempt and
+ensures that the attempt plus completion grace fits within its queue lease.
+
+Outbound crawler connections pass through `internal/netguard`. JoshBot
+resolves a hostname, validates every returned address, rejects private,
+loopback, link-local, multicast, shared, unspecified, and other unsafe
+destinations, and then connects using one of the validated IP literals. This
+prevents a second DNS lookup between destination validation and connection
+establishment and reduces DNS-rebinding risk.
+
+HTTPS requests still use normal TLS certificate and hostname validation. The
+network connection may be established to a validated IP literal, but the
+logical request hostname is preserved for TLS and HTTP. JoshBot does not
+disable certificate verification.
+
+These controls reduce risk from untrusted declaration endpoints but do not
+replace deployment-level firewall, network-isolation, or host-security policy.
+
 ## Operational security
 
 Deployment mistakes are not automatically JoshBot vulnerabilities. Operators
