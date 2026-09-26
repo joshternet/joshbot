@@ -89,6 +89,103 @@ func TestVerifierRetrievesCanonicalDeclarationTarget(
 	}
 }
 
+func TestVerifierUsesCleanWellKnownURIOnNondefaultPort(
+	t *testing.T,
+) {
+	source := mustDeclarationOrigin(
+		t,
+		"https://example.org:8443/ignored?source=1#fragment",
+	)
+	getter := newScriptedDeclarationGetter(
+		t,
+		declarationGetterStep{
+			response: declarationTextResponse(
+				http.StatusOK,
+				`{"version":1}`,
+			),
+		},
+	)
+
+	got, err := NewVerifier(getter).Verify(
+		context.Background(),
+		source,
+	)
+	if err != nil {
+		t.Fatalf("Verify() error = %v, want nil", err)
+	}
+
+	assertDeclarationResult(
+		t,
+		got,
+		Result{
+			Outcome: OutcomeValid,
+			Origin:  source,
+			Declaration: Declaration{
+				Version:  1,
+				Identity: IdentityUndeclared,
+			},
+		},
+	)
+
+	if len(getter.targets) != 1 {
+		t.Fatalf(
+			"getter calls = %d, want exactly 1",
+			len(getter.targets),
+		)
+	}
+
+	target, err := url.Parse(getter.targets[0])
+	if err != nil {
+		t.Fatalf(
+			"url.Parse(%q) error = %v, want nil",
+			getter.targets[0],
+			err,
+		)
+	}
+
+	if target.Scheme != "https" {
+		t.Errorf(
+			"declaration scheme = %q, want %q",
+			target.Scheme,
+			"https",
+		)
+	}
+
+	if target.Host != "example.org:8443" {
+		t.Errorf(
+			"declaration host = %q, want %q",
+			target.Host,
+			"example.org:8443",
+		)
+	}
+
+	if target.Path != WellKnownPath {
+		t.Errorf(
+			"declaration path = %q, want %q",
+			target.Path,
+			WellKnownPath,
+		)
+	}
+
+	if target.RawQuery != "" || target.ForceQuery {
+		t.Errorf(
+			"declaration query = %q, ForceQuery = %t, want no query",
+			target.RawQuery,
+			target.ForceQuery,
+		)
+	}
+
+	if target.Fragment != "" || target.RawFragment != "" {
+		t.Errorf(
+			"declaration fragment = %q, raw fragment = %q, want none",
+			target.Fragment,
+			target.RawFragment,
+		)
+	}
+
+	assertDeclarationBodiesClosed(t, getter)
+}
+
 func TestVerifierClassifiesHTTPOutcomes(t *testing.T) {
 	tests := []struct {
 		name        string
