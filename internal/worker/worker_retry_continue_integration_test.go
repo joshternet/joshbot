@@ -34,6 +34,13 @@ func (*workerRetryContinueIntegrationQueue) Renew(
 	return store.Lease{}, nil
 }
 
+func (*workerRetryContinueIntegrationQueue) AbandonVerification(
+	context.Context,
+	store.Lease,
+) error {
+	return nil
+}
+
 func (*workerRetryContinueIntegrationQueue) CompleteVerification(
 	context.Context,
 	store.Lease,

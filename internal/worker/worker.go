@@ -66,6 +66,11 @@ type Queue interface {
 		declaration.Result,
 		time.Duration,
 	) error
+
+	AbandonVerification(
+		context.Context,
+		store.Lease,
+	) error
 }
 
 // Verifier is the declaration verification behavior required by Worker.
@@ -260,15 +265,52 @@ func (w *Worker) RunOnce(
 	)
 	if err != nil {
 		w.observe("failed", lease.Origin, "completion_failed")
+
+		if contextError := ctx.Err(); contextError != nil {
+			return true, contextError
+		}
+
+		completionError := fmt.Errorf(
+			"worker: complete verification: %w",
+			err,
+		)
+
 		if timedOut {
+			abandonContext, cancelAbandon :=
+				w.timeoutFactory.WithTimeout(
+					ctx,
+					w.config.CompletionGrace,
+				)
+
+			abandonError := w.queue.AbandonVerification(
+				abandonContext,
+				lease,
+			)
+			cancelAbandon()
+
+			if abandonError != nil {
+				logVerificationTimeout(
+					lease.Origin,
+					"abandon_failed",
+				)
+
+				if contextError := ctx.Err(); contextError != nil {
+					return true, contextError
+				}
+
+				return true, errors.Join(
+					completionError,
+					fmt.Errorf(
+						"worker: abandon verification: %w",
+						abandonError,
+					),
+				)
+			}
+
 			logVerificationTimeout(
 				lease.Origin,
 				"abandoned",
 			)
-		}
-
-		if contextError := ctx.Err(); contextError != nil {
-			return true, contextError
 		}
 
 		if contextError :=
@@ -276,10 +318,7 @@ func (w *Worker) RunOnce(
 			return true, contextError
 		}
 
-		return true, fmt.Errorf(
-			"worker: complete verification: %w",
-			err,
-		)
+		return true, completionError
 	}
 
 	if timedOut {

@@ -50,6 +50,13 @@ func (queue *workerLifecycleIntegrationQueue) Renew(
 	return renewed, nil
 }
 
+func (*workerLifecycleIntegrationQueue) AbandonVerification(
+	context.Context,
+	store.Lease,
+) error {
+	return nil
+}
+
 func (queue *workerLifecycleIntegrationQueue) CompleteVerification(
 	_ context.Context,
 	_ store.Lease,

@@ -43,6 +43,13 @@ func (queue *workerRunBoundaryIntegrationQueue) Renew(
 	return renewed, nil
 }
 
+func (*workerRunBoundaryIntegrationQueue) AbandonVerification(
+	context.Context,
+	store.Lease,
+) error {
+	return nil
+}
+
 func (queue *workerRunBoundaryIntegrationQueue) CompleteVerification(
 	context.Context,
 	store.Lease,
