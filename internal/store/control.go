@@ -103,6 +103,65 @@ func (s *ControlStore) SetProcessorPaused(
 	)
 }
 
+// SetAutomaticExpansionPaused updates automatic-expansion policy and appends
+// its success audit in the same transaction.
+//
+// Pausing automatic expansion is independent from pausing discovery itself.
+// Seeded and verified sources remain eligible for discovery while automatic
+// source growth can be stopped independently.
+func (s *ControlStore) SetAutomaticExpansionPaused(
+	ctx context.Context,
+	paused bool,
+	audit control.Audit,
+) error {
+	expectedAction := "automatic-expansion.resume"
+	if paused {
+		expectedAction = "automatic-expansion.pause"
+	}
+
+	if !controlAuditMatches(
+		audit,
+		expectedAction,
+		"automatic-expansion",
+	) {
+		return errors.New(
+			"store: automatic expansion control audit is inconsistent",
+		)
+	}
+
+	return s.mutate(
+		ctx,
+		audit,
+		func(tx pgx.Tx) error {
+			result, err := tx.Exec(
+				ctx,
+				`
+					UPDATE crawl_control
+					SET
+						automatic_expansion_paused = $1,
+						updated_at = statement_timestamp()
+					WHERE singleton
+				`,
+				paused,
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"set automatic expansion state: %w",
+					err,
+				)
+			}
+
+			if result.RowsAffected() != 1 {
+				return errors.New(
+					"set automatic expansion state: singleton unavailable",
+				)
+			}
+
+			return nil
+		},
+	)
+}
+
 // AddDomainAvoid inserts a domain policy, reconciles matching automatic
 // non-seed sources, removes their non-recurring verification work, and
 // atomically appends the audit.

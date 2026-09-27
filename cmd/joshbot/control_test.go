@@ -19,6 +19,9 @@ type controlTestCommander struct{}
 func (*controlTestCommander) SetProcessorPaused(context.Context, string, bool, control.Audit) error {
 	return nil
 }
+func (*controlTestCommander) SetAutomaticExpansionPaused(context.Context, bool, control.Audit) error {
+	return nil
+}
 func (*controlTestCommander) AddDomainAvoid(context.Context, string, control.Audit) error {
 	return nil
 }

@@ -32,6 +32,16 @@ func (
 
 func (
 	commander *controlValidationIntegrationCommander,
+) SetAutomaticExpansionPaused(
+	context.Context,
+	bool,
+	Audit,
+) error {
+	return commander.mutationErr
+}
+
+func (
+	commander *controlValidationIntegrationCommander,
 ) AddDomainAvoid(
 	_ context.Context,
 	pattern string,
@@ -118,6 +128,34 @@ func TestControlValidationIntegrationClassifiesRoutes(
 			path: "/api/v1/control/" +
 				"processors/discovery/pause",
 			status: http.StatusMethodNotAllowed,
+		},
+		{
+			name:   "automatic expansion wrong method",
+			method: http.MethodGet,
+			path: "/api/v1/control/" +
+				"automatic-expansion/pause",
+			status: http.StatusMethodNotAllowed,
+		},
+		{
+			name:   "automatic expansion resume wrong method",
+			method: http.MethodGet,
+			path: "/api/v1/control/" +
+				"automatic-expansion/resume",
+			status: http.StatusMethodNotAllowed,
+		},
+		{
+			name:   "unknown automatic expansion wrong method",
+			method: http.MethodGet,
+			path: "/api/v1/control/" +
+				"automatic-expansion/other",
+			status: http.StatusNotFound,
+		},
+		{
+			name:   "unknown automatic expansion operation",
+			method: http.MethodPost,
+			path: "/api/v1/control/" +
+				"automatic-expansion/other",
+			status: http.StatusNotFound,
 		},
 		{
 			name:   "origin wrong method",
@@ -244,6 +282,22 @@ func TestControlValidationIntegrationRejectsMalformedBodies(
 			name: "actor surrounding whitespace",
 			path: "/api/v1/control/" +
 				"processors/discovery/pause",
+			contentType: "application/json",
+			body:        `{"actor":" operator "}`,
+			status:      http.StatusBadRequest,
+		},
+		{
+			name: "automatic expansion malformed JSON",
+			path: "/api/v1/control/" +
+				"automatic-expansion/pause",
+			contentType: "application/json",
+			body:        `{`,
+			status:      http.StatusBadRequest,
+		},
+		{
+			name: "automatic expansion actor surrounding whitespace",
+			path: "/api/v1/control/" +
+				"automatic-expansion/resume",
 			contentType: "application/json",
 			body:        `{"actor":" operator "}`,
 			status:      http.StatusBadRequest,

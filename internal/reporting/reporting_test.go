@@ -328,8 +328,9 @@ func TestHandlerReturnsReportingData(
 	reader := &fakeReader{
 		status: Status{
 			Control: ControlStatus{
-				DiscoveryPaused:    false,
-				VerificationPaused: true,
+				DiscoveryPaused:          false,
+				VerificationPaused:       true,
+				AutomaticExpansionPaused: true,
 				UpdatedAt: testNow.Add(
 					-time.Minute,
 				),
@@ -457,6 +458,10 @@ func TestHandlerReturnsReportingData(
 		{
 			path:         "/api/v1/status",
 			wantFragment: `"generated_at":"2026-09-16T14:00:00Z"`,
+		},
+		{
+			path:         "/api/v1/status",
+			wantFragment: `"automatic_expansion_paused":true`,
 		},
 		{
 			path:         "/api/v1/sources?limit=7",
@@ -844,8 +849,9 @@ func TestMetricsExposeBoundedOperationalState(
 	reader := &fakeReader{
 		status: Status{
 			Control: ControlStatus{
-				DiscoveryPaused:    true,
-				VerificationPaused: false,
+				DiscoveryPaused:          true,
+				VerificationPaused:       false,
+				AutomaticExpansionPaused: true,
 			},
 			Backpressure: BackpressureStatus{
 				AutomaticCrawlEnabled: true,
@@ -930,6 +936,7 @@ func TestMetricsExposeBoundedOperationalState(
 	required := []string{
 		"joshbot_discovery_paused 1",
 		"joshbot_verification_paused 0",
+		"joshbot_automatic_expansion_paused 1",
 		"joshbot_automatic_crawl_enabled 1",
 		"joshbot_backpressure_active 1",
 		"joshbot_pending_probes 1000",

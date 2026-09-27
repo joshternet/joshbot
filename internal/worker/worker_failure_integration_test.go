@@ -826,6 +826,132 @@ func TestWorkerFailureIntegrationRunOnceErrorBoundaries(
 			)
 		}
 	})
+
+	t.Run("abandon failure joins completion error", func(t *testing.T) {
+		completionFailure := errors.New(
+			"integration completion failure",
+		)
+		abandonFailure := errors.New(
+			"integration abandon failure",
+		)
+		config := workerFailureIntegrationConfig()
+		config.JobTimeout = 5 * time.Millisecond
+
+		runtime := workerFailureIntegrationWorker(
+			t,
+			&workerFailureIntegrationQueue{
+				claim: workerFailureIntegrationClaim(
+					lease,
+				),
+				complete: func(
+					context.Context,
+					store.Lease,
+					declaration.Result,
+					time.Duration,
+				) error {
+					return completionFailure
+				},
+				abandon: func(
+					context.Context,
+					store.Lease,
+				) error {
+					return abandonFailure
+				},
+			},
+			workerFailureIntegrationVerifier{
+				verify: func(
+					ctx context.Context,
+					source origin.Origin,
+				) (declaration.Result, error) {
+					<-ctx.Done()
+
+					return declaration.Result{
+						Origin: source,
+					}, ctx.Err()
+				},
+			},
+			config,
+		)
+
+		worked, err := runtime.RunOnce(
+			context.Background(),
+		)
+		if !worked {
+			t.Error(
+				"RunOnce() worked = false, want true",
+			)
+		}
+		if !errors.Is(err, completionFailure) ||
+			!errors.Is(err, abandonFailure) {
+			t.Fatalf(
+				"RunOnce() error = %v, want completion and abandon failures",
+				err,
+			)
+		}
+	})
+
+	t.Run("abandon failure returns canceled parent context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(
+			context.Background(),
+		)
+		completionFailure := errors.New(
+			"integration completion failure",
+		)
+		config := workerFailureIntegrationConfig()
+		config.JobTimeout = 5 * time.Millisecond
+
+		runtime := workerFailureIntegrationWorker(
+			t,
+			&workerFailureIntegrationQueue{
+				claim: workerFailureIntegrationClaim(
+					lease,
+				),
+				complete: func(
+					context.Context,
+					store.Lease,
+					declaration.Result,
+					time.Duration,
+				) error {
+					return completionFailure
+				},
+				abandon: func(
+					context.Context,
+					store.Lease,
+				) error {
+					cancel()
+					return errors.New(
+						"integration abandon failure",
+					)
+				},
+			},
+			workerFailureIntegrationVerifier{
+				verify: func(
+					verifyContext context.Context,
+					source origin.Origin,
+				) (declaration.Result, error) {
+					<-verifyContext.Done()
+
+					return declaration.Result{
+						Origin: source,
+					}, verifyContext.Err()
+				},
+			},
+			config,
+		)
+
+		worked, err := runtime.RunOnce(ctx)
+		if !worked {
+			t.Error(
+				"RunOnce() worked = false, want true",
+			)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf(
+				"RunOnce() error = %v, want context.Canceled",
+				err,
+			)
+		}
+	})
 }
 
 func TestWorkerFailureIntegrationRunLoopBranches(

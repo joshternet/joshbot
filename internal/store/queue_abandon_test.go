@@ -322,6 +322,18 @@ func TestQueueAbandonVerificationRejectsLostLease(
 	}
 }
 
+func TestQueueAbandonVerificationRejectsUnavailableQueue(t *testing.T) {
+	var queue *Queue
+	err := queue.AbandonVerification(context.Background(), Lease{})
+	if !errors.Is(err, errQueueUnavailable) {
+		t.Fatalf(
+			"AbandonVerification() error = %v, want %v",
+			err,
+			errQueueUnavailable,
+		)
+	}
+}
+
 func TestQueueAbandonVerificationRejectsInvalidLease(
 	t *testing.T,
 ) {

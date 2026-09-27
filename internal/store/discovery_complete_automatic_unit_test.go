@@ -25,6 +25,26 @@ func (clock completeAutomaticClock) NowTransaction(
 	return clock.now, clock.err
 }
 
+type completeAutomaticCaptureTx struct {
+	*discoveryPolicyUnitTx
+
+	execQueries []string
+}
+
+func (tx *completeAutomaticCaptureTx) Exec(
+	ctx context.Context,
+	query string,
+	args ...any,
+) (pgconn.CommandTag, error) {
+	tx.execQueries = append(tx.execQueries, query)
+
+	return tx.discoveryPolicyUnitTx.Exec(
+		ctx,
+		query,
+		args...,
+	)
+}
+
 func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 	t *testing.T,
 ) {
@@ -57,9 +77,30 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 		)
 	})
 
+	t.Run("automatic expansion control read failure", func(t *testing.T) {
+		testErr := errors.New("test automatic expansion control failure")
+		tx := completeAutomaticBaseTx(1, 0, 0, nil)
+		tx.rowResults[0] = discoveryUnitRow{err: testErr}
+
+		err := callCompleteAutomatic(
+			t,
+			ctx,
+			tx,
+			completeAutomaticClock{now: now},
+			[]AutomaticCandidateResult{successResult},
+		)
+
+		assertCompleteAutomaticError(
+			t,
+			err,
+			testErr,
+			"store: read automatic expansion control",
+		)
+	})
+
 	t.Run("unknown run", func(t *testing.T) {
 		tx := completeAutomaticBaseTx(1, 0, 0, nil)
-		tx.rowResults[0] = discoveryUnitRow{err: pgx.ErrNoRows}
+		tx.rowResults[1] = discoveryUnitRow{err: pgx.ErrNoRows}
 		err := callCompleteAutomatic(
 			t,
 			ctx,
@@ -79,7 +120,7 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 	t.Run("run read failure", func(t *testing.T) {
 		testErr := errors.New("test automatic admission run read failure")
 		tx := completeAutomaticBaseTx(1, 0, 0, nil)
-		tx.rowResults[0] = discoveryUnitRow{err: testErr}
+		tx.rowResults[1] = discoveryUnitRow{err: testErr}
 		err := callCompleteAutomatic(
 			t,
 			ctx,
@@ -112,7 +153,7 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 	t.Run("pending probe count failure", func(t *testing.T) {
 		testErr := errors.New("test pending probe count failure")
 		tx := completeAutomaticBaseTx(1, 0, 0, nil)
-		tx.rowResults[1] = discoveryUnitRow{err: testErr}
+		tx.rowResults[2] = discoveryUnitRow{err: testErr}
 		err := callCompleteAutomatic(
 			t,
 			ctx,
@@ -139,7 +180,7 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 	t.Run("batch read failure", func(t *testing.T) {
 		testErr := errors.New("test automatic admission batch failure")
 		tx := completeAutomaticBaseTx(1, 0, 0, nil)
-		tx.rowResults[2] = discoveryUnitRow{err: testErr}
+		tx.rowResults[3] = discoveryUnitRow{err: testErr}
 		err := callCompleteAutomatic(
 			t,
 			ctx,
@@ -416,6 +457,40 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 		)
 	})
 
+	t.Run("capacity deferred", func(t *testing.T) {
+		tx := completeAutomaticBaseTx(
+			0,
+			0,
+			0,
+			[]string{candidateOrigin.String()},
+		)
+		tx.execResults = append(
+			tx.execResults,
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+		)
+		tx.rowResults = append(
+			tx.rowResults,
+			discoveryUnitRow{values: []any{false, false, false}},
+		)
+		err := callCompleteAutomatic(
+			t,
+			ctx,
+			tx,
+			completeAutomaticClock{now: now},
+			[]AutomaticCandidateResult{successResult},
+		)
+		if err != nil {
+			t.Fatalf(
+				"CompleteAutomaticCandidates() error = %v",
+				err,
+			)
+		}
+	})
+
 	t.Run("capacity deferred update failure", func(t *testing.T) {
 		testErr := errors.New("test capacity deferred update failure")
 		tx := completeAutomaticBaseTx(
@@ -446,6 +521,210 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 			err,
 			testErr,
 			"record capacity-deferred admission",
+		)
+	})
+
+	t.Run("probe capacity deferral", func(t *testing.T) {
+		tx := completeAutomaticBaseTx(
+			1,
+			0,
+			defaultAutomaticCrawlMaxPendingProbes,
+			[]string{candidateOrigin.String()},
+		)
+		tx.execResults = append(
+			tx.execResults,
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+		)
+		tx.rowResults = append(
+			tx.rowResults,
+			discoveryUnitRow{values: []any{false, false, false}},
+		)
+
+		err := callCompleteAutomatic(
+			t,
+			ctx,
+			tx,
+			completeAutomaticClock{now: now},
+			[]AutomaticCandidateResult{successResult},
+		)
+		if err != nil {
+			t.Fatalf(
+				"CompleteAutomaticCandidates() error = %v",
+				err,
+			)
+		}
+	})
+
+	t.Run("probe capacity deferral update failure", func(t *testing.T) {
+		testErr := errors.New("test probe capacity deferred update failure")
+		tx := completeAutomaticBaseTx(
+			1,
+			0,
+			defaultAutomaticCrawlMaxPendingProbes,
+			[]string{candidateOrigin.String()},
+		)
+		tx.execResults = append(
+			tx.execResults,
+			completeAutomaticSuccessExec(),
+			discoveryUnitExecResult{err: testErr},
+		)
+		tx.rowResults = append(
+			tx.rowResults,
+			discoveryUnitRow{values: []any{false, false, false}},
+		)
+
+		err := callCompleteAutomatic(
+			t,
+			ctx,
+			tx,
+			completeAutomaticClock{now: now},
+			[]AutomaticCandidateResult{successResult},
+		)
+		assertCompleteAutomaticError(
+			t,
+			err,
+			testErr,
+			"record capacity-deferred admission",
+		)
+	})
+
+	t.Run("automatic expansion paused keeps probe without promotion", func(t *testing.T) {
+		baseTx := completeAutomaticBaseTx(
+			1,
+			0,
+			0,
+			[]string{candidateOrigin.String()},
+		)
+		baseTx.rowResults[0] = discoveryUnitRow{
+			values: []any{true},
+		}
+		baseTx.rowResults = append(
+			baseTx.rowResults,
+			discoveryUnitRow{
+				values: []any{false, false, false},
+			},
+		)
+
+		for index := 0; index < 5; index++ {
+			baseTx.execResults = append(
+				baseTx.execResults,
+				completeAutomaticSuccessExec(),
+			)
+		}
+
+		tx := &completeAutomaticCaptureTx{
+			discoveryPolicyUnitTx: baseTx,
+		}
+
+		err := callCompleteAutomatic(
+			t,
+			ctx,
+			tx,
+			completeAutomaticClock{now: now},
+			[]AutomaticCandidateResult{successResult},
+		)
+		if err != nil {
+			t.Fatalf(
+				"CompleteAutomaticCandidates() error = %v",
+				err,
+			)
+		}
+
+		normalizedQueries := make(
+			[]string,
+			0,
+			len(tx.execQueries),
+		)
+		for _, query := range tx.execQueries {
+			normalizedQueries = append(
+				normalizedQueries,
+				strings.Join(strings.Fields(query), " "),
+			)
+		}
+
+		joined := strings.Join(normalizedQueries, "\n")
+
+		if !strings.Contains(
+			joined,
+			"INSERT INTO verification_queue",
+		) {
+			t.Fatalf(
+				"paused admission did not schedule verification probe:\n%s",
+				joined,
+			)
+		}
+
+		if !strings.Contains(
+			joined,
+			"SET outcome = 'expansion_paused'",
+		) {
+			t.Fatalf(
+				"paused admission did not record expansion_paused:\n%s",
+				joined,
+			)
+		}
+
+		if strings.Contains(
+			joined,
+			"INSERT INTO discovery_source_state",
+		) {
+			t.Fatalf(
+				"paused admission promoted automatic source:\n%s",
+				joined,
+			)
+		}
+
+		if strings.Contains(
+			joined,
+			"SET outcome = 'promoted'",
+		) {
+			t.Fatalf(
+				"paused admission recorded promoted outcome:\n%s",
+				joined,
+			)
+		}
+	})
+
+	t.Run("expansion paused outcome update failure", func(t *testing.T) {
+		testErr := errors.New("test expansion paused outcome failure")
+		tx := completeAutomaticBaseTx(
+			1,
+			0,
+			0,
+			[]string{candidateOrigin.String()},
+		)
+		tx.rowResults[0] = discoveryUnitRow{
+			values: []any{true},
+		}
+		tx.rowResults = append(
+			tx.rowResults,
+			discoveryUnitRow{
+				values: []any{false, false, false},
+			},
+		)
+		tx.execResults = append(
+			tx.execResults,
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+			discoveryUnitExecResult{err: testErr},
+		)
+
+		err := callCompleteAutomatic(
+			t,
+			ctx,
+			tx,
+			completeAutomaticClock{now: now},
+			[]AutomaticCandidateResult{successResult},
+		)
+
+		assertCompleteAutomaticError(
+			t,
+			err,
+			testErr,
+			"record expansion-paused admission",
 		)
 	})
 
@@ -716,6 +995,7 @@ func completeAutomaticBaseTx(
 			},
 		},
 		rowResults: []discoveryUnitRow{
+			{values: []any{false}},
 			{values: []any{maxPromotions, promotions}},
 			{values: []any{pendingProbes}},
 			{values: []any{batch}},

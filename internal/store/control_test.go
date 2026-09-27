@@ -29,6 +29,26 @@ func TestControlStoreMutationsCommitSuccessAudits(t *testing.T) {
 	if err := commander.SetProcessorPaused(ctx, "discovery", true, audit); err != nil {
 		t.Fatal(err)
 	}
+	if err := commander.SetAutomaticExpansionPaused(
+		ctx,
+		true,
+		controlAudit(
+			"automatic-expansion.pause",
+			"automatic-expansion",
+		),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := commander.SetAutomaticExpansionPaused(
+		ctx,
+		false,
+		controlAudit(
+			"automatic-expansion.resume",
+			"automatic-expansion",
+		),
+	); err != nil {
+		t.Fatal(err)
+	}
 	if err := commander.AddDomainAvoid(ctx, "example.com", controlAudit("domain-avoid.add", "example.com")); err != nil {
 		t.Fatal(err)
 	}
@@ -42,22 +62,36 @@ func TestControlStoreMutationsCommitSuccessAudits(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var paused, blocked bool
-	if err := pool.QueryRow(ctx, "SELECT discovery_paused FROM crawl_control WHERE singleton").Scan(&paused); err != nil {
+	var discoveryPaused, automaticExpansionPaused, blocked bool
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			discovery_paused,
+			automatic_expansion_paused
+		FROM crawl_control
+		WHERE singleton
+	`).Scan(
+		&discoveryPaused,
+		&automaticExpansionPaused,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, "SELECT crawl_blocked FROM discovery_source_state WHERE source_origin = 'https://blocked.example'").Scan(&blocked); err != nil {
 		t.Fatal(err)
 	}
-	if !paused || blocked {
-		t.Errorf("state = paused:%v blocked:%v", paused, blocked)
+	if !discoveryPaused || automaticExpansionPaused || blocked {
+		t.Errorf(
+			"state = discovery paused:%v automatic expansion paused:%v blocked:%v",
+			discoveryPaused,
+			automaticExpansionPaused,
+			blocked,
+		)
 	}
 	var count int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM operator_audit_events WHERE result = 'success'").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 5 {
-		t.Errorf("success audits = %d, want 5", count)
+	if count != 7 {
+		t.Errorf("success audits = %d, want 7", count)
 	}
 }
 
@@ -471,6 +505,9 @@ func TestControlStoreHandlesValidationAndMutationFailures(t *testing.T) {
 	if err := store.SetProcessorPaused(ctx, "verification", true, controlAudit("wrong", "verification")); err == nil {
 		t.Error("inconsistent processor audit accepted")
 	}
+	if err := store.SetAutomaticExpansionPaused(ctx, true, controlAudit("wrong", "automatic-expansion")); err == nil {
+		t.Error("inconsistent automatic expansion audit accepted")
+	}
 	for _, mutation := range []func() error{
 		func() error { return store.AddDomainAvoid(ctx, "", controlAudit("domain-avoid.add", "")) },
 		func() error {
@@ -523,6 +560,20 @@ func TestControlStoreReturnsPostgresMutationFailures(t *testing.T) {
 			setup: "DELETE FROM crawl_control",
 			call: func(store *ControlStore) error {
 				return store.SetProcessorPaused(ctx, "discovery", true, controlAudit("processor.pause", "discovery"))
+			},
+		},
+		{
+			name:  "automatic expansion update",
+			setup: "DROP TABLE crawl_control",
+			call: func(store *ControlStore) error {
+				return store.SetAutomaticExpansionPaused(ctx, true, controlAudit("automatic-expansion.pause", "automatic-expansion"))
+			},
+		},
+		{
+			name:  "automatic expansion singleton",
+			setup: "DELETE FROM crawl_control",
+			call: func(store *ControlStore) error {
+				return store.SetAutomaticExpansionPaused(ctx, true, controlAudit("automatic-expansion.pause", "automatic-expansion"))
 			},
 		},
 		{

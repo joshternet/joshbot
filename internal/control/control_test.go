@@ -13,15 +13,16 @@ import (
 const controlTestToken = "0123456789abcdef0123456789abcdef"
 
 type recordingCommander struct {
-	processor string
-	paused    bool
-	pattern   string
-	source    string
-	blocked   bool
-	audit     Audit
-	rejected  []Audit
-	err       error
-	auditErr  error
+	processor                string
+	paused                   bool
+	automaticExpansionPaused bool
+	pattern                  string
+	source                   string
+	blocked                  bool
+	audit                    Audit
+	rejected                 []Audit
+	err                      error
+	auditErr                 error
 }
 
 func (commander *recordingCommander) SetProcessorPaused(
@@ -32,6 +33,16 @@ func (commander *recordingCommander) SetProcessorPaused(
 ) error {
 	commander.processor = processor
 	commander.paused = paused
+	commander.audit = audit
+	return commander.err
+}
+
+func (commander *recordingCommander) SetAutomaticExpansionPaused(
+	_ context.Context,
+	paused bool,
+	audit Audit,
+) error {
+	commander.automaticExpansionPaused = paused
 	commander.audit = audit
 	return commander.err
 }
@@ -174,6 +185,27 @@ func TestHandlerRoutesAllMutations(t *testing.T) {
 			},
 		},
 		{
+			name: "pause automatic expansion", method: http.MethodPost,
+			path:       "/api/v1/control/automatic-expansion/pause",
+			body:       `{"reason":"amplification response"}`,
+			wantAction: "automatic-expansion.pause", wantTarget: "automatic-expansion",
+			check: func(t *testing.T, commander *recordingCommander) {
+				if !commander.automaticExpansionPaused {
+					t.Error("automatic expansion was not paused")
+				}
+			},
+		},
+		{
+			name: "resume automatic expansion", method: http.MethodPost,
+			path: "/api/v1/control/automatic-expansion/resume", body: "",
+			wantAction: "automatic-expansion.resume", wantTarget: "automatic-expansion",
+			check: func(t *testing.T, commander *recordingCommander) {
+				if commander.automaticExpansionPaused {
+					t.Error("automatic expansion remained paused")
+				}
+			},
+		},
+		{
 			name: "add avoid", method: http.MethodPost,
 			path:       "/api/v1/control/domain-avoid",
 			body:       `{"pattern":"Example.COM","reason":"abuse"}`,
@@ -234,6 +266,10 @@ func TestHandlerRoutesAllMutations(t *testing.T) {
 				(commander.audit.Actor != "console" || commander.audit.Reason != "maintenance") {
 				t.Errorf("metadata audit = %#v", commander.audit)
 			}
+			if test.name == "pause automatic expansion" &&
+				commander.audit.Reason != "amplification response" {
+				t.Errorf("automatic expansion audit = %#v", commander.audit)
+			}
 			if test.name != "pause discovery" && commander.audit.Actor != DefaultActor {
 				t.Errorf("default actor = %q", commander.audit.Actor)
 			}
@@ -256,6 +292,7 @@ func TestHandlerRejectsMalformedAuthenticatedAttemptsAndAudits(t *testing.T) {
 		{name: "oversized", path: "/api/v1/control/origins/block", contentType: "application/json", body: strings.Repeat("x", maxRequestBodyBytes+1)},
 		{name: "invalid actor", path: "/api/v1/control/processors/discovery/pause", contentType: "application/json", body: `{"actor":"bad\nactor"}`},
 		{name: "invalid reason", path: "/api/v1/control/processors/discovery/pause", contentType: "application/json", body: `{"reason":"` + strings.Repeat("x", maxReasonBytes+1) + `"}`},
+		{name: "automatic expansion invalid actor", path: "/api/v1/control/automatic-expansion/pause", contentType: "application/json", body: `{"actor":"bad\nactor"}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -299,6 +336,48 @@ func TestHandlerAuditsStoreFailureWithoutExposingDetails(t *testing.T) {
 	}
 }
 
+func TestHandlerAuditsAutomaticExpansionStoreFailure(t *testing.T) {
+	testErr := errors.New("automatic expansion unavailable")
+	commander := &recordingCommander{
+		err: testErr,
+	}
+	handler := mustControlHandler(t, commander)
+
+	response := controlRequest(
+		handler,
+		http.MethodPost,
+		"/api/v1/control/automatic-expansion/pause",
+		"Bearer "+controlTestToken,
+		`{"reason":"amplification response"}`,
+	)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf(
+			"status = %d, body = %q",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	if len(commander.rejected) != 1 {
+		t.Fatalf(
+			"rejected audits = %#v",
+			commander.rejected,
+		)
+	}
+
+	audit := commander.rejected[0]
+	if audit.Action != "automatic-expansion.pause" ||
+		audit.Target != "automatic-expansion" ||
+		audit.Result != ResultRejected ||
+		audit.Reason != "amplification response" {
+		t.Errorf(
+			"rejected audit = %#v",
+			audit,
+		)
+	}
+}
+
 func TestHandlerAuditsMethodAndRouteRejections(t *testing.T) {
 	tests := []struct {
 		method string
@@ -308,6 +387,11 @@ func TestHandlerAuditsMethodAndRouteRejections(t *testing.T) {
 		{
 			method: http.MethodGet,
 			path:   "/api/v1/control/origins/block",
+			status: http.StatusMethodNotAllowed,
+		},
+		{
+			method: http.MethodGet,
+			path:   "/api/v1/control/automatic-expansion/pause",
 			status: http.StatusMethodNotAllowed,
 		},
 		{
@@ -368,6 +452,11 @@ func TestControlValidationHelpersCoverBoundaries(t *testing.T) {
 		"/api/v1/control/processors/other/pause":         false,
 		"/api/v1/control/processors/discovery/other":     false,
 		"/api/v1/control/processors/discovery":           false,
+		"/api/v1/control/automatic-expansion/pause":      true,
+		"/api/v1/control/automatic-expansion/resume":     true,
+		"/api/v1/control/automatic-expansion/other":      false,
+		"/api/v1/control/automatic-expansion/":           false,
+		"/api/v1/control/automatic-expansion":            false,
 	} {
 		if got := knownControlPath(path); got != want {
 			t.Errorf("knownControlPath(%q) = %v, want %v", path, got, want)
@@ -400,6 +489,8 @@ func TestHandlerRejectsEveryMutationValidationPath(t *testing.T) {
 		{"processor identity", http.MethodPost, "/api/v1/control/processors/other/pause", `{}`},
 		{"processor operation", http.MethodPost, "/api/v1/control/processors/discovery/other", `{}`},
 		{"processor body", http.MethodPost, "/api/v1/control/processors/discovery/pause", `{`},
+		{"automatic expansion operation", http.MethodPost, "/api/v1/control/automatic-expansion/other", `{}`},
+		{"automatic expansion body", http.MethodPost, "/api/v1/control/automatic-expansion/pause", `{`},
 		{"add body", http.MethodPost, "/api/v1/control/domain-avoid", `{`},
 		{"add pattern", http.MethodPost, "/api/v1/control/domain-avoid", `{"pattern":"bad_pattern"}`},
 		{"remove body", http.MethodDelete, "/api/v1/control/domain-avoid/example.com", `{`},

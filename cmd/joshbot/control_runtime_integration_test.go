@@ -48,6 +48,14 @@ func (commander *controlRuntimeIntegrationCommander) SetProcessorPaused(
 	return nil
 }
 
+func (*controlRuntimeIntegrationCommander) SetAutomaticExpansionPaused(
+	context.Context,
+	bool,
+	control.Audit,
+) error {
+	return nil
+}
+
 func (*controlRuntimeIntegrationCommander) AddDomainAvoid(
 	context.Context,
 	string,

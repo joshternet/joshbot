@@ -115,6 +115,7 @@ func (reader *PostgresReader) Status(
 			SELECT
 				control.discovery_paused,
 				control.verification_paused,
+				control.automatic_expansion_paused,
 				control.updated_at,
 
 				(
@@ -188,6 +189,7 @@ func (reader *PostgresReader) Status(
 	).Scan(
 		&status.Control.DiscoveryPaused,
 		&status.Control.VerificationPaused,
+		&status.Control.AutomaticExpansionPaused,
 		&status.Control.UpdatedAt,
 
 		&status.Queue.Total,

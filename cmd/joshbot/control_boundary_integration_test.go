@@ -58,6 +58,14 @@ func (*controlBoundaryIntegrationCommander) SetProcessorPaused(
 	return nil
 }
 
+func (*controlBoundaryIntegrationCommander) SetAutomaticExpansionPaused(
+	context.Context,
+	bool,
+	control.Audit,
+) error {
+	return nil
+}
+
 func (*controlBoundaryIntegrationCommander) AddDomainAvoid(
 	context.Context,
 	string,
