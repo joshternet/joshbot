@@ -54,6 +54,7 @@ type Audit struct {
 // RecordRejected records authenticated attempts that did not mutate state.
 type Commander interface {
 	SetProcessorPaused(context.Context, string, bool, Audit) error
+	SetAutomaticExpansionPaused(context.Context, bool, Audit) error
 	AddDomainAvoid(context.Context, string, Audit) error
 	RemoveDomainAvoid(context.Context, string, Audit) error
 	SetOriginBlocked(context.Context, string, bool, Audit) error
@@ -100,6 +101,7 @@ func NewHandler(commander Commander, token string) (http.Handler, error) {
 	}
 	api := http.NewServeMux()
 	api.HandleFunc("POST /api/v1/control/processors/{processor}/{operation}", runtime.processor)
+	api.HandleFunc("POST /api/v1/control/automatic-expansion/{operation}", runtime.automaticExpansion)
 	api.HandleFunc("POST /api/v1/control/domain-avoid", runtime.addDomainAvoid)
 	api.HandleFunc("DELETE /api/v1/control/domain-avoid/{pattern}", runtime.removeDomainAvoid)
 	api.HandleFunc("POST /api/v1/control/origins/{operation}", runtime.origin)
@@ -202,6 +204,13 @@ func knownControlPath(path string) bool {
 			(parts[0] == "discovery" || parts[0] == "verification") &&
 			(parts[1] == "pause" || parts[1] == "resume")
 	}
+	if strings.HasPrefix(path, "/api/v1/control/automatic-expansion/") {
+		operation := strings.TrimPrefix(
+			path,
+			"/api/v1/control/automatic-expansion/",
+		)
+		return operation == "pause" || operation == "resume"
+	}
 	return path == "/api/v1/control/origins/block" ||
 		path == "/api/v1/control/origins/allow"
 }
@@ -227,6 +236,39 @@ func (h *handler) processor(writer http.ResponseWriter, request *http.Request) {
 	}
 	h.mutate(writer, request, audit, func(success Audit) error {
 		return h.commander.SetProcessorPaused(request.Context(), processor, operation == "pause", success)
+	})
+}
+
+func (h *handler) automaticExpansion(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	operation := request.PathValue("operation")
+	action := "automatic-expansion." + operation
+	audit := h.newAudit(
+		request,
+		action,
+		"automatic-expansion",
+	)
+	if operation != "pause" && operation != "resume" {
+		h.reject(writer, request, audit, http.StatusNotFound, "not_found")
+		return
+	}
+	var body metadata
+	if status, code := decodeOptionalJSON(writer, request, &body); status != 0 {
+		h.reject(writer, request, audit, status, code)
+		return
+	}
+	if !applyMetadata(&audit, body.Actor, body.Reason) {
+		h.reject(writer, request, audit, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	h.mutate(writer, request, audit, func(success Audit) error {
+		return h.commander.SetAutomaticExpansionPaused(
+			request.Context(),
+			operation == "pause",
+			success,
+		)
 	})
 }
 

@@ -418,6 +418,211 @@ func TestControlStoreSetProcessorPausedWithoutDatabase(
 	)
 }
 
+func TestControlStoreSetAutomaticExpansionPausedWithoutDatabase(
+	t *testing.T,
+) {
+	t.Run(
+		"pause",
+		func(t *testing.T) {
+			tx := &controlUnitTx{
+				execResults: []controlUnitExecResult{
+					{
+						tag: pgconn.NewCommandTag(
+							"UPDATE 1",
+						),
+					},
+					{
+						tag: pgconn.NewCommandTag(
+							"INSERT 0 1",
+						),
+					},
+				},
+			}
+
+			store := mustControlUnitStore(
+				t,
+				tx,
+			)
+
+			err := store.SetAutomaticExpansionPaused(
+				context.Background(),
+				true,
+				controlUnitAudit(
+					"automatic-expansion.pause",
+					"automatic-expansion",
+					control.ResultSuccess,
+				),
+			)
+			if err != nil {
+				t.Fatalf(
+					"SetAutomaticExpansionPaused() error = %v",
+					err,
+				)
+			}
+
+			if !tx.committed {
+				t.Fatal(
+					"SetAutomaticExpansionPaused() did not commit",
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"resume",
+		func(t *testing.T) {
+			tx := &controlUnitTx{
+				execResults: []controlUnitExecResult{
+					{
+						tag: pgconn.NewCommandTag(
+							"UPDATE 1",
+						),
+					},
+					{
+						tag: pgconn.NewCommandTag(
+							"INSERT 0 1",
+						),
+					},
+				},
+			}
+
+			store := mustControlUnitStore(
+				t,
+				tx,
+			)
+
+			err := store.SetAutomaticExpansionPaused(
+				context.Background(),
+				false,
+				controlUnitAudit(
+					"automatic-expansion.resume",
+					"automatic-expansion",
+					control.ResultSuccess,
+				),
+			)
+			if err != nil {
+				t.Fatalf(
+					"SetAutomaticExpansionPaused() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"inconsistent audit",
+		func(t *testing.T) {
+			store := mustControlUnitStore(
+				t,
+				&controlUnitTx{},
+			)
+
+			err := store.SetAutomaticExpansionPaused(
+				context.Background(),
+				true,
+				controlUnitAudit(
+					"automatic-expansion.resume",
+					"automatic-expansion",
+					control.ResultSuccess,
+				),
+			)
+
+			if err == nil {
+				t.Fatal(
+					"SetAutomaticExpansionPaused() error = nil",
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"update failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test automatic expansion update failure",
+			)
+
+			tx := &controlUnitTx{
+				execResults: []controlUnitExecResult{
+					{
+						err: testErr,
+					},
+				},
+			}
+
+			store := mustControlUnitStore(
+				t,
+				tx,
+			)
+
+			err := store.SetAutomaticExpansionPaused(
+				context.Background(),
+				true,
+				controlUnitAudit(
+					"automatic-expansion.pause",
+					"automatic-expansion",
+					control.ResultSuccess,
+				),
+			)
+
+			if !errors.Is(
+				err,
+				testErr,
+			) ||
+				!strings.Contains(
+					err.Error(),
+					"set automatic expansion state",
+				) {
+				t.Fatalf(
+					"SetAutomaticExpansionPaused() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"singleton unavailable",
+		func(t *testing.T) {
+			tx := &controlUnitTx{
+				execResults: []controlUnitExecResult{
+					{
+						tag: pgconn.NewCommandTag(
+							"UPDATE 0",
+						),
+					},
+				},
+			}
+
+			store := mustControlUnitStore(
+				t,
+				tx,
+			)
+
+			err := store.SetAutomaticExpansionPaused(
+				context.Background(),
+				true,
+				controlUnitAudit(
+					"automatic-expansion.pause",
+					"automatic-expansion",
+					control.ResultSuccess,
+				),
+			)
+
+			if err == nil ||
+				!strings.Contains(
+					err.Error(),
+					"singleton unavailable",
+				) {
+				t.Fatalf(
+					"SetAutomaticExpansionPaused() error = %v",
+					err,
+				)
+			}
+		},
+	)
+}
+
 func TestControlStoreAddDomainAvoidWithoutDatabase(
 	t *testing.T,
 ) {
@@ -1437,8 +1642,9 @@ func TestControlStoreValidateWithoutDatabase(
 		context.Canceled,
 	) {
 		t.Fatalf(
-			"validate(canceled) error = %v",
+			"validate(canceled) error = %v, want %v",
 			err,
+			context.Canceled,
 		)
 	}
 
@@ -1449,8 +1655,9 @@ func TestControlStoreValidateWithoutDatabase(
 		errPoolUnavailable,
 	) {
 		t.Fatalf(
-			"validate(nil pool) error = %v",
+			"validate(nil pool) error = %v, want %v",
 			err,
+			errPoolUnavailable,
 		)
 	}
 

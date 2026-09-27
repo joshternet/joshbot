@@ -34,9 +34,10 @@ var (
 
 // ControlStatus is the persistent operator-controlled processor state.
 type ControlStatus struct {
-	DiscoveryPaused    bool      `json:"discovery_paused"`
-	VerificationPaused bool      `json:"verification_paused"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	DiscoveryPaused          bool      `json:"discovery_paused"`
+	VerificationPaused       bool      `json:"verification_paused"`
+	AutomaticExpansionPaused bool      `json:"automatic_expansion_paused"`
+	UpdatedAt                time.Time `json:"updated_at"`
 }
 
 // BackpressureStatus describes the bounded automatic-discovery queue state.
@@ -737,6 +738,22 @@ func (h *handler) metrics(
 		"joshbot_verification_paused %d\n",
 		metricBool(
 			status.Control.VerificationPaused,
+		),
+	)
+
+	_, _ = fmt.Fprintln(
+		writer,
+		"# HELP joshbot_automatic_expansion_paused Whether automatic crawl-source expansion is administratively paused.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_automatic_expansion_paused gauge",
+	)
+	_, _ = fmt.Fprintf(
+		writer,
+		"joshbot_automatic_expansion_paused %d\n",
+		metricBool(
+			status.Control.AutomaticExpansionPaused,
 		),
 	)
 

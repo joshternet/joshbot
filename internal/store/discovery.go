@@ -1046,6 +1046,10 @@ func (s *DiscoveryStore) AdmitAutomaticCandidates(
 
 // CompleteAutomaticCandidates persists typed resolution decisions before
 // applying automatic-admission budgets.
+//
+// When automatic expansion is paused, candidate verification can continue,
+// but otherwise promotable candidates remain deferred instead of becoming
+// automatic crawl sources.
 func (s *DiscoveryStore) CompleteAutomaticCandidates(
 	ctx context.Context,
 	runID discovery.CrawlRunID,
@@ -1088,6 +1092,16 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 			automaticAdmissionAdvisoryLockKey,
 		); err != nil {
 			return fmt.Errorf("store: lock automatic admission: %w", err)
+		}
+
+		var automaticExpansionPaused bool
+		if err := tx.QueryRow(ctx, `
+			SELECT automatic_expansion_paused
+			FROM crawl_control
+			WHERE singleton
+			FOR SHARE
+		`).Scan(&automaticExpansionPaused); err != nil {
+			return fmt.Errorf("store: read automatic expansion control: %w", err)
 		}
 
 		var maxPromotions, promotions int
@@ -1250,7 +1264,27 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 				queueExists = true
 				pendingProbes++
 			}
-			if !queueExists || promotions >= maxPromotions {
+			if !queueExists {
+				if _, err := tx.Exec(ctx, `
+					UPDATE crawl_run_automatic_admission_batches
+					SET outcome = 'capacity_deferred'
+					WHERE admission_run_id = $1 AND candidate_origin = $2
+				`, int64(runID), rawOrigin); err != nil {
+					return fmt.Errorf("record capacity-deferred admission: %w", err)
+				}
+				continue
+			}
+			if automaticExpansionPaused {
+				if _, err := tx.Exec(ctx, `
+					UPDATE crawl_run_automatic_admission_batches
+					SET outcome = 'expansion_paused'
+					WHERE admission_run_id = $1 AND candidate_origin = $2
+				`, int64(runID), rawOrigin); err != nil {
+					return fmt.Errorf("record expansion-paused admission: %w", err)
+				}
+				continue
+			}
+			if promotions >= maxPromotions {
 				if _, err := tx.Exec(ctx, `
 					UPDATE crawl_run_automatic_admission_batches
 					SET outcome = 'capacity_deferred'

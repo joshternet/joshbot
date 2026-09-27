@@ -295,6 +295,12 @@ JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS
 
 Automatic crawling is disabled unless explicitly enabled.
 
+When automatic crawling is enabled, operators can pause automatic expansion at
+runtime without pausing discovery or verification. Curated seeds and verified
+sources remain eligible for discovery, candidate verification can continue,
+and new automatic source claims and promotions remain paused until the operator
+resumes expansion.
+
 The pending-probe limit provides backpressure between discovery and declaration
 verification. This prevents discovery from producing verification work faster
 than the verification queue can reasonably absorb.
@@ -384,8 +390,8 @@ Queue events include transitions such as:
 - completed;
 - removed.
 
-JoshBot also persists discovery and verification pause state and service
-heartbeats.
+JoshBot also persists discovery, verification, and automatic-expansion pause
+state and service heartbeats.
 
 This operational data makes queue pressure, worker activity, discovery
 activity, and automatic-crawl backpressure observable without changing the
@@ -488,6 +494,7 @@ reporting token never authorizes control.
 ```text
 GET /healthz
 POST /api/v1/control/processors/{discovery|verification}/{pause|resume}
+POST /api/v1/control/automatic-expansion/{pause|resume}
 POST /api/v1/control/domain-avoid
 DELETE /api/v1/control/domain-avoid/{pattern}
 POST /api/v1/control/origins/block
@@ -497,6 +504,13 @@ POST /api/v1/control/origins/allow
 Authenticated attempts are durably audited. Successful mutations and their
 success audits commit atomically, while rejected attempts are audited after
 rollback. Responses never include token, reason, or database error details.
+
+The automatic-expansion pause is independent from the discovery processor
+pause. It prevents automatic-only source claims and new automatic promotions
+while allowing curated seeds, verified sources, and verification work to
+continue. Paused candidates retain their evidence and can be reconsidered
+after expansion resumes.
+
 Exact-origin block intent is stored independently from derived domain-avoid
 policy, so removing a rule restores eligible automatic sources while retaining
 explicit blocks and other matching rules.
@@ -509,6 +523,7 @@ The current metric families are:
 ```text
 joshbot_discovery_paused
 joshbot_verification_paused
+joshbot_automatic_expansion_paused
 joshbot_automatic_crawl_enabled
 joshbot_backpressure_active
 joshbot_pending_probes
@@ -589,7 +604,7 @@ JoshBot stores semantic and operational data including:
 - first and latest candidate discovery times;
 - bounded crawl-run history;
 - sanitized ordered page-attempt telemetry;
-- discovery and verification pause state;
+- discovery, verification, and automatic-expansion pause state;
 - service heartbeats;
 - applied database migration metadata.
 

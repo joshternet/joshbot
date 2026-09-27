@@ -203,7 +203,8 @@ Its responsibilities include:
 - discovery-source eligibility;
 - curated crawl seeds;
 - automatic-admission batches and retry state;
-- operator pause, domain-avoid, and exact-origin block state;
+- operator processor-pause, automatic-expansion-pause, domain-avoid, and
+  exact-origin block state;
 - append-only operator audit events;
 - bounded crawl and page-attempt telemetry;
 - service heartbeats;
@@ -402,8 +403,8 @@ promotion limit. Overflow remains unbatched durable evidence for a later crawl
 run. Each allocated origin then receives a fresh all-address netguard
 resolution. Transient resolution failures receive up to three immediate
 attempts and a durable due time; unsafe addresses are retained as evidence but
-recorded as network-rejected. Capacity, policy, and transient deferrals do not
-erase the candidate or provenance.
+recorded as network-rejected. Capacity, policy, transient, and
+automatic-expansion-pause deferrals do not erase the candidate or provenance.
 
 The automatic-source classification remains private operational state, is
 deduplicated by canonical origin, and never changes participant semantics.
@@ -416,6 +417,16 @@ pending-probe high-water mark, automatic sources remain stored but are not
 claimed until workers drain the queue. Curated seeds and verified participants
 remain independently eligible. The high-water mark controls outstanding work;
 it does not drop candidates or limit recursive discovery over time.
+
+Automatic expansion also has an independent durable operator pause. While this
+pause is active, automatic-only sources are excluded from new discovery claims
+and otherwise promotable candidates receive the durable `expansion_paused`
+admission outcome instead of becoming automatic sources. Curated seeds,
+independently verified sources, candidate evidence, provenance, and verification
+work continue. Because `expansion_paused` is nonterminal, a candidate may be
+allocated again by a later admission run after the operator resumes expansion.
+The pause is therefore distinct from both the discovery processor pause and
+queue-pressure backpressure.
 
 Discovery source selection uses an expiring lease separate from completion
 state. Claiming advances `lease_generation` and sets `lease_expires_at` without
@@ -509,6 +520,6 @@ read-only role.
 The recovery smoke test restores into a fresh isolated PostgreSQL instance,
 checks role boundaries and migration records, verifies persisted operational
 state, and rebuilds byte-identical public output. The current schema contains
-fourteen embedded migrations, numbered `0001` through `0014`, including
-`0014_clear_ephemeral_service_heartbeats.sql`. Recovery never
-restores into the configured production database.
+eighteen embedded migrations, numbered `0001` through `0018`, including
+`0018_automatic_expansion_control.sql`. Recovery never restores into the
+configured production database.

@@ -542,6 +542,29 @@ func TestCompleteAutomaticCandidatesHandlesPolicyExistingAndCapacityFailures(t *
 			`,
 			want: "record capacity-deferred admission",
 		},
+		{
+			name: "promotion budget outcome",
+			setup: func(t *testing.T, pool *pgxpool.Pool, _ discovery.Candidate) {
+				t.Helper()
+				if _, err := pool.Exec(ctx, `
+					UPDATE crawl_runs
+					SET automatic_promotions = max_automatic_promotions;
+					CREATE FUNCTION reject_promotion_budget_outcome() RETURNS trigger
+					LANGUAGE plpgsql AS $$
+					BEGIN RAISE EXCEPTION 'reject promotion budget outcome'; END $$;
+					CREATE TRIGGER reject_promotion_budget_outcome
+						BEFORE UPDATE ON crawl_run_automatic_admission_batches
+						FOR EACH ROW EXECUTE FUNCTION reject_promotion_budget_outcome()
+				`, pgx.QueryExecModeSimpleProtocol); err != nil {
+					t.Fatal(err)
+				}
+			},
+			cleanup: `
+				DROP TRIGGER reject_promotion_budget_outcome ON crawl_run_automatic_admission_batches;
+				DROP FUNCTION reject_promotion_budget_outcome()
+			`,
+			want: "record capacity-deferred admission",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -571,6 +594,12 @@ func TestCompleteAutomaticCandidatesHandlesDatabaseStages(t *testing.T) {
 		category retry.Category
 		want     string
 	}{
+		{
+			name:    "read expansion control",
+			setup:   "ALTER TABLE crawl_control RENAME TO crawl_control_unavailable",
+			cleanup: "ALTER TABLE crawl_control_unavailable RENAME TO crawl_control",
+			want:    "read automatic expansion control",
+		},
 		{
 			name:    "read run",
 			setup:   "ALTER TABLE crawl_runs RENAME TO crawl_runs_unavailable",
@@ -740,6 +769,33 @@ func TestCompleteAutomaticCandidatesHandlesDatabaseStages(t *testing.T) {
 				DROP FUNCTION reject_promoted_outcome()
 			`,
 			want: "record promoted admission",
+		},
+		{
+			name: "record expansion paused",
+			setup: `
+				UPDATE crawl_control
+				SET automatic_expansion_paused = true
+				WHERE singleton;
+				CREATE FUNCTION reject_expansion_paused() RETURNS trigger
+				LANGUAGE plpgsql AS $$
+				BEGIN
+					IF NEW.outcome = 'expansion_paused' THEN
+						RAISE EXCEPTION 'reject expansion paused';
+					END IF;
+					RETURN NEW;
+				END $$;
+				CREATE TRIGGER reject_expansion_paused
+					BEFORE UPDATE ON crawl_run_automatic_admission_batches
+					FOR EACH ROW EXECUTE FUNCTION reject_expansion_paused()
+			`,
+			cleanup: `
+				DROP TRIGGER reject_expansion_paused ON crawl_run_automatic_admission_batches;
+				DROP FUNCTION reject_expansion_paused();
+				UPDATE crawl_control
+				SET automatic_expansion_paused = false
+				WHERE singleton
+			`,
+			want: "record expansion-paused admission",
 		},
 		{
 			name: "update promotion count",

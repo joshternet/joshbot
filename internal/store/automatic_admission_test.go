@@ -875,6 +875,162 @@ func TestAutomaticAdmissionRechecksExactBlockPolicy(t *testing.T) {
 	}
 }
 
+func TestAutomaticAdmissionDefersPromotionWhenRunBudgetIsSpent(t *testing.T) {
+	ctx := context.Background()
+	pool, store, runID, candidate := automaticCompletionFixture(t)
+	if _, err := pool.Exec(ctx, `
+		UPDATE crawl_runs
+		SET automatic_promotions = max_automatic_promotions
+		WHERE id = $1
+	`, int64(runID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAutomaticCandidates(ctx, runID, []AutomaticCandidateResult{{
+		Candidate: candidate,
+	}}); err != nil {
+		t.Fatalf("budget-spent completion error = %v", err)
+	}
+
+	var outcome string
+	var queued bool
+	var automatic int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			batch.outcome,
+			EXISTS (
+				SELECT 1
+				FROM verification_queue
+				WHERE origin = $2 AND mode = 'probe'
+			),
+			(
+				SELECT count(*)
+				FROM discovery_source_state
+				WHERE source_origin = $2
+					AND automatically_discovered
+			)
+		FROM crawl_run_automatic_admission_batches AS batch
+		WHERE batch.admission_run_id = $1
+			AND batch.candidate_origin = $2
+	`, int64(runID), candidate.Origin.String()).Scan(
+		&outcome,
+		&queued,
+		&automatic,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "capacity_deferred" || !queued || automatic != 0 {
+		t.Fatalf(
+			"budget-spent admission = outcome:%s queued:%t automatic:%d, want capacity_deferred/true/0",
+			outcome,
+			queued,
+			automatic,
+		)
+	}
+}
+
+func TestAutomaticAdmissionPauseDefersPromotionUntilResume(t *testing.T) {
+	ctx := context.Background()
+	pool, store, runID, candidate := automaticCompletionFixture(t)
+	if _, err := pool.Exec(ctx, `
+		UPDATE crawl_control
+		SET automatic_expansion_paused = true
+		WHERE singleton
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAutomaticCandidates(ctx, runID, []AutomaticCandidateResult{{
+		Candidate: candidate,
+	}}); err != nil {
+		t.Fatalf("paused completion error = %v", err)
+	}
+
+	var outcome string
+	var queued bool
+	var automatic int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			batch.outcome,
+			EXISTS (
+				SELECT 1
+				FROM verification_queue
+				WHERE origin = $2 AND mode = 'probe'
+			),
+			(
+				SELECT count(*)
+				FROM discovery_source_state
+				WHERE source_origin = $2
+					AND automatically_discovered
+			)
+		FROM crawl_run_automatic_admission_batches AS batch
+		WHERE batch.admission_run_id = $1
+			AND batch.candidate_origin = $2
+	`, int64(runID), candidate.Origin.String()).Scan(
+		&outcome,
+		&queued,
+		&automatic,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "expansion_paused" || !queued || automatic != 0 {
+		t.Fatalf(
+			"paused admission = outcome:%s queued:%t automatic:%d, want expansion_paused/true/0",
+			outcome,
+			queued,
+			automatic,
+		)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE crawl_control
+		SET automatic_expansion_paused = false
+		WHERE singleton
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	source := mustStoreOrigin(t, "https://source.example")
+	secondRun := beginAutomaticAdmissionRun(t, store, source, 1)
+	pending, err := store.PendingAutomaticCandidates(ctx, secondRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Origin != candidate.Origin {
+		t.Fatalf("resumed pending candidates = %#v, want the paused candidate", pending)
+	}
+	if err := store.CompleteAutomaticCandidates(ctx, secondRun, []AutomaticCandidateResult{{
+		Candidate: pending[0],
+	}}); err != nil {
+		t.Fatalf("resumed completion error = %v", err)
+	}
+
+	var resumedOutcome string
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			batch.outcome,
+			(
+				SELECT count(*)
+				FROM discovery_source_state
+				WHERE source_origin = $2
+					AND automatically_discovered
+			)
+		FROM crawl_run_automatic_admission_batches AS batch
+		WHERE batch.admission_run_id = $1
+			AND batch.candidate_origin = $2
+	`, int64(secondRun), candidate.Origin.String()).Scan(
+		&resumedOutcome,
+		&automatic,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if resumedOutcome != "promoted" || automatic != 1 {
+		t.Fatalf(
+			"resumed admission = outcome:%s automatic:%d, want promoted/1",
+			resumedOutcome,
+			automatic,
+		)
+	}
+}
+
 func newAutomaticAdmissionStore(
 	t *testing.T,
 	pool *pgxpool.Pool,

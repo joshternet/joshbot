@@ -978,3 +978,122 @@ func discoveryLeaseIntegrationStringsEqual(
 
 	return *left == *right
 }
+
+func TestDiscoverySourceLeasePauseKeepsSeedsAndVerifiedOrigins(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newStoreTestPool(t)
+	now := queueTestTime()
+
+	automatic := mustStoreOrigin(t, "https://a-auto.example")
+	seed := mustStoreOrigin(t, "https://b-seed.example")
+	verified := seedDiscoveryTestSource(
+		t,
+		pool,
+		"https://c-verified.example",
+		now,
+	)
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO discovery_source_state (
+			source_origin,
+			automatically_discovered
+		) VALUES ($1, true)
+	`, automatic.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	discoveryStore, err := NewDiscoveryStoreWithAutomaticCrawling(
+		pool,
+		AutomaticCrawlConfig{
+			Enabled:          true,
+			MaxPendingProbes: 10,
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"NewDiscoveryStoreWithAutomaticCrawling() error = %v",
+			err,
+		)
+	}
+
+	if err := discoveryStore.AddCrawlSeed(ctx, seed); err != nil {
+		t.Fatalf("AddCrawlSeed() error = %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE crawl_control
+		SET automatic_expansion_paused = true
+		WHERE singleton
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	first, found, err := discoveryStore.ClaimDiscoverySourceLease(
+		ctx,
+		time.Hour,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatalf(
+			"seed ClaimDiscoverySourceLease() error = %v",
+			err,
+		)
+	}
+	if !found || first.Origin.String() != seed.String() {
+		t.Fatalf(
+			"seed claim = found:%t origin:%q, want true/%s",
+			found,
+			first.Origin.String(),
+			seed.String(),
+		)
+	}
+
+	second, found, err := discoveryStore.ClaimDiscoverySourceLease(
+		ctx,
+		time.Hour,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatalf(
+			"verified ClaimDiscoverySourceLease() error = %v",
+			err,
+		)
+	}
+	if !found || second.Origin.String() != verified.String() {
+		t.Fatalf(
+			"verified claim = found:%t origin:%q, want true/%s",
+			found,
+			second.Origin.String(),
+			verified.String(),
+		)
+	}
+
+	_, found, err = discoveryStore.ClaimDiscoverySourceLease(
+		ctx,
+		time.Hour,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatalf(
+			"automatic ClaimDiscoverySourceLease() error = %v",
+			err,
+		)
+	}
+	if found {
+		t.Fatal("automatic-only source was claimed while expansion is paused")
+	}
+
+	var claimed bool
+	if err := pool.QueryRow(ctx, `
+		SELECT lease_expires_at IS NOT NULL
+		FROM discovery_source_state
+		WHERE source_origin = $1
+	`, automatic.String()).Scan(&claimed); err != nil {
+		t.Fatal(err)
+	}
+	if claimed {
+		t.Fatal("automatic-only source received a discovery lease")
+	}
+}

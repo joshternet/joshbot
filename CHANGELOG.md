@@ -6,6 +6,18 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Operators can pause automatic expansion without pausing discovery or
+  verification. Curated seeds and verified origins stay eligible for discovery
+  claims, candidate verification continues, and new automatic source claims
+  and promotions stay paused until expansion resumes. The durable flag is
+  `crawl_control.automatic_expansion_paused`, changed through
+  `POST /api/v1/control/automatic-expansion/{pause|resume}`, and visible on
+  status and `joshbot_automatic_expansion_paused` (#78).
+- The embedded schema now contains eighteen migrations, `0001` through
+  `0018`, including `0018_automatic_expansion_control.sql`.
+
 ## [1.1.0] - 2026-09-21
 
 ### Added

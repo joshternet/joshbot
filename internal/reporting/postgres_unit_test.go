@@ -103,6 +103,7 @@ func TestPostgresReaderStatusWithoutDatabase(
 				values: []any{
 					true,
 					false,
+					true,
 					now,
 					int64(9),
 					int64(3),
@@ -156,7 +157,8 @@ func TestPostgresReaderStatusWithoutDatabase(
 	}
 
 	if !status.Control.DiscoveryPaused ||
-		status.Control.VerificationPaused {
+		status.Control.VerificationPaused ||
+		!status.Control.AutomaticExpansionPaused {
 		t.Errorf(
 			"control = %#v",
 			status.Control,
@@ -241,6 +243,7 @@ func TestPostgresReaderStatusFailuresWithoutDatabase(
 					rowResults: []fakeRow{
 						{
 							values: []any{
+								false,
 								false,
 								false,
 								now,

@@ -86,19 +86,36 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 				)
 			}
 
-			var paused bool
+			var (
+				discoveryPaused          bool
+				automaticExpansionPaused bool
+			)
 			if err := tx.QueryRow(
 				ctx,
-				"SELECT discovery_paused FROM crawl_control WHERE singleton",
-			).Scan(&paused); err != nil {
+				`
+					SELECT
+						discovery_paused,
+						automatic_expansion_paused
+					FROM crawl_control
+					WHERE singleton
+				`,
+			).Scan(
+				&discoveryPaused,
+				&automaticExpansionPaused,
+			); err != nil {
 				return fmt.Errorf(
 					"store: read crawl control: %w",
 					err,
 				)
 			}
-			if paused {
+
+			if discoveryPaused {
 				return nil
 			}
+
+			automaticCrawlEnabled :=
+				s.automatic.Enabled &&
+					!automaticExpansionPaused
 
 			var storedOrigin string
 			scanErr := tx.QueryRow(
@@ -282,7 +299,7 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 				`,
 				now,
 				interval.Seconds(),
-				s.automatic.Enabled,
+				automaticCrawlEnabled,
 				s.automatic.maxPendingProbes(),
 				expiresAt,
 			).Scan(

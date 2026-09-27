@@ -435,6 +435,7 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 					{
 						values: []any{
 							true,
+							false,
 						},
 					},
 				},
@@ -477,6 +478,87 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 	)
 
 	t.Run(
+		"automatic expansion paused",
+		func(t *testing.T) {
+			baseTx := &discoveryPolicyUnitTx{
+				execResults: []discoveryUnitExecResult{
+					{},
+				},
+				rowResults: []discoveryUnitRow{
+					{
+						values: []any{
+							false,
+							true,
+						},
+					},
+					{
+						err: pgx.ErrNoRows,
+					},
+				},
+			}
+			tx := &discoveryLeaseCaptureTx{
+				discoveryPolicyUnitTx: baseTx,
+			}
+
+			store, err := newDiscoveryStoreWithConfig(
+				discoveryPolicyDatabase(tx),
+				claimDiscoveryClock{
+					now: now,
+				},
+				AutomaticCrawlConfig{
+					Enabled: true,
+				},
+			)
+			if err != nil {
+				t.Fatalf(
+					"newDiscoveryStoreWithConfig() error = %v",
+					err,
+				)
+			}
+
+			lease, found, err :=
+				store.ClaimDiscoverySourceLease(
+					ctx,
+					interval,
+					leaseDuration,
+				)
+			if err != nil {
+				t.Fatalf(
+					"ClaimDiscoverySourceLease() error = %v",
+					err,
+				)
+			}
+
+			if found {
+				t.Fatal(
+					"ClaimDiscoverySourceLease() found = true, want false",
+				)
+			}
+
+			if lease != (firstLeaseZero()) {
+				t.Fatalf(
+					"ClaimDiscoverySourceLease() lease = %#v, want zero",
+					lease,
+				)
+			}
+
+			if len(tx.claimArgs) != 5 {
+				t.Fatalf(
+					"claim argument count = %d, want 5",
+					len(tx.claimArgs),
+				)
+			}
+
+			if got, ok := tx.claimArgs[2].(bool); !ok || got {
+				t.Fatalf(
+					"automatic crawl enabled argument = %#v, want false",
+					tx.claimArgs[2],
+				)
+			}
+		},
+	)
+
+	t.Run(
 		"no candidate",
 		func(t *testing.T) {
 			tx := &discoveryPolicyUnitTx{
@@ -486,6 +568,7 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				rowResults: []discoveryUnitRow{
 					{
 						values: []any{
+							false,
 							false,
 						},
 					},
@@ -546,6 +629,7 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 					{
 						values: []any{
 							false,
+							false,
 						},
 					},
 					{
@@ -602,6 +686,7 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				rowResults: []discoveryUnitRow{
 					{
 						values: []any{
+							false,
 							false,
 						},
 					},
@@ -672,6 +757,7 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				rowResults: []discoveryUnitRow{
 					{
 						values: []any{
+							false,
 							false,
 						},
 					},
@@ -752,6 +838,7 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 					{
 						values: []any{
 							false,
+							false,
 						},
 					},
 					{
@@ -768,13 +855,21 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				discoveryPolicyUnitTx: baseTx,
 			}
 
-			store := claimDiscoveryUnitStore(
-				t,
+			store, err := newDiscoveryStoreWithConfig(
 				discoveryPolicyDatabase(tx),
 				claimDiscoveryClock{
 					now: now,
 				},
+				AutomaticCrawlConfig{
+					Enabled: true,
+				},
 			)
+			if err != nil {
+				t.Fatalf(
+					"newDiscoveryStoreWithConfig() error = %v",
+					err,
+				)
+			}
 
 			lease, found, err :=
 				store.ClaimDiscoverySourceLease(
@@ -941,6 +1036,13 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 					"claim interval argument = %#v, want %v",
 					tx.claimArgs[1],
 					interval.Seconds(),
+				)
+			}
+
+			if got, ok := tx.claimArgs[2].(bool); !ok || !got {
+				t.Fatalf(
+					"automatic crawl enabled argument = %#v, want true",
+					tx.claimArgs[2],
 				)
 			}
 

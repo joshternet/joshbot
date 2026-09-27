@@ -127,6 +127,71 @@ func TestControlHTTPIntegrationPersistsMutationsAndAudits(
 		t,
 		handler,
 		http.MethodPost,
+		"/api/v1/control/automatic-expansion/pause",
+		`{"actor":"integration","reason":"pause expansion"}`,
+		http.StatusOK,
+	)
+
+	var automaticExpansionPaused bool
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT discovery_paused, automatic_expansion_paused
+		 FROM crawl_control
+		 WHERE singleton`,
+	).Scan(
+		&discoveryPaused,
+		&automaticExpansionPaused,
+	); err != nil {
+		t.Fatalf(
+			"query automatic expansion pause state: %v",
+			err,
+		)
+	}
+
+	if discoveryPaused || !automaticExpansionPaused {
+		t.Fatalf(
+			"pause state = discovery:%t expansion:%t, want false/true",
+			discoveryPaused,
+			automaticExpansionPaused,
+		)
+	}
+
+	assertControlIntegrationResponse(
+		t,
+		handler,
+		http.MethodPost,
+		"/api/v1/control/automatic-expansion/resume",
+		`{}`,
+		http.StatusOK,
+	)
+
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT discovery_paused, automatic_expansion_paused
+		 FROM crawl_control
+		 WHERE singleton`,
+	).Scan(
+		&discoveryPaused,
+		&automaticExpansionPaused,
+	); err != nil {
+		t.Fatalf(
+			"query automatic expansion resume state: %v",
+			err,
+		)
+	}
+
+	if discoveryPaused || automaticExpansionPaused {
+		t.Fatalf(
+			"resume state = discovery:%t expansion:%t, want false/false",
+			discoveryPaused,
+			automaticExpansionPaused,
+		)
+	}
+
+	assertControlIntegrationResponse(
+		t,
+		handler,
+		http.MethodPost,
 		"/api/v1/control/domain-avoid",
 		`{"pattern":"Example.COM.","reason":"integration"}`,
 		http.StatusOK,
@@ -304,9 +369,9 @@ func TestControlHTTPIntegrationPersistsMutationsAndAudits(
 		)
 	}
 
-	if successAudits != 6 {
+	if successAudits != 8 {
 		t.Errorf(
-			"successful audit count = %d, want 6",
+			"successful audit count = %d, want 8",
 			successAudits,
 		)
 	}
@@ -351,6 +416,53 @@ func TestControlHTTPIntegrationPersistsMutationsAndAudits(
 			"processor audit metadata = actor:%q reason:%q, want integration/maintenance",
 			actor,
 			reason,
+		)
+	}
+
+	var expansionTarget string
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT target, actor, reason
+		 FROM operator_audit_events
+		 WHERE action = 'automatic-expansion.pause'
+		   AND result = 'success'`,
+	).Scan(&expansionTarget, &actor, &reason); err != nil {
+		t.Fatalf(
+			"query automatic expansion pause audit: %v",
+			err,
+		)
+	}
+
+	if expansionTarget != "automatic-expansion" ||
+		actor != "integration" ||
+		reason != "pause expansion" {
+		t.Errorf(
+			"automatic expansion pause audit = target:%q actor:%q reason:%q",
+			expansionTarget,
+			actor,
+			reason,
+		)
+	}
+
+	var resumeAudits int
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT count(*)
+		 FROM operator_audit_events
+		 WHERE action = 'automatic-expansion.resume'
+		   AND target = 'automatic-expansion'
+		   AND result = 'success'`,
+	).Scan(&resumeAudits); err != nil {
+		t.Fatalf(
+			"count automatic expansion resume audits: %v",
+			err,
+		)
+	}
+
+	if resumeAudits != 1 {
+		t.Errorf(
+			"automatic expansion resume audits = %d, want 1",
+			resumeAudits,
 		)
 	}
 }

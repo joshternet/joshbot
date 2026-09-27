@@ -220,18 +220,88 @@ Canonical origin deduplication keeps repeated links from creating duplicate
 sources.
 
 Each allocated candidate receives at most three immediate resolution attempts
-when the failure is transient. Capacity, policy, and transient-network
-deferrals are durable outcomes and do not delete evidence. A candidate is
-promoted only after fresh network validation, applicable avoid/block policy,
-probe-queue capacity, and the run promotion budget all permit it.
+when the failure is transient. Capacity, policy, transient-network, and
+operator-pause deferrals are durable outcomes and do not delete evidence. A
+candidate is promoted only after fresh network validation, applicable
+avoid/block policy, probe-queue capacity, the automatic-expansion control
+state, and the run promotion budget all permit it.
+
 Automatic expansion continues across crawl generations until the operator
-disables it, blocks a source, pauses the service, or no eligible source is due.
+disables it, blocks a source, pauses automatic expansion, pauses discovery, or
+no eligible source is due.
+
 When the pending verification probe queue reaches the configured high-water
 mark, JoshBot temporarily delays automatically discovered sources while
 retaining them for later. Curated seeds and verified participants remain
 eligible, and automatic claims resume after the worker drains the probe queue.
 This backpressure bounds active verification work without imposing a lifetime
 limit on discovery.
+
+### Pausing automatic expansion
+
+Automatic expansion can be paused independently from discovery itself through
+the authenticated operator control API:
+
+```text
+POST /api/v1/control/automatic-expansion/pause
+POST /api/v1/control/automatic-expansion/resume
+```
+
+Pausing automatic expansion does not pause the discovery processor. Curated
+seeds and independently verified sources remain eligible for discovery.
+
+The pause also does not pause the verification processor. Candidate evidence
+and provenance continue to be recorded, and eligible candidates may still
+receive verification probes while automatic expansion is paused.
+
+The pause prevents two forms of automatic growth:
+
+- automatically discovered sources that are eligible only because of their
+  automatic classification are not selected for new discovery claims;
+- newly resolved candidates are not promoted into automatic crawl sources.
+
+A crawl or admission operation already in progress may complete up to the
+transaction boundary at which the pause is applied. Subsequent automatic
+claims and promotions observe the durable pause state.
+
+An otherwise promotable candidate completed while the pause is active receives
+the durable admission outcome `expansion_paused`. Its discovery evidence and
+verification work are retained. `expansion_paused` is not terminal, so the
+candidate can enter a later admission batch after automatic expansion resumes.
+
+Automatic-expansion pause is distinct from verification-queue backpressure.
+Backpressure is derived from the configured pending-probe limit and clears when
+the queue drains. Automatic-expansion pause is explicit durable operator state
+and remains active until an operator resumes it.
+
+It is also distinct from the full discovery processor pause:
+
+```text
+POST /api/v1/control/processors/discovery/pause
+POST /api/v1/control/processors/discovery/resume
+```
+
+A full discovery pause stops discovery source claims. An automatic-expansion
+pause stops automatic growth while leaving curated and verified discovery
+running.
+
+Operators can inspect the current automatic-expansion pause state through:
+
+```text
+GET /api/v1/status
+```
+
+under:
+
+```text
+control.automatic_expansion_paused
+```
+
+The same state is exposed through the authenticated metrics endpoint as:
+
+```text
+joshbot_automatic_expansion_paused
+```
 
 Operators can inspect and control the private crawl-source inventory without
 changing participation or deleting history:
@@ -290,7 +360,7 @@ JoshBot retains origin-level semantic and operational data:
   current-origin, and bounded-message state; the instance ID is a stable
   logical service slot, and `started_at` marks the process generation
   currently occupying that slot;
-- persistent discovery and verification pause state;
+- persistent discovery, verification, and automatic-expansion pause state;
 - migration metadata.
 
 This state supports retries, discovery provenance, politeness, and registry
