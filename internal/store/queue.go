@@ -682,8 +682,8 @@ func (q *Queue) CompleteVerification(
 											'reprobe'
 										)
 										AND $13::boolean
-									THEN $14
-									ELSE $5
+									THEN $14::timestamptz
+									ELSE $5::timestamptz
 								END,
 								queued.last_claimed_at +
 								make_interval(

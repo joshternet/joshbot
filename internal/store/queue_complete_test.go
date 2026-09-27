@@ -842,6 +842,126 @@ func TestQueueCompletionPreservesAuthoritativeStateForTemporaryOutcomes(
 	}
 }
 
+func TestProbeCompletionRollsBackWhenReprobeHistoryCannotBeRead(
+	t *testing.T,
+) {
+	fixture := newProbeCompletionFixture(t)
+	before := readCompletionQueueState(t, fixture)
+
+	_, err := fixture.pool.Exec(
+		fixture.ctx,
+		`
+			ALTER TABLE verification_observations
+			RENAME TO verification_observations_unavailable
+		`,
+	)
+	if err != nil {
+		t.Fatalf(
+			"rename verification observations: %v",
+			err,
+		)
+	}
+
+	fixture.queue.clock = fixedQueueClock{
+		now: fixture.lease.ClaimedAt.Add(time.Minute),
+	}
+
+	err = fixture.queue.CompleteVerification(
+		fixture.ctx,
+		fixture.lease,
+		declaration.Result{
+			Outcome: declaration.OutcomeAbsent,
+			Origin:  fixture.source,
+		},
+		time.Hour,
+	)
+	if err == nil {
+		t.Fatal(
+			"CompleteVerification() error = nil, want history query failure",
+		)
+	}
+
+	_, restoreErr := fixture.pool.Exec(
+		fixture.ctx,
+		`
+			ALTER TABLE verification_observations_unavailable
+			RENAME TO verification_observations
+		`,
+	)
+	if restoreErr != nil {
+		t.Fatalf(
+			"restore verification observations: %v",
+			restoreErr,
+		)
+	}
+
+	assertCompletionNotRecorded(t, fixture)
+	assertCompletionQueueState(
+		t,
+		readCompletionQueueState(t, fixture),
+		before,
+	)
+}
+
+func TestProbeFirstReprobeIntervalIsCapped(
+	t *testing.T,
+) {
+	fixture := newCompletionFixture(
+		t,
+		QueueConfig{
+			LeaseDuration:        10 * time.Minute,
+			MinOriginInterval:    time.Minute,
+			FirstReprobeInterval: 2 * maxReprobeInterval,
+		},
+		queueTestTime(),
+	)
+
+	_, err := fixture.pool.Exec(
+		fixture.ctx,
+		`
+			UPDATE verification_queue
+			SET mode = 'probe'
+			WHERE origin = $1
+		`,
+		fixture.source.String(),
+	)
+	if err != nil {
+		t.Fatalf("set probe mode: %v", err)
+	}
+
+	completedAt := fixture.lease.ClaimedAt.Add(time.Minute)
+	fixture.queue.clock = fixedQueueClock{
+		now: completedAt,
+	}
+
+	err = fixture.queue.CompleteVerification(
+		fixture.ctx,
+		fixture.lease,
+		declaration.Result{
+			Outcome: declaration.OutcomeAbsent,
+			Origin:  fixture.source,
+		},
+		24*time.Hour,
+	)
+	if err != nil {
+		t.Fatalf(
+			"CompleteVerification() error = %v, want nil",
+			err,
+		)
+	}
+
+	state := readCompletionQueueState(t, fixture)
+	wantAvailableAt := completedAt.Add(maxReprobeInterval)
+
+	if !state.availableAt.Equal(wantAvailableAt) {
+		t.Fatalf(
+			"available_at = %v, want capped %v",
+			state.availableAt,
+			wantAvailableAt,
+		)
+	}
+}
+
 func TestProbeMissesUseBoundedReprobeBackoff(t *testing.T) {
 	fixture := newCompletionFixture(
 		t,

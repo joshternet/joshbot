@@ -808,6 +808,15 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 	)
 	if !strings.Contains(
 		normalizedQuery,
+		"THEN $14::timestamptz ELSE $5::timestamptz END",
+	) {
+		t.Fatalf(
+			"completion reprobe availability does not explicitly use timestamptz",
+		)
+	}
+
+	if !strings.Contains(
+		normalizedQuery,
 		"leased_queue.mode IN (",
 	) ||
 		!strings.Contains(
