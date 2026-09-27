@@ -279,7 +279,9 @@ func TestNonValidProbeRetentionPolicy(t *testing.T) {
 			wantQueue: true,
 		},
 		{
-			outcome: declaration.OutcomeRobotsDenied,
+			outcome:   declaration.OutcomeRobotsDenied,
+			wantMode:  "reprobe",
+			wantQueue: true,
 		},
 		{
 			outcome:   declaration.OutcomeCrossOriginRedirect,
@@ -362,7 +364,7 @@ func TestNonValidProbeRetentionPolicy(t *testing.T) {
 						fixture,
 					)
 					wantAvailableAt := completedAt.Add(
-						24 * time.Hour,
+						defaultFirstReprobeInterval,
 					)
 
 					if !state.availableAt.Equal(
@@ -450,7 +452,9 @@ func TestAbsentProbeCanBeClaimedAndBecomeValidAfterReprobeWindow(
 		fixture.pool,
 		fixture.source.String(),
 	)
-	wantDueAt := completedAt.Add(recheckAfter)
+	wantDueAt := completedAt.Add(
+		defaultFirstReprobeInterval,
+	)
 
 	if state.mode != "reprobe" {
 		t.Fatalf(

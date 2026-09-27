@@ -17,22 +17,24 @@ const (
 	databaseURLEnvironment          = "JOSHBOT_DATABASE_URL"
 	databasePasswordFileEnvironment = "JOSHBOT_DATABASE_PASSWORD_FILE"
 
-	leaseDurationEnvironment     = "JOSHBOT_LEASE_DURATION"
-	minOriginIntervalEnvironment = "JOSHBOT_MIN_ORIGIN_INTERVAL"
-	pollIntervalEnvironment      = "JOSHBOT_POLL_INTERVAL"
-	jobTimeoutEnvironment        = "JOSHBOT_JOB_TIMEOUT"
-	completionGraceEnvironment   = "JOSHBOT_COMPLETION_GRACE"
-	recheckIntervalEnvironment   = "JOSHBOT_RECHECK_INTERVAL"
-	workerIDEnvironment          = "JOSHBOT_WORKER_ID"
-	serviceInstanceIDEnvironment = "JOSHBOT_SERVICE_INSTANCE_ID"
-	hostnameEnvironment          = "HOSTNAME"
+	leaseDurationEnvironment        = "JOSHBOT_LEASE_DURATION"
+	minOriginIntervalEnvironment    = "JOSHBOT_MIN_ORIGIN_INTERVAL"
+	firstReprobeIntervalEnvironment = "JOSHBOT_FIRST_REPROBE_INTERVAL"
+	pollIntervalEnvironment         = "JOSHBOT_POLL_INTERVAL"
+	jobTimeoutEnvironment           = "JOSHBOT_JOB_TIMEOUT"
+	completionGraceEnvironment      = "JOSHBOT_COMPLETION_GRACE"
+	recheckIntervalEnvironment      = "JOSHBOT_RECHECK_INTERVAL"
+	workerIDEnvironment             = "JOSHBOT_WORKER_ID"
+	serviceInstanceIDEnvironment    = "JOSHBOT_SERVICE_INSTANCE_ID"
+	hostnameEnvironment             = "HOSTNAME"
 
-	defaultLeaseDuration     = 5 * time.Minute
-	defaultMinOriginInterval = time.Minute
-	defaultPollInterval      = 30 * time.Second
-	defaultJobTimeout        = 2 * time.Minute
-	defaultCompletionGrace   = 30 * time.Second
-	defaultRecheckInterval   = 24 * time.Hour
+	defaultLeaseDuration        = 5 * time.Minute
+	defaultMinOriginInterval    = time.Minute
+	defaultFirstReprobeInterval = 12 * time.Hour
+	defaultPollInterval         = 30 * time.Second
+	defaultJobTimeout           = 2 * time.Minute
+	defaultCompletionGrace      = 30 * time.Second
+	defaultRecheckInterval      = 24 * time.Hour
 
 	generatedWorkerIDBytes     = 16
 	maxRuntimeWorkerIDLength   = 128
@@ -77,9 +79,19 @@ func loadQueueConfig(
 		return store.QueueConfig{}, err
 	}
 
+	firstReprobeInterval, err := positiveDurationSetting(
+		getenv,
+		firstReprobeIntervalEnvironment,
+		defaultFirstReprobeInterval,
+	)
+	if err != nil {
+		return store.QueueConfig{}, err
+	}
+
 	return store.QueueConfig{
-		LeaseDuration:     leaseDuration,
-		MinOriginInterval: minOriginInterval,
+		LeaseDuration:        leaseDuration,
+		MinOriginInterval:    minOriginInterval,
+		FirstReprobeInterval: firstReprobeInterval,
 	}, nil
 }
 

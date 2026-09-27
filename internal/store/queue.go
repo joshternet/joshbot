@@ -15,7 +15,12 @@ import (
 	"github.com/joshternet/joshbot/internal/retry"
 )
 
-const maxQueueWorkerIDLength = 128
+const (
+	maxQueueWorkerIDLength = 128
+
+	defaultFirstReprobeInterval = 12 * time.Hour
+	maxReprobeInterval          = 7 * 24 * time.Hour
+)
 
 var (
 	// ErrLeaseLost means the caller no longer has authority over queued work.
@@ -35,9 +40,10 @@ var (
 
 // QueueConfig contains the operational timing policy for a queue.
 type QueueConfig struct {
-	LeaseDuration     time.Duration
-	MinOriginInterval time.Duration
-	RetryJitter       retry.Jitter
+	LeaseDuration        time.Duration
+	MinOriginInterval    time.Duration
+	FirstReprobeInterval time.Duration
+	RetryJitter          retry.Jitter
 }
 
 // Lease is temporary authority to process one queued origin.
@@ -297,6 +303,10 @@ func (q *Queue) Claim(
 								OR last_claimed_at <= $4
 							)
 						ORDER BY
+							CASE
+								WHEN mode = 'probe' THEN 0
+								ELSE 1
+							END ASC,
 							available_at ASC,
 							origin ASC
 						FOR UPDATE SKIP LOCKED
@@ -513,9 +523,9 @@ func (q *Queue) Reschedule(
 // the active queue lease.
 //
 // Recurring work remains queued. Valid probes and reprobes become recurring.
-// Authoritative non-participation outcomes from fresh probes become delayed
-// reprobes. Transient unavailable work retains its queue mode with retry state,
-// while robots-denied fresh probes leave the queue.
+// Reprobe-eligible terminal outcomes from fresh probes, including robots-denied
+// results, become delayed reprobes. Transient unavailable work retains its
+// queue mode with retry state.
 func (q *Queue) CompleteVerification(
 	ctx context.Context,
 	lease Lease,
@@ -585,6 +595,43 @@ func (q *Queue) CompleteVerification(
 			}
 
 			requestedAvailableAt := completedAt.Add(recheckAfter).UTC()
+			reprobeAvailableAt := requestedAvailableAt
+
+			if reprobe {
+				firstReprobeInterval := q.config.FirstReprobeInterval
+				if firstReprobeInterval == 0 {
+					firstReprobeInterval = defaultFirstReprobeInterval
+				}
+
+				var priorReprobeMisses int64
+				historyErr := tx.QueryRow(
+					ctx,
+					`
+						SELECT count(*)
+						FROM verification_observations
+						WHERE origin = $1
+							AND outcome IN (
+								'absent',
+								'invalid',
+								'unsupported_version',
+								'robots_denied',
+								'cross_origin_redirect'
+							)
+					`,
+					lease.Origin.String(),
+				).Scan(&priorReprobeMisses)
+				if historyErr != nil {
+					return historyErr
+				}
+
+				reprobeAvailableAt = completedAt.Add(
+					reprobeInterval(
+						firstReprobeInterval,
+						priorReprobeMisses,
+					),
+				).UTC()
+			}
+
 			nextFailures := 0
 			if transient {
 				nextFailures = consecutiveFailures + 1
@@ -628,7 +675,16 @@ func (q *Queue) CompleteVerification(
 								ELSE queued.mode
 							END,
 							available_at = GREATEST(
-								$5,
+								CASE
+									WHEN
+										leased_queue.mode IN (
+											'probe',
+											'reprobe'
+										)
+										AND $13::boolean
+									THEN $14::timestamptz
+									ELSE $5::timestamptz
+								END,
 								queued.last_claimed_at +
 								make_interval(
 								secs =>
@@ -729,6 +785,7 @@ func (q *Queue) CompleteVerification(
 				nullableFailureCategory(transient, failureCategory),
 				transient,
 				reprobe,
+				reprobeAvailableAt,
 			)
 			if execErr != nil {
 				return execErr
@@ -769,11 +826,33 @@ func shouldReprobeOutcome(
 	case declaration.OutcomeAbsent,
 		declaration.OutcomeInvalid,
 		declaration.OutcomeUnsupportedVersion,
+		declaration.OutcomeRobotsDenied,
 		declaration.OutcomeCrossOriginRedirect:
 		return true
 	default:
 		return false
 	}
+}
+
+func reprobeInterval(
+	first time.Duration,
+	priorMisses int64,
+) time.Duration {
+	interval := first
+
+	if interval >= maxReprobeInterval {
+		return maxReprobeInterval
+	}
+
+	for attempt := int64(0); attempt < priorMisses; attempt++ {
+		if interval >= maxReprobeInterval/2 {
+			return maxReprobeInterval
+		}
+
+		interval *= 2
+	}
+
+	return interval
 }
 
 func (q *Queue) validate(ctx context.Context) error {
@@ -843,7 +922,8 @@ func (q *Queue) completionTime(
 
 func validQueueConfig(config QueueConfig) bool {
 	return config.LeaseDuration > 0 &&
-		config.MinOriginInterval > 0
+		config.MinOriginInterval > 0 &&
+		config.FirstReprobeInterval >= 0
 }
 
 func validQueueWorkerID(workerID string) bool {

@@ -91,6 +91,7 @@ services:
       JOSHBOT_JOB_TIMEOUT: ${JOSHBOT_JOB_TIMEOUT:-2m}
       JOSHBOT_COMPLETION_GRACE: ${JOSHBOT_COMPLETION_GRACE:-30s}
       JOSHBOT_RECHECK_INTERVAL: ${JOSHBOT_RECHECK_INTERVAL:-24h}
+      JOSHBOT_FIRST_REPROBE_INTERVAL: ${JOSHBOT_FIRST_REPROBE_INTERVAL:-12h}
     secrets:
       - joshbot_app_password
       - joshbot_web_bot_auth_active_private_key
