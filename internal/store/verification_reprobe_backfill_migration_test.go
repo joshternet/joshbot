@@ -536,6 +536,435 @@ func TestVerificationReprobeBackfillMigrationPreservesRecheckFloor(
 	}
 }
 
+func TestRobotsDeniedReprobeBackfillMigration(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newEmptyStoreTestPool(t)
+
+	applyVerificationReprobeSchema(t, ctx, pool)
+
+	_, err := pool.Exec(
+		ctx,
+		`
+			INSERT INTO origins (
+				origin,
+				first_observed_at
+			)
+			VALUES
+				(
+					'https://robots-old.example',
+					statement_timestamp() - interval '40 days'
+				),
+				(
+					'https://robots-new.example',
+					statement_timestamp() - interval '40 days'
+				),
+				(
+					'https://robots-then-valid.example',
+					statement_timestamp() - interval '40 days'
+				),
+				(
+					'https://robots-queued.example',
+					statement_timestamp() - interval '40 days'
+				);
+
+			INSERT INTO verification_observations (
+				origin,
+				observed_at,
+				outcome
+			)
+			VALUES
+				(
+					'https://robots-old.example',
+					statement_timestamp() - interval '30 days',
+					'robots_denied'
+				),
+				(
+					'https://robots-new.example',
+					statement_timestamp() - interval '20 days',
+					'robots_denied'
+				),
+				(
+					'https://robots-then-valid.example',
+					statement_timestamp() - interval '5 days',
+					'robots_denied'
+				),
+				(
+					'https://robots-queued.example',
+					statement_timestamp() - interval '10 days',
+					'robots_denied'
+				);
+
+			INSERT INTO verification_observations (
+				origin,
+				observed_at,
+				outcome,
+				version,
+				identity
+			)
+			VALUES (
+				'https://robots-then-valid.example',
+				statement_timestamp() - interval '1 day',
+				'valid',
+				1,
+				'affirmed'
+			);
+
+			INSERT INTO verification_queue (
+				origin,
+				available_at,
+				mode
+			)
+			VALUES (
+				'https://robots-queued.example',
+				statement_timestamp() + interval '30 days',
+				'recurring'
+			);
+		`,
+		pgx.QueryExecModeSimpleProtocol,
+	)
+	if err != nil {
+		t.Fatalf(
+			"seed robots-denied history: %v",
+			err,
+		)
+	}
+
+	var existingAvailableAt time.Time
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT available_at
+			FROM verification_queue
+			WHERE origin = 'https://robots-queued.example'
+		`,
+	).Scan(&existingAvailableAt)
+	if err != nil {
+		t.Fatalf(
+			"query existing queue row: %v",
+			err,
+		)
+	}
+
+	var migrationStarted time.Time
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT clock_timestamp()",
+	).Scan(&migrationStarted); err != nil {
+		t.Fatalf(
+			"query migration start: %v",
+			err,
+		)
+	}
+
+	applyRawStoreMigration(
+		t,
+		ctx,
+		pool,
+		"migrations/0019_backfill_robots_denied_reprobes.sql",
+	)
+
+	var migrationFinished time.Time
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT clock_timestamp()",
+	).Scan(&migrationFinished); err != nil {
+		t.Fatalf(
+			"query migration finish: %v",
+			err,
+		)
+	}
+
+	rows, err := pool.Query(
+		ctx,
+		`
+			SELECT
+				origin,
+				mode,
+				available_at
+			FROM verification_queue
+			WHERE origin IN (
+				'https://robots-old.example',
+				'https://robots-new.example'
+			)
+			ORDER BY available_at, origin
+		`,
+	)
+	if err != nil {
+		t.Fatalf("query backfilled rows: %v", err)
+	}
+	defer rows.Close()
+
+	type scheduledRow struct {
+		origin      string
+		mode        string
+		availableAt time.Time
+	}
+
+	var scheduled []scheduledRow
+	for rows.Next() {
+		var row scheduledRow
+		if err := rows.Scan(
+			&row.origin,
+			&row.mode,
+			&row.availableAt,
+		); err != nil {
+			t.Fatalf(
+				"scan backfilled row: %v",
+				err,
+			)
+		}
+		scheduled = append(scheduled, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		t.Fatalf(
+			"iterate backfilled rows: %v",
+			err,
+		)
+	}
+
+	if len(scheduled) != 2 {
+		t.Fatalf(
+			"backfilled rows = %d, want 2",
+			len(scheduled),
+		)
+	}
+
+	if scheduled[0].origin !=
+		"https://robots-old.example" {
+		t.Errorf(
+			"first origin = %q, want robots-old",
+			scheduled[0].origin,
+		)
+	}
+
+	if scheduled[1].origin !=
+		"https://robots-new.example" {
+		t.Errorf(
+			"second origin = %q, want robots-new",
+			scheduled[1].origin,
+		)
+	}
+
+	for _, row := range scheduled {
+		if row.mode != "reprobe" {
+			t.Errorf(
+				"mode for %q = %q, want reprobe",
+				row.origin,
+				row.mode,
+			)
+		}
+
+		if row.availableAt.Before(migrationStarted) {
+			t.Errorf(
+				"available_at for %q = %v, before migration",
+				row.origin,
+				row.availableAt,
+			)
+		}
+
+		if row.availableAt.After(
+			migrationFinished.Add(14 * 24 * time.Hour),
+		) {
+			t.Errorf(
+				"available_at for %q = %v, beyond 14 days",
+				row.origin,
+				row.availableAt,
+			)
+		}
+	}
+
+	if scheduled[1].availableAt.Sub(
+		scheduled[0].availableAt,
+	) < 6*24*time.Hour {
+		t.Errorf(
+			"backfill spread = %v, want about a week",
+			scheduled[1].availableAt.Sub(
+				scheduled[0].availableAt,
+			),
+		)
+	}
+
+	var changedCount int
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT count(*)
+			FROM verification_queue
+			WHERE origin =
+				'https://robots-then-valid.example'
+		`,
+	).Scan(&changedCount)
+	if err != nil {
+		t.Fatalf(
+			"query changed-origin count: %v",
+			err,
+		)
+	}
+
+	if changedCount != 0 {
+		t.Errorf(
+			"changed-origin rows = %d, want 0",
+			changedCount,
+		)
+	}
+
+	var (
+		existingMode string
+		availableAt  time.Time
+	)
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT
+				mode,
+				available_at
+			FROM verification_queue
+			WHERE origin = 'https://robots-queued.example'
+		`,
+	).Scan(
+		&existingMode,
+		&availableAt,
+	)
+	if err != nil {
+		t.Fatalf(
+			"query preserved queue row: %v",
+			err,
+		)
+	}
+
+	if existingMode != "recurring" {
+		t.Errorf(
+			"preserved mode = %q, want recurring",
+			existingMode,
+		)
+	}
+
+	if !availableAt.Equal(existingAvailableAt) {
+		t.Errorf(
+			"preserved available_at = %v, want %v",
+			availableAt,
+			existingAvailableAt,
+		)
+	}
+
+	var eventCount int
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT count(*)
+			FROM verification_queue_events
+			WHERE event = 'scheduled'
+				AND mode = 'reprobe'
+		`,
+	).Scan(&eventCount)
+	if err != nil {
+		t.Fatalf(
+			"count scheduled reprobe events: %v",
+			err,
+		)
+	}
+
+	if eventCount != 2 {
+		t.Errorf(
+			"scheduled reprobe events = %d, want 2",
+			eventCount,
+		)
+	}
+}
+
+func TestRobotsDeniedReprobeBackfillPreservesFirstReturnFloor(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newEmptyStoreTestPool(t)
+
+	applyVerificationReprobeSchema(t, ctx, pool)
+
+	var observedAt time.Time
+	err := pool.QueryRow(
+		ctx,
+		`
+			WITH inserted_origin AS (
+				INSERT INTO origins (
+					origin,
+					first_observed_at
+				)
+				VALUES (
+					'https://recent-robots.example',
+					statement_timestamp()
+				)
+			)
+			INSERT INTO verification_observations (
+				origin,
+				observed_at,
+				outcome
+			)
+			VALUES (
+				'https://recent-robots.example',
+				statement_timestamp(),
+				'robots_denied'
+			)
+			RETURNING observed_at
+		`,
+	).Scan(&observedAt)
+	if err != nil {
+		t.Fatalf(
+			"seed recent robots-denied observation: %v",
+			err,
+		)
+	}
+
+	applyRawStoreMigration(
+		t,
+		ctx,
+		pool,
+		"migrations/0019_backfill_robots_denied_reprobes.sql",
+	)
+
+	var (
+		mode        string
+		availableAt time.Time
+	)
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT
+				mode,
+				available_at
+			FROM verification_queue
+			WHERE origin = 'https://recent-robots.example'
+		`,
+	).Scan(
+		&mode,
+		&availableAt,
+	)
+	if err != nil {
+		t.Fatalf(
+			"query recent reprobe: %v",
+			err,
+		)
+	}
+
+	if mode != "reprobe" {
+		t.Errorf(
+			"mode = %q, want reprobe",
+			mode,
+		)
+	}
+
+	minimum := observedAt.Add(12 * time.Hour)
+	if availableAt.Before(minimum) {
+		t.Errorf(
+			"available_at = %v, want at or after %v",
+			availableAt,
+			minimum,
+		)
+	}
+}
+
 func applyVerificationReprobeSchema(
 	t *testing.T,
 	ctx context.Context,

@@ -47,6 +47,14 @@ func TestRuntimeConfigFailureIntegrationWorkerSettings(t *testing.T) {
 			want:   errInvalidRuntimeConfiguration,
 		},
 		{
+			name: "invalid first reprobe interval",
+			env: runtimeConfigFailureIntegrationEnvironment{
+				firstReprobeIntervalEnvironment: "0s",
+			},
+			random: strings.NewReader(strings.Repeat("x", generatedWorkerIDBytes)),
+			want:   errInvalidRuntimeConfiguration,
+		},
+		{
 			name: "invalid poll interval",
 			env: runtimeConfigFailureIntegrationEnvironment{
 				pollIntervalEnvironment: "0s",

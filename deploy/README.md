@@ -23,11 +23,13 @@ schedules future recurring work in one PostgreSQL transaction.
 
 Manually scheduled work is recurring. A discovered candidate starts as a
 one-shot probe. A valid declaration promotes the origin to recurring work.
-Absent, invalid, unsupported-version, and cross-origin results convert fresh
-probes into delayed reprobes at the configured recheck interval. Reprobes do
-not consume pending-probe backpressure capacity and become recurring if a later
-verification is valid. Transient unavailable work retains its queue mode with
-retry state, while robots-denied fresh probes leave the queue.
+Absent, invalid, unsupported-version, cross-origin, and robots-denied results
+convert fresh probes into delayed reprobes. The first reprobe defaults to 12
+hours, then repeated terminal misses back off to 24 hours, 48 hours, 96 hours,
+and finally a seven-day cap. Valid recurring origins continue using the normal
+recheck interval. Fresh probes are claimed before reprobes, and reprobes do not
+consume pending-probe backpressure capacity. Transient unavailable work retains
+its queue mode with retry state.
 
 JoshBot does not promise exactly-once network requests.
 
@@ -247,6 +249,7 @@ JOSHBOT_POLL_INTERVAL=30s
 JOSHBOT_JOB_TIMEOUT=2m
 JOSHBOT_COMPLETION_GRACE=30s
 JOSHBOT_RECHECK_INTERVAL=24h
+JOSHBOT_FIRST_REPROBE_INTERVAL=12h
 
 JOSHBOT_JOB_TIMEOUT + JOSHBOT_COMPLETION_GRACE
     < JOSHBOT_LEASE_DURATION

@@ -445,6 +445,59 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 	)
 
 	t.Run(
+		"reprobe history failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test reprobe history failure",
+			)
+
+			tx := &discoveryPolicyUnitTx{
+				rowResults: []discoveryUnitRow{
+					{
+						values: []any{
+							0,
+						},
+					},
+					{
+						err: testErr,
+					},
+				},
+			}
+
+			queue := queueSimpleDatabaseStore(
+				discoveryPolicyDatabase(tx),
+				completeVerificationClock{
+					now: now,
+				},
+			)
+
+			err := queue.CompleteVerification(
+				ctx,
+				lease,
+				declaration.Result{
+					Outcome: declaration.OutcomeAbsent,
+					Origin:  lease.Origin,
+				},
+				time.Hour,
+			)
+
+			if !errors.Is(
+				err,
+				testErr,
+			) ||
+				!strings.Contains(
+					err.Error(),
+					"store: complete verification",
+				) {
+				t.Fatalf(
+					"CompleteVerification() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
 		"completion write failure",
 		func(t *testing.T) {
 			testErr := errors.New(
@@ -661,6 +714,11 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 					0,
 				},
 			},
+			{
+				values: []any{
+					int64(0),
+				},
+			},
 		},
 		execResults: []discoveryUnitExecResult{
 			{
@@ -705,9 +763,9 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 	}
 
 	arguments := tx.execArguments[0]
-	if len(arguments) != 13 {
+	if len(arguments) != 14 {
 		t.Fatalf(
-			"completion argument count = %d, want 13",
+			"completion argument count = %d, want 14",
 			len(arguments),
 		)
 	}
@@ -717,6 +775,23 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 		t.Fatalf(
 			"reprobe argument = %#v, want true",
 			arguments[12],
+		)
+	}
+
+	reprobeAt, ok := arguments[13].(time.Time)
+	if !ok {
+		t.Fatalf(
+			"reprobe availability = %#v, want time.Time",
+			arguments[13],
+		)
+	}
+
+	wantReprobeAt := now.Add(defaultFirstReprobeInterval)
+	if !reprobeAt.Equal(wantReprobeAt) {
+		t.Fatalf(
+			"reprobe availability = %v, want %v",
+			reprobeAt,
+			wantReprobeAt,
 		)
 	}
 
@@ -741,6 +816,71 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 		) {
 		t.Fatalf(
 			"completion query does not retain existing reprobes",
+		)
+	}
+}
+
+func TestReprobeInterval(t *testing.T) {
+	tests := []struct {
+		name        string
+		first       time.Duration
+		priorMisses int64
+		want        time.Duration
+	}{
+		{
+			name:  "first attempt",
+			first: 12 * time.Hour,
+			want:  12 * time.Hour,
+		},
+		{
+			name:        "second attempt",
+			first:       12 * time.Hour,
+			priorMisses: 1,
+			want:        24 * time.Hour,
+		},
+		{
+			name:        "doubling",
+			first:       12 * time.Hour,
+			priorMisses: 3,
+			want:        96 * time.Hour,
+		},
+		{
+			name:        "caps while doubling",
+			first:       12 * time.Hour,
+			priorMisses: 4,
+			want:        maxReprobeInterval,
+		},
+		{
+			name:  "configured interval already at cap",
+			first: maxReprobeInterval,
+			want:  maxReprobeInterval,
+		},
+		{
+			name:  "configured interval above cap",
+			first: maxReprobeInterval + time.Hour,
+			want:  maxReprobeInterval,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				got := reprobeInterval(
+					test.first,
+					test.priorMisses,
+				)
+
+				if got != test.want {
+					t.Fatalf(
+						"reprobeInterval(%v, %d) = %v, want %v",
+						test.first,
+						test.priorMisses,
+						got,
+						test.want,
+					)
+				}
+			},
 		)
 	}
 }
@@ -777,6 +917,7 @@ func TestShouldReprobeOutcome(t *testing.T) {
 		{
 			name:    "robots denied",
 			outcome: declaration.OutcomeRobotsDenied,
+			want:    true,
 		},
 		{
 			name:    "cross-origin redirect",

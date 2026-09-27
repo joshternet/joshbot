@@ -376,10 +376,12 @@ JoshBot records verification queue transitions so operators can understand how
 work moves through the system.
 
 Verification work has three queue modes. Fresh discovered candidates use
-`probe`, authoritative non-participation outcomes are retained as delayed
-`reprobe` work, and verified participants use `recurring`. Reprobe work is
-scheduled at the normal recheck interval but does not consume pending-probe
-backpressure capacity.
+`probe`, terminal misses are retained as delayed `reprobe` work, and verified
+participants use `recurring`. The first reprobe defaults to 12 hours. Repeated
+terminal misses back off to 24 hours, 48 hours, 96 hours, then a seven-day cap.
+Valid recurring origins continue using the normal recheck interval. Fresh
+probes are claimed ahead of reprobes so catch-up work cannot stall new
+discovery, and reprobes do not consume pending-probe backpressure capacity.
 
 Queue events include transitions such as:
 

@@ -200,6 +200,42 @@ func TestQueueSchemaHasClaimIndexAndNoOriginForeignKey(
 		)
 	}
 
+	var priorityIndexDefinition string
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT indexdef
+			FROM pg_indexes
+			WHERE schemaname = current_schema()
+				AND tablename = 'verification_queue'
+				AND indexname =
+					'verification_queue_claim_priority_idx'
+		`,
+	).Scan(&priorityIndexDefinition)
+	if err != nil {
+		t.Fatalf(
+			"query claim priority index: %v",
+			err,
+		)
+	}
+
+	for _, fragment := range []string{
+		"CASE",
+		"available_at",
+		"origin",
+	} {
+		if !strings.Contains(
+			priorityIndexDefinition,
+			fragment,
+		) {
+			t.Errorf(
+				"claim priority index = %q, want %q",
+				priorityIndexDefinition,
+				fragment,
+			)
+		}
+	}
+
 	var foreignKeyCount int
 	err = pool.QueryRow(
 		ctx,

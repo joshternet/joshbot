@@ -842,6 +842,133 @@ func TestQueueCompletionPreservesAuthoritativeStateForTemporaryOutcomes(
 	}
 }
 
+func TestProbeMissesUseBoundedReprobeBackoff(t *testing.T) {
+	fixture := newCompletionFixture(
+		t,
+		QueueConfig{
+			LeaseDuration:        10 * time.Minute,
+			MinOriginInterval:    time.Minute,
+			FirstReprobeInterval: 12 * time.Hour,
+		},
+		queueTestTime(),
+	)
+
+	_, err := fixture.pool.Exec(
+		fixture.ctx,
+		`
+			UPDATE verification_queue
+			SET mode = 'probe'
+			WHERE origin = $1
+		`,
+		fixture.source.String(),
+	)
+	if err != nil {
+		t.Fatalf("set probe mode: %v", err)
+	}
+
+	wantDelays := []time.Duration{
+		12 * time.Hour,
+		24 * time.Hour,
+		48 * time.Hour,
+		96 * time.Hour,
+		7 * 24 * time.Hour,
+		7 * 24 * time.Hour,
+	}
+
+	for index, wantDelay := range wantDelays {
+		completedAt := fixture.lease.ClaimedAt.Add(time.Minute)
+		fixture.queue.clock = fixedQueueClock{
+			now: completedAt,
+		}
+
+		outcome := declaration.OutcomeAbsent
+		if index == 0 {
+			outcome = declaration.OutcomeRobotsDenied
+		}
+
+		err := fixture.queue.CompleteVerification(
+			fixture.ctx,
+			fixture.lease,
+			declaration.Result{
+				Outcome: outcome,
+				Origin:  fixture.source,
+			},
+			24*time.Hour,
+		)
+		if err != nil {
+			t.Fatalf(
+				"CompleteVerification(%d) error = %v",
+				index,
+				err,
+			)
+		}
+
+		state := readCompletionQueueState(t, fixture)
+		wantAvailableAt := completedAt.Add(wantDelay)
+		if !state.availableAt.Equal(wantAvailableAt) {
+			t.Fatalf(
+				"completion %d available_at = %v, want %v",
+				index,
+				state.availableAt,
+				wantAvailableAt,
+			)
+		}
+
+		var mode string
+		if err := fixture.pool.QueryRow(
+			fixture.ctx,
+			`
+				SELECT mode
+				FROM verification_queue
+				WHERE origin = $1
+			`,
+			fixture.source.String(),
+		).Scan(&mode); err != nil {
+			t.Fatalf(
+				"query completion %d mode: %v",
+				index,
+				err,
+			)
+		}
+
+		if mode != "reprobe" {
+			t.Fatalf(
+				"completion %d mode = %q, want reprobe",
+				index,
+				mode,
+			)
+		}
+
+		if index == len(wantDelays)-1 {
+			break
+		}
+
+		fixture.queue.clock = fixedQueueClock{
+			now: wantAvailableAt,
+		}
+
+		lease, found, err := fixture.queue.Claim(
+			fixture.ctx,
+			"worker-a",
+		)
+		if err != nil {
+			t.Fatalf(
+				"Claim(%d) error = %v",
+				index,
+				err,
+			)
+		}
+		if !found {
+			t.Fatalf(
+				"Claim(%d) found = false, want true",
+				index,
+			)
+		}
+
+		fixture.lease = lease
+	}
+}
+
 func TestUnavailableProbePersistsRetryAndSuccessResetsStreak(t *testing.T) {
 	fixture := newCompletionFixture(t, QueueConfig{
 		LeaseDuration: 10 * time.Minute, MinOriginInterval: time.Minute,

@@ -347,15 +347,17 @@ approved paths so a new client cannot quietly bypass the crawler boundary.
 Manually scheduled work is recurring.
 
 A discovered candidate begins as a one-shot probe. A valid declaration
-promotes it to recurring work. An absent, invalid, unsupported-version, or
-cross-origin result converts a fresh probe into delayed reprobe work so the
-origin can be checked again at the configured recheck interval. Reprobe work
-does not consume pending-probe backpressure capacity. A later valid reprobe
-promotes the origin to recurring work.
+promotes it to recurring work. An absent, invalid, unsupported-version,
+cross-origin, or robots-denied result converts a fresh probe into delayed
+reprobe work. The first reprobe defaults to 12 hours. Repeated terminal misses
+back off to 24 hours, 48 hours, 96 hours, then a seven-day cap. Fresh probes
+are claimed before reprobes so catch-up work cannot stall newly discovered
+origins. Reprobe work does not consume pending-probe backpressure capacity. A
+later valid reprobe promotes the origin to recurring work, while already-valid
+recurring origins continue using the normal recheck interval.
 
 A transient unavailable outcome retains the current queue mode with durable
-retry state. A robots-denied fresh probe leaves the queue, while existing
-recurring or reprobe work remains scheduled.
+retry state.
 
 Transient work receives at most three immediate verification attempts per
 claim. Consecutive transient failures persist their category and next due time

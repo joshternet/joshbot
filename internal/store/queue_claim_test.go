@@ -310,6 +310,119 @@ func TestQueueClaimsEligibleWorkInDeterministicOrder(
 	}
 }
 
+func TestQueueClaimsFreshProbeBeforeOtherDueWork(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newStoreTestPool(t)
+	now := queueTestTime()
+	queue := newFixedQueue(
+		t,
+		pool,
+		QueueConfig{
+			LeaseDuration:     10 * time.Minute,
+			MinOriginInterval: time.Minute,
+		},
+		now,
+	)
+
+	reprobe := mustStoreOrigin(
+		t,
+		"https://reprobe.example",
+	)
+	recurring := mustStoreOrigin(
+		t,
+		"https://recurring.example",
+	)
+	probe := mustStoreOrigin(
+		t,
+		"https://probe.example",
+	)
+
+	work := []struct {
+		source      string
+		availableAt time.Time
+		mode        string
+	}{
+		{
+			source:      reprobe.String(),
+			availableAt: now.Add(-3 * time.Hour),
+			mode:        "reprobe",
+		},
+		{
+			source:      recurring.String(),
+			availableAt: now.Add(-2 * time.Hour),
+			mode:        "recurring",
+		},
+		{
+			source:      probe.String(),
+			availableAt: now.Add(-time.Hour),
+			mode:        "probe",
+		},
+	}
+
+	for _, item := range work {
+		_, err := pool.Exec(
+			ctx,
+			`
+				INSERT INTO verification_queue (
+					origin,
+					available_at,
+					mode
+				)
+				VALUES ($1, $2, $3)
+			`,
+			item.source,
+			item.availableAt,
+			item.mode,
+		)
+		if err != nil {
+			t.Fatalf(
+				"insert %s queue work: %v",
+				item.mode,
+				err,
+			)
+		}
+	}
+
+	lease, found, err := queue.Claim(
+		ctx,
+		"worker-a",
+	)
+	if err != nil {
+		t.Fatalf("first Claim() error = %v", err)
+	}
+	if !found {
+		t.Fatal("first Claim() found = false, want true")
+	}
+	if lease.Origin != probe {
+		t.Fatalf(
+			"first Claim() origin = %q, want fresh probe %q",
+			lease.Origin,
+			probe,
+		)
+	}
+
+	lease, found, err = queue.Claim(
+		ctx,
+		"worker-b",
+	)
+	if err != nil {
+		t.Fatalf("second Claim() error = %v", err)
+	}
+	if !found {
+		t.Fatal("second Claim() found = false, want true")
+	}
+
+	if lease.Origin != reprobe {
+		t.Fatalf(
+			"second Claim() origin = %q, want oldest remaining work %q",
+			lease.Origin,
+			reprobe,
+		)
+	}
+}
+
 func TestQueueUsesPostgreSQLClock(t *testing.T) {
 	ctx := context.Background()
 	pool := newStoreTestPool(t)
