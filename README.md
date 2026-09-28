@@ -640,6 +640,9 @@ Private crawl-source state, queue state, crawl history, discovery timing,
 leases, service heartbeats, backpressure state, and candidate provenance do
 not appear in the public registry.
 
+The complete table-by-table retention policy is documented in
+[Data retention](docs/retention.md).
+
 ## Public registry
 
 A database-connected runtime projects verified participant state into a

@@ -348,7 +348,8 @@ JoshBot retains origin-level semantic and operational data:
 - declaration observations;
 - effective participant state;
 - verification queue and lease state;
-- durable verification queue transitions;
+- recent verification queue transition history;
+- compact per-origin reprobe scheduling state;
 - bounded crawl-run summaries and stop reasons;
 - sanitized requested and final page URLs without queries, fragments, or credentials;
 - per-page HTTP status, duration, response size, media type, redirect count,
@@ -383,11 +384,29 @@ JoshBot does not retain:
 - the in-memory frontier;
 - arbitrary page content.
 
-Operational crawl telemetry is retained for 30 days by default and is removed
-on discovery service startup according to
-`JOSHBOT_CRAWL_TELEMETRY_RETENTION`. Verification observations, queue history,
-origin relationships, and participation state use their existing durable
-retention rules.
+Completed crawl telemetry uses its existing configurable retention policy,
+which defaults to 30 days. Eligible completed telemetry is removed when the
+discovery service performs startup maintenance according to
+`JOSHBOT_CRAWL_TELEMETRY_RETENTION`.
+
+Verification observations and verification queue-event history use a fixed
+30-day operational-history threshold. Records older than that threshold become
+eligible for removal when discovery startup maintenance runs. Cleanup always
+preserves the newest observation and newest authoritative declaration
+observation for each origin, even when those protected rows are older than
+the threshold.
+
+Durable participation metadata, compact reprobe scheduling state, current
+verification queue state, discovery candidates, discovery provenance, source
+state, and operator audit history are retained independently from disposable
+verification history.
+
+Service heartbeat slots whose latest update is older than the 30-day
+operational-history threshold become eligible for removal during the same
+startup maintenance.
+
+The complete table-by-table policy is documented in
+[Data retention](retention.md).
 
 Promotion telemetry is attributed to the first crawl run that discovered each
 link candidate. `promotions_admitted` counts candidates eventually promoted

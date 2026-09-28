@@ -367,25 +367,29 @@ docker compose --env-file deploy/.env run --rm tools source block https://exampl
 docker compose --env-file deploy/.env run --rm tools source allow https://example.org
 ```
 
-Blocking preserves seed status, discovery provenance, and verification history.
+Blocking preserves seed status and discovery provenance. It does not erase
+durable participation facts. Disposable verification observation history
+continues to follow the policy documented in
+[`docs/retention.md`](../docs/retention.md).
 
-JoshBot stores bounded crawl-run and per-page operational telemetry for the
-configured retention period. Stored telemetry does not retain page bodies,
-response headers, cookies, fragments, or query values.
+JoshBot stores bounded crawl-run and per-page operational telemetry according
+to the configured crawl-telemetry retention policy. Stored telemetry does not
+retain page bodies, response headers, cookies, fragments, or query values.
 
 The database also keeps processor heartbeats, persistent pause state, and
 verification queue transitions so reporting clients can show current work,
-history, stop reasons, and backpressure without access to response bodies or
-crawler secrets.
+recent history, stop reasons, and backpressure without access to response
+bodies or crawler secrets.
 
 Worker and discovery heartbeats are written every five seconds after an
 initial `starting` record. Their applicable states are `running`, `idle`,
 `paused`, `failed`, and `stopping`. Current-origin and machine-readable message
 fields are bounded; heartbeat persistence failures are logged when the failure
 first becomes active. A restart of the same logical slot replaces that row,
-including `started_at`. A slot that stops heartbeating stays visible so a
-reporting client can mark the current service stale. Heartbeat rows are
-current service status, not a history of previous process identities.
+including `started_at`. A stopped slot remains available for reporting until
+its latest update passes the 30-day operational-history threshold and a later
+discovery startup maintenance pass removes it. Heartbeat rows are current
+service status, not a history of previous process identities.
 
 ## Web Bot Auth signing identity
 
@@ -1004,9 +1008,13 @@ internal/store/migrations/
 
 Never edit an applied migration. Add a forward migration.
 
-The current image embeds fourteen migrations, numbered `0001` through `0014`.
-A backup restored from the current schema must retain fourteen
-`schema_migrations` rows.
+The image embeds every SQL migration present under
+`internal/store/migrations/`.
+
+Deployment and recovery validation derive the expected migration count from
+those files instead of maintaining a separate hard-coded schema count. A
+restored database must retain the same `schema_migrations` metadata as its
+source database.
 
 Run migrations manually:
 
@@ -1250,7 +1258,9 @@ The backup service:
 - atomically renames the file to `.dump`;
 - removes partial output after failure.
 
-Retention is a separate destructive policy decision and is not automated.
+Backup-file retention is a separate destructive policy decision and is not
+automated. Database operational-history retention is documented separately in
+[`docs/retention.md`](../docs/retention.md).
 
 ## Recovery validation
 
@@ -1263,8 +1273,9 @@ dedicated Ed25519 Web Bot Auth signing key, initializes PostgreSQL, applies
 migrations, checks role and secret-mount boundaries, creates known state,
 exports the registry, backs up PostgreSQL, restores into a fresh isolated
 instance, verifies restored state, rebuilds byte-identical output, and cleans
-its resources. For the current schema, both the source and restored databases
-must contain fourteen migration records.
+its resources. The smoke test derives the expected migration count from
+`internal/store/migrations/`, verifies that count in the source database, and
+requires the restored database to retain the same migration metadata.
 
 It never restores into the configured production database.
 

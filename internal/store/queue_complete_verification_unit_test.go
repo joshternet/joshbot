@@ -445,59 +445,6 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 	)
 
 	t.Run(
-		"reprobe history failure",
-		func(t *testing.T) {
-			testErr := errors.New(
-				"test reprobe history failure",
-			)
-
-			tx := &discoveryPolicyUnitTx{
-				rowResults: []discoveryUnitRow{
-					{
-						values: []any{
-							0,
-						},
-					},
-					{
-						err: testErr,
-					},
-				},
-			}
-
-			queue := queueSimpleDatabaseStore(
-				discoveryPolicyDatabase(tx),
-				completeVerificationClock{
-					now: now,
-				},
-			)
-
-			err := queue.CompleteVerification(
-				ctx,
-				lease,
-				declaration.Result{
-					Outcome: declaration.OutcomeAbsent,
-					Origin:  lease.Origin,
-				},
-				time.Hour,
-			)
-
-			if !errors.Is(
-				err,
-				testErr,
-			) ||
-				!strings.Contains(
-					err.Error(),
-					"store: complete verification",
-				) {
-				t.Fatalf(
-					"CompleteVerification() error = %v",
-					err,
-				)
-			}
-		},
-	)
-
-	t.Run(
 		"completion write failure",
 		func(t *testing.T) {
 			testErr := errors.New(
@@ -509,6 +456,7 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 					{
 						values: []any{
 							0,
+							int64(0),
 						},
 					},
 				},
@@ -557,6 +505,7 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 					{
 						values: []any{
 							0,
+							int64(0),
 						},
 					},
 				},
@@ -604,6 +553,7 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 					{
 						values: []any{
 							0,
+							int64(0),
 						},
 					},
 				},
@@ -652,6 +602,7 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 					{
 						values: []any{
 							0,
+							int64(0),
 						},
 					},
 				},
@@ -712,11 +663,7 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 			{
 				values: []any{
 					0,
-				},
-			},
-			{
-				values: []any{
-					int64(0),
+					int64(2),
 				},
 			},
 		},
@@ -786,7 +733,9 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 		)
 	}
 
-	wantReprobeAt := now.Add(defaultFirstReprobeInterval)
+	wantReprobeAt := now.Add(
+		48 * time.Hour,
+	)
 	if !reprobeAt.Equal(wantReprobeAt) {
 		t.Fatalf(
 			"reprobe availability = %v, want %v",

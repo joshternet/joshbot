@@ -808,6 +808,28 @@ VALUES (
     1,
     'affirmed'
 );
+
+INSERT INTO verification_reprobe_state (
+    origin,
+    miss_count
+)
+VALUES (
+    'https://example.com',
+    3
+);
+
+INSERT INTO verification_reprobe_state (
+    origin,
+    miss_count
+)
+VALUES (
+    'https://example.com',
+    1
+)
+ON CONFLICT (origin) DO UPDATE
+SET miss_count =
+    verification_reprobe_state.miss_count +
+    EXCLUDED.miss_count;
 SQL
 
 observation_state="$(
@@ -842,6 +864,33 @@ assert_equal \
   'https://example.com|valid|1|affirmed' \
   "known source observation"
 
+reprobe_state="$(
+  compose exec \
+    -T \
+    postgres \
+    psql \
+    --username joshbot_admin \
+    --dbname joshbot \
+    --no-align \
+    --tuples-only \
+    --quiet \
+    --command="
+      SET ROLE joshbot_app;
+
+      SELECT
+        origin
+        || '|'
+        || miss_count::text
+      FROM verification_reprobe_state
+      WHERE origin = 'https://example.com';
+    "
+)"
+
+assert_equal \
+  "$reprobe_state" \
+  'https://example.com|4' \
+  "durable reprobe state"
+
 migration_count="$(
   compose exec \
     -T \
@@ -863,7 +912,7 @@ assert_equal \
   "$expected_migration_count" \
   "source migration count"
 
-pass "known observation, effective state, queue state, and migrations exist"
+pass "known observation, reprobe state, effective state, queue state, and migrations exist"
 
 compose \
   --profile tools \
@@ -1661,6 +1710,30 @@ assert_equal \
   'https://example.com|valid|1|affirmed' \
   "restored observation state"
 
+restored_reprobe_state="$(
+  docker exec \
+    "$restore_container" \
+    psql \
+    --username "$restore_user" \
+    --dbname "$restore_database" \
+    --no-align \
+    --tuples-only \
+    --quiet \
+    --command="
+      SELECT
+        origin
+        || '|'
+        || miss_count::text
+      FROM verification_reprobe_state
+      WHERE origin = 'https://example.com';
+    "
+)"
+
+assert_equal \
+  "$restored_reprobe_state" \
+  'https://example.com|4' \
+  "restored durable reprobe state"
+
 restored_effective_state="$(
   docker exec \
     "$restore_container" \
@@ -1795,7 +1868,7 @@ assert_equal \
   "$migration_count" \
   "restored migration count"
 
-pass "known observation, discovery provenance, queue modes, and migration metadata survived restore"
+pass "known observation, reprobe state, discovery provenance, queue modes, and migration metadata survived restore"
 
 docker run \
   --rm \

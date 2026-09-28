@@ -576,17 +576,24 @@ func (q *Queue) CompleteVerification(
 				return clockErr
 			}
 
-			var consecutiveFailures int
+			var (
+				consecutiveFailures int
+				priorReprobeMisses  int64
+			)
 			lockErr := tx.QueryRow(ctx, `
-				SELECT consecutive_failures
-				FROM verification_queue
-				WHERE origin = $1
-					AND lease_owner = $2
-					AND lease_generation = $3
-					AND lease_expires_at > $4
-				FOR UPDATE
+				SELECT
+					queued.consecutive_failures,
+					COALESCE(reprobe_state.miss_count, 0)
+				FROM verification_queue AS queued
+				LEFT JOIN verification_reprobe_state AS reprobe_state
+					ON reprobe_state.origin = queued.origin
+				WHERE queued.origin = $1
+					AND queued.lease_owner = $2
+					AND queued.lease_generation = $3
+					AND queued.lease_expires_at > $4
+				FOR UPDATE OF queued
 			`, lease.Origin.String(), lease.WorkerID, lease.Generation, completedAt).
-				Scan(&consecutiveFailures)
+				Scan(&consecutiveFailures, &priorReprobeMisses)
 			if errors.Is(lockErr, pgx.ErrNoRows) {
 				return ErrLeaseLost
 			}
@@ -601,27 +608,6 @@ func (q *Queue) CompleteVerification(
 				firstReprobeInterval := q.config.FirstReprobeInterval
 				if firstReprobeInterval == 0 {
 					firstReprobeInterval = defaultFirstReprobeInterval
-				}
-
-				var priorReprobeMisses int64
-				historyErr := tx.QueryRow(
-					ctx,
-					`
-						SELECT count(*)
-						FROM verification_observations
-						WHERE origin = $1
-							AND outcome IN (
-								'absent',
-								'invalid',
-								'unsupported_version',
-								'robots_denied',
-								'cross_origin_redirect'
-							)
-					`,
-					lease.Origin.String(),
-				).Scan(&priorReprobeMisses)
-				if historyErr != nil {
-					return historyErr
 				}
 
 				reprobeAvailableAt = completedAt.Add(
@@ -856,6 +842,25 @@ func (q *Queue) CompleteVerification(
 									origins.latest_declaration_check_outcome
 							END
 						RETURNING origin
+					),
+					recorded_reprobe_state AS (
+						INSERT INTO verification_reprobe_state (
+							origin,
+							miss_count
+						)
+						SELECT
+							recorded_origin.origin,
+							CASE
+								WHEN $13::boolean
+								THEN 1
+								ELSE 0
+							END
+						FROM recorded_origin
+						ON CONFLICT (origin) DO UPDATE
+						SET miss_count =
+							verification_reprobe_state.miss_count +
+							EXCLUDED.miss_count
+						RETURNING origin
 					)
 					INSERT INTO verification_observations (
 						origin,
@@ -865,12 +870,12 @@ func (q *Queue) CompleteVerification(
 						identity
 					)
 					SELECT
-						origin,
+						recorded_reprobe_state.origin,
 						$4::timestamptz,
 						$7::text,
 						$8::integer,
 						$9::text
-					FROM recorded_origin
+					FROM recorded_reprobe_state
 				`,
 				lease.Origin.String(),
 				lease.WorkerID,
