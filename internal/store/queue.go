@@ -744,117 +744,17 @@ func (q *Queue) CompleteVerification(
 					recorded_origin AS (
 						INSERT INTO origins (
 							origin,
-							first_observed_at,
-							first_participated_at,
-							initial_declaration_version,
-							initial_declaration_identity,
-							latest_declaration_check_at,
-							latest_declaration_check_outcome
+							first_observed_at
 						)
 						SELECT
 							origin,
-							$4::timestamptz,
-							CASE
-								WHEN $7::text = 'valid'
-								THEN $4::timestamptz
-								ELSE NULL
-							END,
-							CASE
-								WHEN $7::text = 'valid'
-								THEN $8::integer
-								ELSE NULL
-							END,
-							CASE
-								WHEN $7::text = 'valid'
-								THEN $9::text
-								ELSE NULL
-							END,
-							$4::timestamptz,
-							$7::text
+							$4
 						FROM completed_queue
 						ON CONFLICT (origin) DO UPDATE
-						SET
-							first_observed_at = LEAST(
-								origins.first_observed_at,
-								EXCLUDED.first_observed_at
-							),
-							first_participated_at = CASE
-								WHEN
-									EXCLUDED.first_participated_at
-										IS NOT NULL
-									AND (
-										origins.first_participated_at
-											IS NULL
-										OR
-										EXCLUDED.first_participated_at
-											<
-										origins.first_participated_at
-									)
-								THEN
-									EXCLUDED.first_participated_at
-								ELSE
-									origins.first_participated_at
-							END,
-							initial_declaration_version = CASE
-								WHEN
-									EXCLUDED.first_participated_at
-										IS NOT NULL
-									AND (
-										origins.first_participated_at
-											IS NULL
-										OR
-										EXCLUDED.first_participated_at
-											<
-										origins.first_participated_at
-									)
-								THEN
-									EXCLUDED.initial_declaration_version
-								ELSE
-									origins.initial_declaration_version
-							END,
-							initial_declaration_identity = CASE
-								WHEN
-									EXCLUDED.first_participated_at
-										IS NOT NULL
-									AND (
-										origins.first_participated_at
-											IS NULL
-										OR
-										EXCLUDED.first_participated_at
-											<
-										origins.first_participated_at
-									)
-								THEN
-									EXCLUDED.initial_declaration_identity
-								ELSE
-									origins.initial_declaration_identity
-							END,
-							latest_declaration_check_at = CASE
-								WHEN
-									origins.latest_declaration_check_at
-										IS NULL
-									OR
-									EXCLUDED.latest_declaration_check_at
-										>=
-									origins.latest_declaration_check_at
-								THEN
-									EXCLUDED.latest_declaration_check_at
-								ELSE
-									origins.latest_declaration_check_at
-							END,
-							latest_declaration_check_outcome = CASE
-								WHEN
-									origins.latest_declaration_check_at
-										IS NULL
-									OR
-									EXCLUDED.latest_declaration_check_at
-										>=
-									origins.latest_declaration_check_at
-								THEN
-									EXCLUDED.latest_declaration_check_outcome
-								ELSE
-									origins.latest_declaration_check_outcome
-							END
+						SET first_observed_at = LEAST(
+							origins.first_observed_at,
+							EXCLUDED.first_observed_at
+						)
 						RETURNING origin
 					)
 					INSERT INTO verification_observations (
@@ -866,10 +766,10 @@ func (q *Queue) CompleteVerification(
 					)
 					SELECT
 						origin,
-						$4::timestamptz,
-						$7::text,
-						$8::integer,
-						$9::text
+						$4,
+						$7,
+						$8,
+						$9
 					FROM recorded_origin
 				`,
 				lease.Origin.String(),

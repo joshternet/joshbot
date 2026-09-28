@@ -742,11 +742,6 @@ func TestStoreSchemaPersistsOnlySemanticColumns(
 			want: []string{
 				"origin",
 				"first_observed_at",
-				"first_participated_at",
-				"initial_declaration_version",
-				"initial_declaration_identity",
-				"latest_declaration_check_at",
-				"latest_declaration_check_outcome",
 			},
 		},
 		{
