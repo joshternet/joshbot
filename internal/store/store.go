@@ -157,7 +157,8 @@ func (s *Store) RecordVerification(
 							$2::timestamptz AS observed_at,
 							$3::text AS outcome,
 							$4::integer AS version,
-							$5::text AS identity
+							$5::text AS identity,
+							$6::boolean AS reprobe_miss
 					),
 					recorded_origin AS (
 						INSERT INTO origins (
@@ -274,6 +275,26 @@ func (s *Store) RecordVerification(
 									origins.latest_declaration_check_outcome
 							END
 						RETURNING origin
+					),
+					recorded_reprobe_state AS (
+						INSERT INTO verification_reprobe_state (
+							origin,
+							miss_count
+						)
+						SELECT
+							recorded_origin.origin,
+							CASE
+								WHEN input.reprobe_miss
+								THEN 1
+								ELSE 0
+							END
+						FROM recorded_origin
+						CROSS JOIN input
+						ON CONFLICT (origin) DO UPDATE
+						SET miss_count =
+							verification_reprobe_state.miss_count +
+							EXCLUDED.miss_count
+						RETURNING origin
 					)
 					INSERT INTO verification_observations (
 						origin,
@@ -283,12 +304,12 @@ func (s *Store) RecordVerification(
 						identity
 					)
 					SELECT
-						recorded_origin.origin,
+						recorded_reprobe_state.origin,
 						input.observed_at,
 						input.outcome,
 						input.version,
 						input.identity
-					FROM recorded_origin
+					FROM recorded_reprobe_state
 					CROSS JOIN input
 				`,
 				result.Origin.String(),
@@ -296,6 +317,7 @@ func (s *Store) RecordVerification(
 				outcomeToText[result.Outcome],
 				version,
 				identity,
+				shouldReprobeOutcome(result.Outcome),
 			)
 
 			return execErr

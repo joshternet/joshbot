@@ -32,6 +32,7 @@ func TestReleaseDocumentation(t *testing.T) {
 	t.Run("crawler identity", testDocumentedCrawlerIdentity)
 	t.Run("architecture", testDocumentedArchitecture)
 	t.Run("repository routes", testRepositoryRoutes)
+	t.Run("retention", testDocumentedRetention)
 	t.Run("release version", testDocumentedReleaseVersion)
 	t.Run("current language", testCurrentReleaseLanguage)
 	t.Run("license", testReleaseLicense)
@@ -49,6 +50,7 @@ func testRequiredReleaseFiles(t *testing.T) {
 		"SECURITY.md",
 		"docs/architecture.md",
 		"docs/crawler.md",
+		"docs/retention.md",
 		"deploy/README.md",
 		"deploy/.env.example",
 		".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -342,6 +344,65 @@ func testRepositoryRoutes(t *testing.T) {
 	}
 }
 
+func testDocumentedRetention(t *testing.T) {
+	t.Helper()
+
+	readme := readDocumentationFile(
+		t,
+		"README.md",
+	)
+	crawler := readDocumentationFile(
+		t,
+		"docs/crawler.md",
+	)
+	retention := readDocumentationFile(
+		t,
+		"docs/retention.md",
+	)
+
+	requireDocumentationText(
+		t,
+		"README.md",
+		readme,
+		"[Data retention](docs/retention.md)",
+	)
+	requireDocumentationText(
+		t,
+		"docs/crawler.md",
+		crawler,
+		"[Data retention](retention.md)",
+	)
+
+	for _, expected := range []string{
+		"origins",
+		"verification_observations",
+		"verification_queue",
+		"verification_queue_events",
+		"verification_reprobe_state",
+		"crawl_control",
+		"crawl_runs",
+		"crawl_page_attempts",
+		"crawl_service_heartbeats",
+		"crawl_domain_avoid_rules",
+		"crawl_run_discovery_candidates",
+		"crawl_run_automatic_admission_batches",
+		"discovery_candidates",
+		"discovery_edges",
+		"discovery_source_state",
+		"operator_audit_events",
+		"schema_migrations",
+		"first_participated_at",
+		"30 days",
+	} {
+		requireDocumentationText(
+			t,
+			"docs/retention.md",
+			retention,
+			expected,
+		)
+	}
+}
+
 func testDocumentedReleaseVersion(t *testing.T) {
 	t.Helper()
 
@@ -392,6 +453,7 @@ func testCurrentReleaseLanguage(t *testing.T) {
 		"docs/architecture.md",
 		"docs/crawler.md",
 		"docs/production-soak.md",
+		"docs/retention.md",
 		"deploy/README.md",
 		"deploy/.env.example",
 		"compose.yaml",

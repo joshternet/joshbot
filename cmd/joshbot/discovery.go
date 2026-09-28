@@ -17,6 +17,8 @@ import (
 	"github.com/joshternet/joshbot/internal/store"
 )
 
+const operationalHistoryRetention = 30 * 24 * time.Hour
+
 var (
 	errDiscoveryRunnerUnavailable = errors.New(
 		"discovery runner is unavailable",
@@ -379,6 +381,16 @@ func (operations runtimeOperations) discover(
 				if err != nil {
 					return fmt.Errorf(
 						"construct discovery heartbeat store: %w",
+						err,
+					)
+				}
+
+				if err := heartbeatStorage.PurgeOperationalHistory(
+					ctx,
+					operationalHistoryRetention,
+				); err != nil {
+					return fmt.Errorf(
+						"purge operational history: %w",
 						err,
 					)
 				}

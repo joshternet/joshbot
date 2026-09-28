@@ -15,6 +15,7 @@ const serviceHeartbeatInterval = 5 * time.Second
 
 type heartbeatStore interface {
 	UpsertServiceHeartbeat(context.Context, store.ServiceHeartbeat) error
+	PurgeOperationalHistory(context.Context, time.Duration) error
 	PurgeCrawlTelemetry(context.Context, time.Duration) (int64, error)
 }
 

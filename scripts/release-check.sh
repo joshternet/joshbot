@@ -147,6 +147,7 @@ CODE_OF_CONDUCT.md
 SECURITY.md
 docs/architecture.md
 docs/crawler.md
+docs/retention.md
 deploy/README.md
 deploy/.env.example
 .github/ISSUE_TEMPLATE/bug_report.yml
@@ -278,6 +279,11 @@ require_text \
 
 require_text \
 	README.md \
+	'[Data retention](docs/retention.md)' \
+	'README links to the retention documentation'
+
+require_text \
+	README.md \
 	'[Contributing](CONTRIBUTING.md)' \
 	'README links to the contribution guide'
 
@@ -404,6 +410,26 @@ require_text \
 	docs/crawler.md \
 	'JOSHBOT_CRAWL_REDIRECT_LIMIT' \
 	'crawler documentation covers redirect limits'
+
+require_text \
+	docs/crawler.md \
+	'[Data retention](retention.md)' \
+	'crawler documentation links to the retention policy'
+
+require_text \
+	docs/retention.md \
+	'verification_observations' \
+	'retention documentation covers verification observations'
+
+require_text \
+	docs/retention.md \
+	'verification_queue_events' \
+	'retention documentation covers verification queue events'
+
+require_text \
+	docs/retention.md \
+	'operator_audit_events' \
+	'retention documentation preserves operator audit history'
 
 require_text \
 	.github/ISSUE_TEMPLATE/crawler_report.yml \
