@@ -19,6 +19,8 @@ import (
 	"github.com/joshternet/joshbot/internal/retry"
 )
 
+const testDiscoveryLeaseOwner = "discovery-test"
+
 var errDiscoveryTestClock = errors.New(
 	"test discovery clock failure",
 )
@@ -71,10 +73,11 @@ func TestDiscoveryStoreClaimsEveryValidIdentity(
 
 			lease, found, err :=
 				discoveryStore.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					24*time.Hour,
-					time.Minute,
-				)
+					time.Minute)
+
 			if err != nil {
 				t.Fatalf(
 					"ClaimDiscoverySourceLease() error = %v, want nil",
@@ -159,12 +162,13 @@ func TestDiscoveryStoreExcludesNonVerifiedSources(
 					)
 
 				lease, found, err :=
-					discoveryStore.
-						ClaimDiscoverySourceLease(
-							ctx,
-							time.Hour,
-							time.Minute,
-						)
+					discoveryStore.ClaimDiscoverySourceLease(
+
+						ctx, testDiscoveryLeaseOwner,
+
+						time.Hour,
+						time.Minute)
+
 				if err != nil {
 					t.Fatalf(
 						"ClaimDiscoverySourceLease() error = %v, want nil",
@@ -213,10 +217,11 @@ func TestDiscoveryStoreExcludesNonVerifiedSources(
 
 		lease, found, err :=
 			discoveryStore.ClaimDiscoverySourceLease(
-				ctx,
+				ctx, testDiscoveryLeaseOwner,
+
 				time.Hour,
-				time.Minute,
-			)
+				time.Minute)
+
 		if err != nil {
 			t.Fatalf(
 				"ClaimDiscoverySourceLease() error = %v, want nil",
@@ -278,12 +283,13 @@ func TestDiscoveryStoreTemporaryFailuresPreserveEligibility(
 					)
 
 				lease, found, err :=
-					discoveryStore.
-						ClaimDiscoverySourceLease(
-							ctx,
-							time.Hour,
-							time.Minute,
-						)
+					discoveryStore.ClaimDiscoverySourceLease(
+
+						ctx, testDiscoveryLeaseOwner,
+
+						time.Hour,
+						time.Minute)
+
 				if err != nil {
 					t.Fatalf(
 						"ClaimDiscoverySourceLease() error = %v, want nil",
@@ -351,10 +357,11 @@ func TestDiscoveryStoreUsesDeterministicClaimOrderAndInterval(
 
 	lease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			time.Minute,
-		)
+			time.Minute)
+
 	if err != nil {
 		t.Fatalf("first claim error = %v", err)
 	}
@@ -377,10 +384,11 @@ func TestDiscoveryStoreUsesDeterministicClaimOrderAndInterval(
 
 	lease, found, err =
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			time.Minute,
-		)
+			time.Minute)
+
 	if err != nil {
 		t.Fatalf("second claim error = %v", err)
 	}
@@ -403,10 +411,11 @@ func TestDiscoveryStoreUsesDeterministicClaimOrderAndInterval(
 
 	lease, found, err =
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			time.Minute,
-		)
+			time.Minute)
+
 	if err != nil {
 		t.Fatalf("early claim error = %v", err)
 	}
@@ -420,10 +429,11 @@ func TestDiscoveryStoreUsesDeterministicClaimOrderAndInterval(
 
 	lease, found, err =
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			time.Minute,
-		)
+			time.Minute)
+
 	if err != nil {
 		t.Fatalf("due claim error = %v", err)
 	}
@@ -467,10 +477,11 @@ func TestDiscoveryStoreUsesPostgreSQLClock(
 	before := time.Now().UTC()
 	lease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			time.Hour,
-			time.Minute,
-		)
+			time.Minute)
+
 	after := time.Now().UTC()
 	if err != nil {
 		t.Fatalf(
@@ -569,12 +580,13 @@ func TestDiscoveryStoreConcurrentClaimsReturnOneSource(
 			<-start
 
 			lease, found, err :=
-				discoveryStore.
-					ClaimDiscoverySourceLease(
-						ctx,
-						time.Hour,
-						time.Minute,
-					)
+				discoveryStore.ClaimDiscoverySourceLease(
+
+					ctx, testDiscoveryLeaseOwner,
+
+					time.Hour,
+					time.Minute)
+
 			results <- discoveryTestClaim{
 				source: lease.Origin,
 				found:  found,
@@ -672,10 +684,11 @@ func TestDiscoveryStoreSkipsLockedSource(
 
 	lease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			time.Hour,
-			time.Minute,
-		)
+			time.Minute)
+
 	if err != nil {
 		t.Fatalf(
 			"ClaimDiscoverySourceLease() error = %v, want nil",
@@ -1716,10 +1729,11 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 	var nilStore *DiscoveryStore
 
 	_, _, err := nilStore.ClaimDiscoverySourceLease(
-		ctx,
+		ctx, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	)
+		time.Minute)
+
 	if !errors.Is(err, errDiscoveryStoreUnavailable) {
 		t.Errorf("nil store claim error = %v", err)
 	}
@@ -1741,10 +1755,11 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 
 	var nilContext context.Context
 	_, _, err = discoveryStore.ClaimDiscoverySourceLease(
-		nilContext,
+		nilContext, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	)
+		time.Minute)
+
 	if !errors.Is(err, errInvalidContext) {
 		t.Errorf("nil context claim error = %v", err)
 	}
@@ -1764,10 +1779,11 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 	cancel()
 
 	_, _, err = discoveryStore.ClaimDiscoverySourceLease(
-		canceledContext,
+		canceledContext, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	)
+		time.Minute)
+
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("canceled claim error = %v", err)
 	}
@@ -1782,10 +1798,11 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 	}
 
 	_, _, err = discoveryStore.ClaimDiscoverySourceLease(
-		ctx,
+		ctx, testDiscoveryLeaseOwner,
+
 		0,
-		time.Minute,
-	)
+		time.Minute)
+
 	if !errors.Is(err, errInvalidDiscoveryInterval) {
 		t.Errorf("zero interval error = %v", err)
 	}
@@ -1796,10 +1813,11 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 		},
 	}
 	_, _, err = poolMissingStore.ClaimDiscoverySourceLease(
-		ctx,
+		ctx, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	)
+		time.Minute)
+
 	if !errors.Is(err, errPoolUnavailable) {
 		t.Errorf("missing pool error = %v", err)
 	}
@@ -1807,8 +1825,10 @@ func TestDiscoveryStoreValidatesInput(t *testing.T) {
 	clockMissingStore := &DiscoveryStore{
 		pool: pool,
 	}
-	_, _, err = clockMissingStore.
-		ClaimDiscoverySourceLease(ctx, time.Hour, time.Minute)
+	_, _, err = clockMissingStore.ClaimDiscoverySourceLease(
+		ctx, testDiscoveryLeaseOwner,
+		time.Hour, time.Minute)
+
 	if !errors.Is(
 		err,
 		errDiscoveryClockUnavailable,
@@ -2021,10 +2041,11 @@ func TestDiscoveryStoreReturnsClockAndDatabaseFailures(
 			queueTestTime(),
 		)
 		_, _, err = discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			time.Hour,
-			time.Minute,
-		)
+			time.Minute)
+
 		if err == nil || !strings.Contains(
 			err.Error(),
 			"lock discovery claim",
@@ -2050,10 +2071,11 @@ func TestDiscoveryStoreReturnsClockAndDatabaseFailures(
 
 		_, _, err =
 			discoveryStore.ClaimDiscoverySourceLease(
-				context.Background(),
+				context.Background(), testDiscoveryLeaseOwner,
+
 				time.Hour,
-				time.Minute,
-			)
+				time.Minute)
+
 		if !errors.Is(
 			err,
 			errDiscoveryTestClock,
@@ -2156,10 +2178,11 @@ func TestDiscoveryStoreReturnsClockAndDatabaseFailures(
 
 		_, _, err =
 			discoveryStore.ClaimDiscoverySourceLease(
-				ctx,
+				ctx, testDiscoveryLeaseOwner,
+
 				time.Hour,
-				time.Minute,
-			)
+				time.Minute)
+
 		if err == nil ||
 			!strings.Contains(
 				err.Error(),
@@ -2193,10 +2216,11 @@ func TestDiscoveryStoreReturnsClockAndDatabaseFailures(
 
 		_, _, err =
 			discoveryStore.ClaimDiscoverySourceLease(
-				ctx,
+				ctx, testDiscoveryLeaseOwner,
+
 				time.Hour,
-				time.Minute,
-			)
+				time.Minute)
+
 		if err == nil {
 			t.Fatal(
 				"claim database error = nil, want non-nil",

@@ -21,6 +21,9 @@ var (
 	errInvalidDiscoveryLeaseDuration = errors.New(
 		"store: discovery lease duration is invalid",
 	)
+	errInvalidDiscoveryLeaseOwner = errors.New(
+		"store: discovery lease owner is invalid",
+	)
 	errInvalidDiscoverySourceLease = errors.New(
 		"store: discovery source lease is invalid",
 	)
@@ -35,11 +38,17 @@ var (
 // expires.
 func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 	ctx context.Context,
+	leaseOwner string,
 	interval time.Duration,
 	leaseDuration time.Duration,
 ) (discovery.CrawlSourceLease, bool, error) {
 	if err := s.validate(ctx); err != nil {
 		return discovery.CrawlSourceLease{}, false, err
+	}
+
+	if !validQueueWorkerID(leaseOwner) {
+		return discovery.CrawlSourceLease{}, false,
+			errInvalidDiscoveryLeaseOwner
 	}
 
 	if interval <= 0 {
@@ -272,6 +281,7 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 						source_origin,
 						seeded,
 						lease_generation,
+						lease_owner,
 						last_claimed_at,
 						lease_expires_at
 					)
@@ -279,6 +289,7 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 						candidate.source_origin,
 						candidate.seeded,
 						1,
+						$6::text,
 						$1::timestamptz,
 						$5::timestamptz
 					FROM candidate
@@ -287,6 +298,8 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 						lease_generation =
 							discovery_source_state.
 							lease_generation + 1,
+						lease_owner =
+							EXCLUDED.lease_owner,
 						last_claimed_at =
 							EXCLUDED.last_claimed_at,
 						lease_expires_at =
@@ -302,6 +315,7 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 				automaticCrawlEnabled,
 				s.automatic.maxPendingProbes(),
 				expiresAt,
+				leaseOwner,
 			).Scan(
 				&storedOrigin,
 				&lease.Generation,

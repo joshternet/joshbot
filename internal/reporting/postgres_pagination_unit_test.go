@@ -39,6 +39,10 @@ func TestPostgresReaderSourcesPageWithoutDatabase(
 							true,
 							&now,
 							&now,
+							int64(4),
+							"discovery-1",
+							&now,
+							&now,
 						},
 						[]any{
 							"https://beta.example",
@@ -47,6 +51,10 @@ func TestPostgresReaderSourcesPageWithoutDatabase(
 							false,
 							false,
 							true,
+							&now,
+							&now,
+							int64(2),
+							"discovery-2",
 							&now,
 							&now,
 						},
@@ -86,11 +94,16 @@ func TestPostgresReaderSourcesPageWithoutDatabase(
 		)
 	}
 
-	if page.Items[0].Origin !=
-		"https://alpha.example" {
+	source := page.Items[0]
+
+	if source.Origin != "https://alpha.example" ||
+		source.LeaseGeneration != 4 ||
+		source.LeaseOwner != "discovery-1" ||
+		source.LeaseExpiresAt == nil ||
+		source.LastClaimedAt == nil {
 		t.Fatalf(
 			"SourcesPage()[0] = %#v",
-			page.Items[0],
+			source,
 		)
 	}
 

@@ -48,6 +48,7 @@ type crawlRuntimeSettings struct {
 	automatic          store.AutomaticCrawlConfig
 	telemetryRetention time.Duration
 	signer             robots.RequestSigner
+	leaseOwner         string
 }
 
 func loadCrawlRuntimeSettings(
@@ -190,10 +191,15 @@ func loadCrawlRuntimeSettings(
 	}, nil
 }
 
-func settingOrDefault(getenv environmentGetter, name, fallback string) string {
+func settingOrDefault(
+	getenv environmentGetter,
+	name string,
+	fallback string,
+) string {
 	if value := getenv(name); value != "" {
 		return value
 	}
+
 	return fallback
 }
 

@@ -105,6 +105,10 @@ type CrawlSource struct {
 	CrawlEligible           bool       `json:"crawl_eligible"`
 	FirstDiscoveredAt       *time.Time `json:"first_discovered_at,omitempty"`
 	LastDiscoveredAt        *time.Time `json:"last_discovered_at,omitempty"`
+	LeaseGeneration         int64      `json:"lease_generation"`
+	LeaseOwner              string     `json:"lease_owner,omitempty"`
+	LeaseExpiresAt          *time.Time `json:"lease_expires_at,omitempty"`
+	LastClaimedAt           *time.Time `json:"last_claimed_at,omitempty"`
 }
 
 // CrawlRun is one durable bounded crawl execution.
@@ -674,11 +678,16 @@ func (h *handler) audits(
 		writeError(writer, http.StatusBadRequest, "invalid_limit")
 		return
 	}
-	events, err := h.reader.Audits(request.Context(), limit)
+
+	events, err := h.reader.Audits(
+		request.Context(),
+		limit,
+	)
 	if err != nil {
 		writeInternalError(writer)
 		return
 	}
+
 	writeJSON(writer, http.StatusOK, events)
 }
 
@@ -694,6 +703,7 @@ func (h *handler) metrics(
 
 		return
 	}
+
 	var durable OperationalMetrics
 	if reader, ok := h.reader.(metricsReader); ok {
 		durable, err = reader.Metrics(request.Context())
@@ -905,22 +915,81 @@ func (h *handler) metrics(
 		help  string
 		value int64
 	}{
-		{"joshbot_retained_candidates", "Retained discovery candidates.", durable.Candidates},
-		{"joshbot_retained_discovery_edges", "Retained discovery edges.", durable.DiscoveryEdges},
-		{"joshbot_retained_crawl_runs", "Retained crawl runs.", durable.CrawlRuns},
-		{"joshbot_unfinished_crawl_runs", "Current unfinished crawl runs.", durable.UnfinishedCrawlRuns},
-		{"joshbot_retained_pages_attempted", "Retained pages attempted.", durable.PagesAttempted},
-		{"joshbot_retained_pages_parsed", "Retained pages parsed.", durable.PagesParsed},
-		{"joshbot_retained_origins_found", "Retained origins found by crawls.", durable.OriginsFound},
-		{"joshbot_retained_origins_promoted", "Retained origins admitted automatically.", durable.OriginsPromoted},
-		{"joshbot_retained_origins_deferred", "Retained non-admitted original link candidates.", durable.OriginsDeferred},
-		{"joshbot_retained_failures", "Retained failed page attempts.", durable.Failures},
-		{"joshbot_retained_robots_denials", "Retained robots denials.", durable.RobotsDenials},
+		{
+			"joshbot_retained_candidates",
+			"Retained discovery candidates.",
+			durable.Candidates,
+		},
+		{
+			"joshbot_retained_discovery_edges",
+			"Retained discovery edges.",
+			durable.DiscoveryEdges,
+		},
+		{
+			"joshbot_retained_crawl_runs",
+			"Retained crawl runs.",
+			durable.CrawlRuns,
+		},
+		{
+			"joshbot_unfinished_crawl_runs",
+			"Current unfinished crawl runs.",
+			durable.UnfinishedCrawlRuns,
+		},
+		{
+			"joshbot_retained_pages_attempted",
+			"Retained pages attempted.",
+			durable.PagesAttempted,
+		},
+		{
+			"joshbot_retained_pages_parsed",
+			"Retained pages parsed.",
+			durable.PagesParsed,
+		},
+		{
+			"joshbot_retained_origins_found",
+			"Retained origins found by crawls.",
+			durable.OriginsFound,
+		},
+		{
+			"joshbot_retained_origins_promoted",
+			"Retained origins admitted automatically.",
+			durable.OriginsPromoted,
+		},
+		{
+			"joshbot_retained_origins_deferred",
+			"Retained non-admitted original link candidates.",
+			durable.OriginsDeferred,
+		},
+		{
+			"joshbot_retained_failures",
+			"Retained failed page attempts.",
+			durable.Failures,
+		},
+		{
+			"joshbot_retained_robots_denials",
+			"Retained robots denials.",
+			durable.RobotsDenials,
+		},
 	}
+
 	for _, metric := range durableMetrics {
-		_, _ = fmt.Fprintf(writer, "# HELP %s %s\n", metric.name, metric.help)
-		_, _ = fmt.Fprintf(writer, "# TYPE %s gauge\n", metric.name)
-		_, _ = fmt.Fprintf(writer, "%s %d\n", metric.name, metric.value)
+		_, _ = fmt.Fprintf(
+			writer,
+			"# HELP %s %s\n",
+			metric.name,
+			metric.help,
+		)
+		_, _ = fmt.Fprintf(
+			writer,
+			"# TYPE %s gauge\n",
+			metric.name,
+		)
+		_, _ = fmt.Fprintf(
+			writer,
+			"%s %d\n",
+			metric.name,
+			metric.value,
+		)
 	}
 
 	_, _ = fmt.Fprintln(
@@ -931,6 +1000,7 @@ func (h *handler) metrics(
 		writer,
 		"# TYPE joshbot_retained_page_attempt_failures gauge",
 	)
+
 	for _, breakdown := range durable.PageFailureCategories {
 		_, _ = fmt.Fprintf(
 			writer,
@@ -948,6 +1018,7 @@ func (h *handler) metrics(
 		writer,
 		"# TYPE joshbot_retained_page_http_statuses gauge",
 	)
+
 	for _, breakdown := range durable.HTTPStatuses {
 		_, _ = fmt.Fprintf(
 			writer,
@@ -965,6 +1036,7 @@ func (h *handler) metrics(
 		writer,
 		"# TYPE joshbot_verification_queue_failures gauge",
 	)
+
 	for _, breakdown := range durable.VerificationQueueFailureCategories {
 		_, _ = fmt.Fprintf(
 			writer,
@@ -994,7 +1066,9 @@ func (h *handler) metrics(
 	)
 
 	for _, service := range status.Services {
-		current, exists := latestServices[service.Service]
+		current, exists :=
+			latestServices[service.Service]
+
 		if !exists {
 			serviceOrder = append(
 				serviceOrder,
@@ -1006,7 +1080,8 @@ func (h *handler) metrics(
 			service.UpdatedAt.After(
 				current.UpdatedAt,
 			) {
-			latestServices[service.Service] = service
+			latestServices[service.Service] =
+				service
 		}
 	}
 

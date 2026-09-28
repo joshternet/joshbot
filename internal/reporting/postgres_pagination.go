@@ -47,7 +47,11 @@ func (reader *PostgresReader) SourcesPage(
 							)
 						) AS crawl_eligible,
 					candidate.first_discovered_at,
-					candidate.last_discovered_at
+					candidate.last_discovered_at,
+					state.lease_generation,
+					COALESCE(state.lease_owner, '') AS lease_owner,
+					state.lease_expires_at,
+					state.last_claimed_at
 				FROM discovery_source_state AS state
 				LEFT JOIN discovery_candidates AS candidate
 					ON candidate.origin = state.source_origin
@@ -78,7 +82,11 @@ func (reader *PostgresReader) SourcesPage(
 				verified,
 				crawl_eligible,
 				first_discovered_at,
-				last_discovered_at
+				last_discovered_at,
+				lease_generation,
+				lease_owner,
+				lease_expires_at,
+				last_claimed_at
 			FROM classified
 			WHERE ($1::text = '' OR source_origin = $1)
 				AND ($2::boolean IS NULL OR seeded = $2)
@@ -128,6 +136,10 @@ func (reader *PostgresReader) SourcesPage(
 				&source.CrawlEligible,
 				&source.FirstDiscoveredAt,
 				&source.LastDiscoveredAt,
+				&source.LeaseGeneration,
+				&source.LeaseOwner,
+				&source.LeaseExpiresAt,
+				&source.LastClaimedAt,
 			)
 
 			return source, err

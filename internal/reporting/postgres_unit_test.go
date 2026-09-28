@@ -309,6 +309,10 @@ func TestPostgresReaderSourcesWithoutDatabase(
 							true,
 							&now,
 							&now,
+							int64(4),
+							"discovery-1",
+							&now,
+							&now,
 						},
 					),
 				},
@@ -330,9 +334,20 @@ func TestPostgresReaderSourcesWithoutDatabase(
 		)
 	}
 
-	if len(sources) != 1 ||
-		sources[0].Origin !=
-			"https://example.com" {
+	if len(sources) != 1 {
+		t.Fatalf(
+			"Sources() = %#v",
+			sources,
+		)
+	}
+
+	source := sources[0]
+
+	if source.Origin != "https://example.com" ||
+		source.LeaseGeneration != 4 ||
+		source.LeaseOwner != "discovery-1" ||
+		source.LeaseExpiresAt == nil ||
+		source.LastClaimedAt == nil {
 		t.Fatalf(
 			"Sources() = %#v",
 			sources,

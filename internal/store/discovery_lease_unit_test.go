@@ -125,10 +125,10 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			lease, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					interval,
-					leaseDuration,
-				)
+					leaseDuration)
 
 			if lease.Origin.String() != "" ||
 				lease.Generation != 0 ||
@@ -174,10 +174,10 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					0,
-					leaseDuration,
-				)
+					leaseDuration)
 
 			if found {
 				t.Fatal(
@@ -213,10 +213,10 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					interval,
-					0,
-				)
+					0)
 
 			if found {
 				t.Fatal(
@@ -253,10 +253,10 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					interval,
-					leaseDuration,
-				)
+					leaseDuration)
 
 			if found {
 				t.Fatal(
@@ -299,10 +299,10 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					interval,
-					leaseDuration,
-				)
+					leaseDuration)
 
 			if found {
 				t.Fatal(
@@ -348,10 +348,10 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					interval,
-					leaseDuration,
-				)
+					leaseDuration)
 
 			if found {
 				t.Fatal(
@@ -400,10 +400,10 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					interval,
-					leaseDuration,
-				)
+					leaseDuration)
 
 			if found {
 				t.Fatal(
@@ -451,10 +451,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			lease, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					interval,
-					leaseDuration,
-				)
+					leaseDuration)
+
 			if err != nil {
 				t.Fatalf(
 					"ClaimDiscoverySourceLease() error = %v",
@@ -518,10 +519,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			lease, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					interval,
-					leaseDuration,
-				)
+					leaseDuration)
+
 			if err != nil {
 				t.Fatalf(
 					"ClaimDiscoverySourceLease() error = %v",
@@ -542,9 +544,9 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				)
 			}
 
-			if len(tx.claimArgs) != 5 {
+			if len(tx.claimArgs) != 6 {
 				t.Fatalf(
-					"claim argument count = %d, want 5",
+					"claim argument count = %d, want 6",
 					len(tx.claimArgs),
 				)
 			}
@@ -588,10 +590,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			lease, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					interval,
-					leaseDuration,
-				)
+					leaseDuration)
+
 			if err != nil {
 				t.Fatalf(
 					"ClaimDiscoverySourceLease() error = %v",
@@ -648,10 +651,10 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					interval,
-					leaseDuration,
-				)
+					leaseDuration)
 
 			if found {
 				t.Fatal(
@@ -711,10 +714,10 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					interval,
-					leaseDuration,
-				)
+					leaseDuration)
 
 			if found {
 				t.Fatal(
@@ -782,10 +785,10 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			lease, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					interval,
-					leaseDuration,
-				)
+					leaseDuration)
 
 			if found {
 				t.Fatal(
@@ -873,10 +876,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			lease, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx,
+					ctx, testDiscoveryLeaseOwner,
+
 					interval,
-					leaseDuration,
-				)
+					leaseDuration)
+
 			if err != nil {
 				t.Fatalf(
 					"ClaimDiscoverySourceLease() error = %v",
@@ -1014,9 +1018,9 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				)
 			}
 
-			if len(tx.claimArgs) != 5 {
+			if len(tx.claimArgs) != 6 {
 				t.Fatalf(
-					"claim argument count = %d, want 5",
+					"claim argument count = %d, want 6",
 					len(tx.claimArgs),
 				)
 			}
@@ -1056,4 +1060,62 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 			}
 		},
 	)
+}
+
+func TestClaimDiscoverySourceLeaseRejectsInvalidOwner(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	now := time.Date(
+		2026,
+		time.September,
+		19,
+		18,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+
+	store := claimDiscoveryUnitStore(
+		t,
+		&discoveryPolicyUnitDatabase{
+			discoveryUnitDatabase: &discoveryUnitDatabase{},
+		},
+		claimDiscoveryClock{
+			now: now,
+		},
+	)
+
+	lease, found, err :=
+		store.ClaimDiscoverySourceLease(
+			ctx,
+			"",
+			time.Hour,
+			time.Minute,
+		)
+
+	if lease != (firstLeaseZero()) {
+		t.Fatalf(
+			"ClaimDiscoverySourceLease() lease = %#v, want zero",
+			lease,
+		)
+	}
+
+	if found {
+		t.Fatal(
+			"ClaimDiscoverySourceLease() found = true, want false",
+		)
+	}
+
+	if !errors.Is(
+		err,
+		errInvalidDiscoveryLeaseOwner,
+	) {
+		t.Fatalf(
+			"ClaimDiscoverySourceLease() error = %v, want %v",
+			err,
+			errInvalidDiscoveryLeaseOwner,
+		)
+	}
 }

@@ -54,10 +54,11 @@ func TestDiscoverySourceLeaseReclaimCancelsAbandonedCrawlRun(
 
 	firstLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			leaseDuration,
-		)
+			leaseDuration)
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,10 +82,11 @@ func TestDiscoverySourceLeaseReclaimCancelsAbandonedCrawlRun(
 
 	blockedLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			leaseDuration,
-		)
+			leaseDuration)
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,10 +127,11 @@ func TestDiscoverySourceLeaseReclaimCancelsAbandonedCrawlRun(
 
 	reclaimedLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			leaseDuration,
-		)
+			leaseDuration)
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,10 +228,11 @@ func TestDiscoverySourceLeaseCrashRecovery(
 
 	firstLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			leaseDuration,
-		)
+			leaseDuration)
+
 	if err != nil {
 		t.Fatalf(
 			"first ClaimDiscoverySourceLease() error = %v",
@@ -310,10 +314,11 @@ func TestDiscoverySourceLeaseCrashRecovery(
 
 	blockedLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			leaseDuration,
-		)
+			leaseDuration)
+
 	if err != nil {
 		t.Fatalf(
 			"active-lease ClaimDiscoverySourceLease() error = %v",
@@ -353,10 +358,11 @@ func TestDiscoverySourceLeaseCrashRecovery(
 
 	reclaimedLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			leaseDuration,
-		)
+			leaseDuration)
+
 	if err != nil {
 		t.Fatalf(
 			"expired-lease ClaimDiscoverySourceLease() error = %v",
@@ -541,10 +547,11 @@ func TestDiscoverySourceLeaseCrashRecovery(
 
 	earlyLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			leaseDuration,
-		)
+			leaseDuration)
+
 	if err != nil {
 		t.Fatalf(
 			"pre-interval ClaimDiscoverySourceLease() error = %v",
@@ -560,10 +567,11 @@ func TestDiscoverySourceLeaseCrashRecovery(
 
 	dueLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			leaseDuration,
-		)
+			leaseDuration)
+
 	if err != nil {
 		t.Fatalf(
 			"due ClaimDiscoverySourceLease() error = %v",
@@ -652,10 +660,11 @@ func TestDiscoverySourceLeaseRenewAndStaleRenew(
 
 	firstLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			leaseDuration,
-		)
+			leaseDuration)
+
 	if err != nil {
 		t.Fatalf(
 			"ClaimDiscoverySourceLease() error = %v",
@@ -750,10 +759,11 @@ func TestDiscoverySourceLeaseRenewAndStaleRenew(
 
 	blockedLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			leaseDuration,
-		)
+			leaseDuration)
+
 	if err != nil {
 		t.Fatalf(
 			"active-lease ClaimDiscoverySourceLease() error = %v",
@@ -769,10 +779,11 @@ func TestDiscoverySourceLeaseRenewAndStaleRenew(
 
 	reclaimedLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			interval,
-			leaseDuration,
-		)
+			leaseDuration)
+
 	if err != nil {
 		t.Fatalf(
 			"expired-lease ClaimDiscoverySourceLease() error = %v",
@@ -1031,10 +1042,11 @@ func TestDiscoverySourceLeasePauseKeepsSeedsAndVerifiedOrigins(
 	}
 
 	first, found, err := discoveryStore.ClaimDiscoverySourceLease(
-		ctx,
+		ctx, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	)
+		time.Minute)
+
 	if err != nil {
 		t.Fatalf(
 			"seed ClaimDiscoverySourceLease() error = %v",
@@ -1051,10 +1063,11 @@ func TestDiscoverySourceLeasePauseKeepsSeedsAndVerifiedOrigins(
 	}
 
 	second, found, err := discoveryStore.ClaimDiscoverySourceLease(
-		ctx,
+		ctx, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	)
+		time.Minute)
+
 	if err != nil {
 		t.Fatalf(
 			"verified ClaimDiscoverySourceLease() error = %v",
@@ -1071,10 +1084,11 @@ func TestDiscoverySourceLeasePauseKeepsSeedsAndVerifiedOrigins(
 	}
 
 	_, found, err = discoveryStore.ClaimDiscoverySourceLease(
-		ctx,
+		ctx, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	)
+		time.Minute)
+
 	if err != nil {
 		t.Fatalf(
 			"automatic ClaimDiscoverySourceLease() error = %v",
@@ -1095,5 +1109,50 @@ func TestDiscoverySourceLeasePauseKeepsSeedsAndVerifiedOrigins(
 	}
 	if claimed {
 		t.Fatal("automatic-only source received a discovery lease")
+	}
+}
+
+func TestDiscoverySourceLeaseRejectsInvalidOwner(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newStoreTestPool(t)
+
+	discoveryStore := newDiscoveryTestStore(
+		t,
+		pool,
+		queueTestTime(),
+	)
+
+	lease, found, err :=
+		discoveryStore.ClaimDiscoverySourceLease(
+			ctx,
+			"",
+			time.Hour,
+			time.Minute,
+		)
+
+	if lease != (firstLeaseZero()) {
+		t.Fatalf(
+			"ClaimDiscoverySourceLease() lease = %#v, want zero",
+			lease,
+		)
+	}
+
+	if found {
+		t.Fatal(
+			"ClaimDiscoverySourceLease() found = true, want false",
+		)
+	}
+
+	if !errors.Is(
+		err,
+		errInvalidDiscoveryLeaseOwner,
+	) {
+		t.Fatalf(
+			"ClaimDiscoverySourceLease() error = %v, want %v",
+			err,
+			errInvalidDiscoveryLeaseOwner,
+		)
 	}
 }

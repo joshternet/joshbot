@@ -115,6 +115,7 @@ func (s *DiscoveryStore) CompleteDiscoverySourceLeaseRetry(
 								THEN $7::timestamptz
 								ELSE NULL
 							END,
+						lease_owner = NULL,
 						lease_expires_at = NULL
 					WHERE source_origin = $1
 						AND lease_generation = $2

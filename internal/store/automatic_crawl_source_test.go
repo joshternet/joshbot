@@ -89,10 +89,11 @@ func TestRecordDiscoveryPromotesEveryAutomaticSource(
 	}
 
 	lease, found, err := store.ClaimDiscoverySourceLease(
-		ctx,
+		ctx, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	)
+		time.Minute)
+
 	if err != nil {
 		t.Fatalf("ClaimDiscoverySourceLease() error = %v, want nil", err)
 	}
@@ -312,10 +313,11 @@ func TestAutomaticSourceContinuesDiscoveryWithoutCreatingParticipants(
 	admitResolvedAutomaticCandidates(t, ctx, discoveryStore, seed)
 
 	lease, found, err := discoveryStore.ClaimDiscoverySourceLease(
-		ctx,
+		ctx, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	)
+		time.Minute)
+
 	if err != nil {
 		t.Fatalf("claim automatic source: %v", err)
 	}
@@ -454,10 +456,11 @@ func TestAutomaticCrawlingWaitsForProbeQueueBackpressure(
 	}
 
 	lease, found, err := discoveryStore.ClaimDiscoverySourceLease(
-		ctx,
+		ctx, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	)
+		time.Minute)
+
 	if err != nil || !found || lease.Origin != seed {
 		t.Fatalf(
 			"claim seed = %q, %v, %v, want %q, true, nil",
@@ -481,10 +484,11 @@ func TestAutomaticCrawlingWaitsForProbeQueueBackpressure(
 	admitResolvedAutomaticCandidates(t, ctx, discoveryStore, seed)
 
 	lease, found, err = discoveryStore.ClaimDiscoverySourceLease(
-		ctx,
+		ctx, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	)
+		time.Minute)
+
 	if err != nil {
 		t.Fatalf("claim under backpressure: %v", err)
 	}
@@ -501,10 +505,11 @@ func TestAutomaticCrawlingWaitsForProbeQueueBackpressure(
 	}
 
 	lease, found, err = discoveryStore.ClaimDiscoverySourceLease(
-		ctx,
+		ctx, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	)
+		time.Minute)
+
 	if err != nil || !found || lease.Origin != candidate {
 		t.Errorf(
 			"claim after drain = %q, %v, %v, want %q, true, nil",
