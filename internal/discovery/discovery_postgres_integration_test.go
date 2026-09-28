@@ -75,6 +75,26 @@ func (
 	return err
 }
 
+type discoveryPostgresCrawlSourceStore struct {
+	*store.DiscoveryStore
+}
+
+func (
+	sourceStore *discoveryPostgresCrawlSourceStore,
+) ClaimDiscoverySourceLease(
+	ctx context.Context,
+	interval time.Duration,
+	leaseDuration time.Duration,
+) (discovery.CrawlSourceLease, bool, error) {
+	return sourceStore.DiscoveryStore.
+		ClaimDiscoverySourceLease(
+			ctx,
+			"discovery-postgres-integration",
+			interval,
+			leaseDuration,
+		)
+}
+
 func TestDiscoveryPostgresIntegrationCrawlsAndPersistsCandidates(
 	t *testing.T,
 ) {
@@ -218,8 +238,13 @@ func TestDiscoveryPostgresIntegrationCrawlsAndPersistsCandidates(
 		)
 	}
 
+	crawlSourceStore :=
+		&discoveryPostgresCrawlSourceStore{
+			DiscoveryStore: discoveryStore,
+		}
+
 	runner, err := discovery.NewCrawlRunner(
-		discoveryStore,
+		crawlSourceStore,
 		crawler,
 		discovery.CrawlRunnerConfig{
 			DiscoveryInterval: time.Hour,

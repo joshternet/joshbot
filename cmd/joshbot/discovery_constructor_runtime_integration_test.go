@@ -13,6 +13,29 @@ import (
 func TestDiscoveryConstructorRuntimeIntegrationFailures(
 	t *testing.T,
 ) {
+	t.Run("runtime store construction", func(t *testing.T) {
+		settings := testCrawlRuntimeSettings(t)
+
+		runtimeStore, err := newRuntimeDiscoveryStore(
+			nil,
+			settings.automatic,
+			settings.leaseOwner,
+		)
+
+		if runtimeStore != nil {
+			t.Errorf(
+				"runtime store = %#v, want nil",
+				runtimeStore,
+			)
+		}
+
+		if err == nil {
+			t.Fatal(
+				"error = nil, want store construction failure",
+			)
+		}
+	})
+
 	t.Run("store construction", func(t *testing.T) {
 		storeErr := errors.New(
 			"integration discovery store construction failure",

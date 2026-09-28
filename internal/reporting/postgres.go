@@ -268,7 +268,11 @@ func (reader *PostgresReader) Sources(
 						)
 					) AS crawl_eligible,
 				candidate.first_discovered_at,
-				candidate.last_discovered_at
+				candidate.last_discovered_at,
+				state.lease_generation,
+				COALESCE(state.lease_owner, ''),
+				state.lease_expires_at,
+				state.last_claimed_at
 			FROM discovery_source_state AS state
 			LEFT JOIN discovery_candidates AS candidate
 				ON candidate.origin = state.source_origin
@@ -318,6 +322,10 @@ func (reader *PostgresReader) Sources(
 				&source.CrawlEligible,
 				&source.FirstDiscoveredAt,
 				&source.LastDiscoveredAt,
+				&source.LeaseGeneration,
+				&source.LeaseOwner,
+				&source.LeaseExpiresAt,
+				&source.LastClaimedAt,
 			)
 
 			return source, err

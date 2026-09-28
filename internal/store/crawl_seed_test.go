@@ -392,10 +392,11 @@ func TestCrawlSeedIsClaimableWithoutVerification(
 
 	lease, found, err :=
 		crawlStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			time.Hour,
-			time.Minute,
-		)
+			time.Minute)
+
 	if err != nil {
 		t.Fatalf(
 			"ClaimDiscoverySourceLease() error = %v, want nil",
@@ -540,10 +541,11 @@ func TestCrawlSeedRemoveDisablesUnverifiedSource(
 
 	lease, found, err :=
 		crawlStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			time.Hour,
-			time.Minute,
-		)
+			time.Minute)
+
 	if err != nil {
 		t.Fatalf(
 			"ClaimDiscoverySourceLease() error = %v, want nil",
@@ -756,10 +758,11 @@ func TestCrawlSeedRemovalPreservesVerifiedEligibilityAndState(
 
 	lease, found, err :=
 		crawlStore.ClaimDiscoverySourceLease(
-			ctx,
+			ctx, testDiscoveryLeaseOwner,
+
 			time.Hour,
-			time.Minute,
-		)
+			time.Minute)
+
 	if err != nil {
 		t.Fatalf(
 			"ClaimDiscoverySourceLease() error = %v, want nil",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/discovery"
@@ -204,6 +205,25 @@ type discoveryRuntimeStore interface {
 	) (int, error)
 }
 
+type ownedDiscoveryRuntimeStore struct {
+	*store.DiscoveryStore
+	leaseOwner string
+}
+
+func (runtimeStore *ownedDiscoveryRuntimeStore) ClaimDiscoverySourceLease(
+	ctx context.Context,
+	interval time.Duration,
+	leaseDuration time.Duration,
+) (discovery.CrawlSourceLease, bool, error) {
+	return runtimeStore.DiscoveryStore.
+		ClaimDiscoverySourceLease(
+			ctx,
+			runtimeStore.leaseOwner,
+			interval,
+			leaseDuration,
+		)
+}
+
 type discoveryRuntimeStoreFactory func(
 	*pgxpool.Pool,
 	store.AutomaticCrawlConfig,
@@ -212,11 +232,21 @@ type discoveryRuntimeStoreFactory func(
 func newRuntimeDiscoveryStore(
 	pool *pgxpool.Pool,
 	config store.AutomaticCrawlConfig,
+	leaseOwner string,
 ) (discoveryRuntimeStore, error) {
-	return store.NewDiscoveryStoreWithAutomaticCrawling(
-		pool,
-		config,
-	)
+	discoveryStore, err :=
+		store.NewDiscoveryStoreWithAutomaticCrawling(
+			pool,
+			config,
+		)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ownedDiscoveryRuntimeStore{
+		DiscoveryStore: discoveryStore,
+		leaseOwner:     leaseOwner,
+	}, nil
 }
 
 func newDiscoveryRuntime(
@@ -228,7 +258,16 @@ func newDiscoveryRuntime(
 		ctx,
 		pool,
 		settings,
-		newRuntimeDiscoveryStore,
+		func(
+			pool *pgxpool.Pool,
+			config store.AutomaticCrawlConfig,
+		) (discoveryRuntimeStore, error) {
+			return newRuntimeDiscoveryStore(
+				pool,
+				config,
+				settings.leaseOwner,
+			)
+		},
 	)
 }
 
@@ -315,6 +354,17 @@ func (operations runtimeOperations) discover(
 	}
 	settings.signer = signer
 
+	leaseOwner, err := loadServiceInstanceID(
+		operations.getenv,
+		discoveryServiceInstanceFallback(
+			operations.getenv,
+		),
+	)
+	if err != nil {
+		return err
+	}
+	settings.leaseOwner = leaseOwner
+
 	return operations.withDatabase(
 		ctx,
 		func(connection databaseConnection) (operationErr error) {
@@ -343,22 +393,12 @@ func (operations runtimeOperations) discover(
 					)
 				}
 
-				instanceID, err := loadServiceInstanceID(
-					operations.getenv,
-					discoveryServiceInstanceFallback(
-						operations.getenv,
-					),
-				)
-				if err != nil {
-					return err
-				}
-
 				heartbeat, err =
 					startServiceHeartbeatWithReporter(
 						ctx,
 						heartbeatStorage,
 						"discovery",
-						instanceID,
+						settings.leaseOwner,
 						serviceHeartbeatInterval,
 						heartbeatErrorReporter(
 							operations.logger,

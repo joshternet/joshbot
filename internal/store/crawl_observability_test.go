@@ -231,10 +231,10 @@ func TestProcessorsFailClosedWhenControlStateIsUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := discoveryStore.ClaimDiscoverySourceLease(
-		ctx,
+		ctx, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	); err == nil {
+		time.Minute); err == nil {
 		t.Error("ClaimDiscoverySourceLease() error = nil")
 	}
 	if _, _, err := queue.Claim(ctx, "worker"); err == nil {
@@ -282,10 +282,10 @@ func TestCrawlControlPausesBothProcessorsIndependently(t *testing.T) {
 		t.Fatal(err)
 	}
 	if lease, found, err := observability.ClaimDiscoverySourceLease(
-		ctx,
+		ctx, testDiscoveryLeaseOwner,
+
 		time.Hour,
-		time.Minute,
-	); err != nil || found || lease.Origin.String() != "" {
+		time.Minute); err != nil || found || lease.Origin.String() != "" {
 		t.Fatalf("paused discovery claim = %q, %v, %v", lease.Origin.String(), found, err)
 	}
 	queue := newFixedQueue(

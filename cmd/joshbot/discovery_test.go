@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/discovery"
@@ -420,6 +421,91 @@ func TestNewDiscoveryRuntimeRejectsNilPool(
 	}
 }
 
+func TestOwnedDiscoveryRuntimeStoreDelegatesClaim(
+	t *testing.T,
+) {
+	runtimeStore := &ownedDiscoveryRuntimeStore{
+		leaseOwner: "discovery-test",
+	}
+
+	lease, found, err :=
+		runtimeStore.ClaimDiscoverySourceLease(
+			context.Background(),
+			time.Hour,
+			time.Minute,
+		)
+
+	if lease != (discovery.CrawlSourceLease{}) {
+		t.Fatalf(
+			"ClaimDiscoverySourceLease() lease = %#v, want zero",
+			lease,
+		)
+	}
+
+	if found {
+		t.Fatal(
+			"ClaimDiscoverySourceLease() found = true, want false",
+		)
+	}
+
+	if err == nil {
+		t.Fatal(
+			"ClaimDiscoverySourceLease() error = nil, want non-nil",
+		)
+	}
+}
+
+func TestDiscoveryRuntimeUsesServiceInstanceAsLeaseOwner(
+	t *testing.T,
+) {
+	operations, _ := newTestRuntimeOperations(t)
+	base := withCrawlRuntimeEnvironment(
+		operations.getenv,
+	)
+
+	operations.getenv = func(name string) string {
+		switch name {
+		case serviceInstanceIDEnvironment:
+			return "discovery-owner"
+
+		case hostnameEnvironment:
+			return "ignored-hostname"
+
+		default:
+			return base(name)
+		}
+	}
+
+	var leaseOwner string
+
+	operations.newDiscoveryRunner = func(
+		_ context.Context,
+		_ *pgxpool.Pool,
+		settings crawlRuntimeSettings,
+	) (discoveryRunner, error) {
+		leaseOwner = settings.leaseOwner
+
+		return &fakeDiscoveryRunner{}, nil
+	}
+
+	if err := operations.discover(
+		context.Background(),
+		true,
+	); err != nil {
+		t.Fatalf(
+			"discover() error = %v, want nil",
+			err,
+		)
+	}
+
+	if leaseOwner != "discovery-owner" {
+		t.Fatalf(
+			"lease owner = %q, want discovery-owner",
+			leaseOwner,
+		)
+	}
+}
+
 func TestDiscoveryRuntimeOneShotWithNoSource(
 	t *testing.T,
 ) {
@@ -502,58 +588,105 @@ func TestDiscoveryRuntimeRejectsUnavailablePool(
 
 func TestDiscoveryRuntimeHeartbeatFailures(t *testing.T) {
 	testFailure := errors.New("heartbeat failure")
+
 	tests := []struct {
 		name    string
 		factory func(*pgxpool.Pool) (heartbeatStore, error)
 	}{
 		{
 			name: "construction",
-			factory: func(*pgxpool.Pool) (heartbeatStore, error) {
+			factory: func(
+				*pgxpool.Pool,
+			) (heartbeatStore, error) {
 				return nil, testFailure
 			},
 		},
 		{
 			name: "retention",
-			factory: func(*pgxpool.Pool) (heartbeatStore, error) {
-				return &fakeHeartbeatStore{purgeErr: testFailure}, nil
+			factory: func(
+				*pgxpool.Pool,
+			) (heartbeatStore, error) {
+				return &fakeHeartbeatStore{
+					purgeErr: testFailure,
+				}, nil
 			},
 		},
 		{
 			name: "initial heartbeat",
-			factory: func(*pgxpool.Pool) (heartbeatStore, error) {
-				return &fakeHeartbeatStore{writeErr: testFailure}, nil
+			factory: func(
+				*pgxpool.Pool,
+			) (heartbeatStore, error) {
+				return &fakeHeartbeatStore{
+					writeErr: testFailure,
+				}, nil
 			},
 		},
 	}
+
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			operations, _ := newTestRuntimeOperations(t)
-			operations.getenv = withCrawlRuntimeEnvironment(operations.getenv)
-			operations.newHeartbeatStore = test.factory
-			if err := operations.discover(context.Background(), true); !errors.Is(err, testFailure) {
-				t.Errorf("discover() error = %v", err)
+			operations, _ :=
+				newTestRuntimeOperations(t)
+
+			operations.getenv =
+				withCrawlRuntimeEnvironment(
+					operations.getenv,
+				)
+
+			operations.newHeartbeatStore =
+				test.factory
+
+			if err := operations.discover(
+				context.Background(),
+				true,
+			); !errors.Is(err, testFailure) {
+				t.Errorf(
+					"discover() error = %v",
+					err,
+				)
 			}
 		})
 	}
 }
 
-func TestDiscoveryRuntimeRecordsHeartbeatLifecycle(t *testing.T) {
+func TestDiscoveryRuntimeRecordsHeartbeatLifecycle(
+	t *testing.T,
+) {
 	for _, test := range []struct {
 		name      string
 		runErr    error
 		wantState string
 	}{
-		{name: "stopping", wantState: "stopping"},
-		{name: "failed", runErr: errors.New("discovery failed"), wantState: "failed"},
+		{
+			name:      "stopping",
+			wantState: "stopping",
+		},
+		{
+			name:      "failed",
+			runErr:    errors.New("discovery failed"),
+			wantState: "failed",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			operations, _ := newTestRuntimeOperations(t)
-			operations.getenv = withCrawlRuntimeEnvironment(operations.getenv)
+			operations, _ :=
+				newTestRuntimeOperations(t)
+
+			operations.getenv =
+				withCrawlRuntimeEnvironment(
+					operations.getenv,
+				)
+
 			storage := &fakeHeartbeatStore{}
-			runner := &fakeDiscoveryRunner{runOnceErr: test.runErr}
-			operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+			runner := &fakeDiscoveryRunner{
+				runOnceErr: test.runErr,
+			}
+
+			operations.newHeartbeatStore = func(
+				*pgxpool.Pool,
+			) (heartbeatStore, error) {
 				return storage, nil
 			}
+
 			operations.newDiscoveryRunner = func(
 				context.Context,
 				*pgxpool.Pool,
@@ -561,54 +694,107 @@ func TestDiscoveryRuntimeRecordsHeartbeatLifecycle(t *testing.T) {
 			) (discoveryRunner, error) {
 				return runner, nil
 			}
-			err := operations.discover(context.Background(), true)
-			if (err != nil) != (test.runErr != nil) {
-				t.Errorf("discover() error = %v", err)
+
+			err := operations.discover(
+				context.Background(),
+				true,
+			)
+
+			if (err != nil) !=
+				(test.runErr != nil) {
+				t.Errorf(
+					"discover() error = %v",
+					err,
+				)
 			}
+
 			if runner.observer == nil {
-				t.Error("lifecycle observer was not installed")
+				t.Error(
+					"lifecycle observer was not installed",
+				)
 			}
+
 			storage.mu.Lock()
 			defer storage.mu.Unlock()
+
+			lastWrite :=
+				storage.writes[len(storage.writes)-1]
+
 			if len(storage.writes) != 2 ||
-				storage.writes[len(storage.writes)-1].State != test.wantState ||
-				storage.writes[0].InstanceID != defaultDiscoveryInstanceID {
-				t.Errorf("heartbeat writes = %#v", storage.writes)
+				lastWrite.State != test.wantState ||
+				storage.writes[0].InstanceID !=
+					defaultDiscoveryInstanceID {
+				t.Errorf(
+					"heartbeat writes = %#v",
+					storage.writes,
+				)
 			}
 		})
 	}
 }
 
-func TestDiscoveryHeartbeatUsesConfiguredServiceInstance(t *testing.T) {
+func TestDiscoveryHeartbeatUsesConfiguredServiceInstance(
+	t *testing.T,
+) {
 	operations, _ := newTestRuntimeOperations(t)
-	base := withCrawlRuntimeEnvironment(operations.getenv)
+
+	base := withCrawlRuntimeEnvironment(
+		operations.getenv,
+	)
+
 	operations.getenv = func(name string) string {
 		switch name {
 		case serviceInstanceIDEnvironment:
 			return "discovery"
+
 		case hostnameEnvironment:
 			return "recreated-container"
+
 		default:
 			return base(name)
 		}
 	}
+
 	storage := &fakeHeartbeatStore{}
-	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+
+	operations.newHeartbeatStore = func(
+		*pgxpool.Pool,
+	) (heartbeatStore, error) {
 		return storage, nil
 	}
-	if err := operations.discover(context.Background(), true); err != nil {
-		t.Fatalf("discover() error = %v", err)
+
+	if err := operations.discover(
+		context.Background(),
+		true,
+	); err != nil {
+		t.Fatalf(
+			"discover() error = %v",
+			err,
+		)
 	}
+
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
-	if len(storage.writes) == 0 || storage.writes[0].InstanceID != "discovery" {
-		t.Fatalf("heartbeat instance = %#v, want discovery", storage.writes)
+
+	if len(storage.writes) == 0 ||
+		storage.writes[0].InstanceID !=
+			"discovery" {
+		t.Fatalf(
+			"heartbeat instance = %#v, want discovery",
+			storage.writes,
+		)
 	}
 }
 
-func TestDiscoveryHeartbeatFallsBackToHostname(t *testing.T) {
+func TestDiscoveryHeartbeatFallsBackToHostname(
+	t *testing.T,
+) {
 	operations, _ := newTestRuntimeOperations(t)
-	base := withCrawlRuntimeEnvironment(operations.getenv)
+
+	base := withCrawlRuntimeEnvironment(
+		operations.getenv,
+	)
+
 	operations.getenv = func(name string) string {
 		if name == hostnameEnvironment {
 			return "ephemeral-host"
@@ -616,54 +802,118 @@ func TestDiscoveryHeartbeatFallsBackToHostname(t *testing.T) {
 
 		return base(name)
 	}
+
 	storage := &fakeHeartbeatStore{}
-	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+
+	operations.newHeartbeatStore = func(
+		*pgxpool.Pool,
+	) (heartbeatStore, error) {
 		return storage, nil
 	}
-	if err := operations.discover(context.Background(), true); err != nil {
-		t.Fatalf("discover() error = %v", err)
+
+	if err := operations.discover(
+		context.Background(),
+		true,
+	); err != nil {
+		t.Fatalf(
+			"discover() error = %v",
+			err,
+		)
 	}
+
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
-	if len(storage.writes) == 0 || storage.writes[0].InstanceID != "ephemeral-host" {
-		t.Fatalf("heartbeat instance = %#v, want ephemeral-host", storage.writes)
+
+	if len(storage.writes) == 0 ||
+		storage.writes[0].InstanceID !=
+			"ephemeral-host" {
+		t.Fatalf(
+			"heartbeat instance = %#v, want ephemeral-host",
+			storage.writes,
+		)
 	}
 }
 
-func TestDiscoveryRuntimeRejectsInvalidServiceInstanceID(t *testing.T) {
+func TestDiscoveryRuntimeRejectsInvalidServiceInstanceID(
+	t *testing.T,
+) {
 	operations, _ := newTestRuntimeOperations(t)
-	base := withCrawlRuntimeEnvironment(operations.getenv)
+
+	base := withCrawlRuntimeEnvironment(
+		operations.getenv,
+	)
+
 	operations.getenv = func(name string) string {
 		if name == serviceInstanceIDEnvironment {
-			return strings.Repeat("d", maxServiceInstanceIDLength+1)
+			return strings.Repeat(
+				"d",
+				maxServiceInstanceIDLength+1,
+			)
 		}
 
 		return base(name)
 	}
-	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+
+	operations.newHeartbeatStore = func(
+		*pgxpool.Pool,
+	) (heartbeatStore, error) {
 		return &fakeHeartbeatStore{}, nil
 	}
-	err := operations.discover(context.Background(), true)
-	if !errors.Is(err, errInvalidRuntimeConfiguration) {
-		t.Fatalf("discover() error = %v", err)
+
+	err := operations.discover(
+		context.Background(),
+		true,
+	)
+
+	if !errors.Is(
+		err,
+		errInvalidRuntimeConfiguration,
+	) {
+		t.Fatalf(
+			"discover() error = %v",
+			err,
+		)
 	}
 }
 
-func TestDiscoveryRuntimeSkipsHeartbeatAfterCancellation(t *testing.T) {
+func TestDiscoveryRuntimeSkipsHeartbeatAfterCancellation(
+	t *testing.T,
+) {
 	operations, _ := newTestRuntimeOperations(t)
-	operations.getenv = withCrawlRuntimeEnvironment(operations.getenv)
+
+	operations.getenv = withCrawlRuntimeEnvironment(
+		operations.getenv,
+	)
+
 	factoryCalled := false
-	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
+
+	operations.newHeartbeatStore = func(
+		*pgxpool.Pool,
+	) (heartbeatStore, error) {
 		factoryCalled = true
+
 		return &fakeHeartbeatStore{}, nil
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+
+	ctx, cancel := context.WithCancel(
+		context.Background(),
+	)
 	cancel()
-	if err := operations.discover(ctx, true); err != nil {
-		t.Errorf("discover() error = %v", err)
+
+	if err := operations.discover(
+		ctx,
+		true,
+	); err != nil {
+		t.Errorf(
+			"discover() error = %v",
+			err,
+		)
 	}
+
 	if factoryCalled {
-		t.Error("heartbeat factory called after cancellation")
+		t.Error(
+			"heartbeat factory called after cancellation",
+		)
 	}
 }
 
@@ -726,7 +976,8 @@ func TestRuntimeCandidateSinkRecordsCandidates(
 	}
 
 	if len(candidateStore.candidates) != 1 ||
-		candidateStore.candidates[0] != candidates[0] {
+		candidateStore.candidates[0] !=
+			candidates[0] {
 		t.Errorf(
 			"recorded candidates = %#v, want %#v",
 			candidateStore.candidates,
@@ -734,13 +985,18 @@ func TestRuntimeCandidateSinkRecordsCandidates(
 		)
 	}
 
-	if err := (runtimeCandidateSink{store: candidateStore}).RecordCandidatesForRun(
+	if err := (runtimeCandidateSink{
+		store: candidateStore,
+	}).RecordCandidatesForRun(
 		context.Background(),
 		9,
 		source,
 		candidates,
 	); err != nil {
-		t.Fatalf("RecordCandidatesForRun() fallback error = %v", err)
+		t.Fatalf(
+			"RecordCandidatesForRun() fallback error = %v",
+			err,
+		)
 	}
 }
 
@@ -750,6 +1006,7 @@ func TestRuntimeCandidateSinkReturnsStoreFailure(
 	recordErr := errors.New(
 		"record discovery failure",
 	)
+
 	candidateStore := &fakeDiscoveryCandidateStore{
 		err: recordErr,
 	}
@@ -761,6 +1018,7 @@ func TestRuntimeCandidateSinkReturnsStoreFailure(
 		origin.Origin{},
 		nil,
 	)
+
 	if !errors.Is(err, recordErr) {
 		t.Errorf(
 			"RecordCandidates() error = %v, want %v",
@@ -795,7 +1053,9 @@ func (runner *fakeDiscoveryRunner) Run(
 	return runner.runErr
 }
 
-func (runner *fakeDiscoveryRunner) SetLifecycleObserver(observer discovery.LifecycleObserver) {
+func (runner *fakeDiscoveryRunner) SetLifecycleObserver(
+	observer discovery.LifecycleObserver,
+) {
 	runner.observer = observer
 }
 
@@ -806,7 +1066,9 @@ type fakeDiscoveryCandidateStore struct {
 	err        error
 }
 
-func (candidateStore *fakeDiscoveryCandidateStore) RecordDiscovery(
+func (
+	candidateStore *fakeDiscoveryCandidateStore,
+) RecordDiscovery(
 	_ context.Context,
 	source origin.Origin,
 	candidates []discovery.Candidate,
@@ -817,7 +1079,8 @@ func (candidateStore *fakeDiscoveryCandidateStore) RecordDiscovery(
 		candidates...,
 	)
 
-	return candidateStore.result, candidateStore.err
+	return candidateStore.result,
+		candidateStore.err
 }
 
 func testCrawlRuntimeSettings(

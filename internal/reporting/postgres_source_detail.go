@@ -122,6 +122,10 @@ func (reader *PostgresReader) sourceDetailBase(
 					) AS crawl_eligible,
 				candidate.first_discovered_at,
 				candidate.last_discovered_at,
+				state.lease_generation,
+				COALESCE(state.lease_owner, ''),
+				state.lease_expires_at,
+				state.last_claimed_at,
 
 				queue.origin IS NOT NULL,
 				COALESCE(queue.origin, ''),
@@ -259,6 +263,10 @@ func (reader *PostgresReader) sourceDetailBase(
 		&detail.Source.CrawlEligible,
 		&detail.Source.FirstDiscoveredAt,
 		&detail.Source.LastDiscoveredAt,
+		&detail.Source.LeaseGeneration,
+		&detail.Source.LeaseOwner,
+		&detail.Source.LeaseExpiresAt,
+		&detail.Source.LastClaimedAt,
 
 		&queuePresent,
 		&queueOrigin,

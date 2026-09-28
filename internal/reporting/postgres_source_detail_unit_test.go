@@ -97,6 +97,16 @@ func TestPostgresReaderSourceWithoutDatabase(
 		)
 	}
 
+	if detail.Source.LeaseGeneration != 5 ||
+		detail.Source.LeaseOwner != "discovery-1" ||
+		detail.Source.LeaseExpiresAt == nil ||
+		detail.Source.LastClaimedAt == nil {
+		t.Fatalf(
+			"Source().Source lease = %#v",
+			detail.Source,
+		)
+	}
+
 	if detail.Queue == nil {
 		t.Fatal(
 			"Source().Queue = nil",
@@ -448,6 +458,11 @@ func unitSourceDetailValues(
 	lastClaimed *time.Time,
 	crawlFinished *time.Time,
 ) []any {
+	sourceLeaseExpires :=
+		now.Add(20 * time.Minute)
+	sourceLastClaimed :=
+		now.Add(-2 * time.Minute)
+
 	return []any{
 		"https://example.com",
 		true,
@@ -457,6 +472,10 @@ func unitSourceDetailValues(
 		true,
 		firstDiscovered,
 		lastDiscovered,
+		int64(5),
+		"discovery-1",
+		&sourceLeaseExpires,
+		&sourceLastClaimed,
 
 		true,
 		"https://example.com",

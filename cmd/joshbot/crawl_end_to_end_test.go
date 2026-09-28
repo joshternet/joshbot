@@ -213,8 +213,13 @@ func TestCuratedSeedCrawlToPublicRegistryEndToEnd(
 		)
 	}
 
+	crawlStore := &ownedDiscoveryRuntimeStore{
+		DiscoveryStore: discoveryStore,
+		leaseOwner:     "end-to-end-discovery",
+	}
+
 	runner, err := discovery.NewCrawlRunner(
-		discoveryStore,
+		crawlStore,
 		crawler,
 		discovery.CrawlRunnerConfig{
 			DiscoveryInterval: 7 * 24 * time.Hour,
