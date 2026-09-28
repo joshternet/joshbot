@@ -151,17 +151,128 @@ func (s *Store) RecordVerification(
 			_, execErr := tx.Exec(
 				ctx,
 				`
-					WITH recorded_origin AS (
+					WITH input AS (
+						SELECT
+							$1::text AS origin,
+							$2::timestamptz AS observed_at,
+							$3::text AS outcome,
+							$4::integer AS version,
+							$5::text AS identity
+					),
+					recorded_origin AS (
 						INSERT INTO origins (
 							origin,
-							first_observed_at
+							first_observed_at,
+							first_participated_at,
+							initial_declaration_version,
+							initial_declaration_identity,
+							latest_declaration_check_at,
+							latest_declaration_check_outcome
 						)
-						VALUES ($1, $2)
+						SELECT
+							input.origin,
+							input.observed_at,
+							CASE
+								WHEN input.outcome = 'valid'
+								THEN input.observed_at
+								ELSE NULL
+							END,
+							CASE
+								WHEN input.outcome = 'valid'
+								THEN input.version
+								ELSE NULL
+							END,
+							CASE
+								WHEN input.outcome = 'valid'
+								THEN input.identity
+								ELSE NULL
+							END,
+							input.observed_at,
+							input.outcome
+						FROM input
 						ON CONFLICT (origin) DO UPDATE
-						SET first_observed_at = LEAST(
-							origins.first_observed_at,
-							EXCLUDED.first_observed_at
-						)
+						SET
+							first_observed_at = LEAST(
+								origins.first_observed_at,
+								EXCLUDED.first_observed_at
+							),
+							first_participated_at = CASE
+								WHEN
+									EXCLUDED.first_participated_at
+										IS NOT NULL
+									AND (
+										origins.first_participated_at
+											IS NULL
+										OR
+										EXCLUDED.first_participated_at
+											<
+										origins.first_participated_at
+									)
+								THEN
+									EXCLUDED.first_participated_at
+								ELSE
+									origins.first_participated_at
+							END,
+							initial_declaration_version = CASE
+								WHEN
+									EXCLUDED.first_participated_at
+										IS NOT NULL
+									AND (
+										origins.first_participated_at
+											IS NULL
+										OR
+										EXCLUDED.first_participated_at
+											<
+										origins.first_participated_at
+									)
+								THEN
+									EXCLUDED.initial_declaration_version
+								ELSE
+									origins.initial_declaration_version
+							END,
+							initial_declaration_identity = CASE
+								WHEN
+									EXCLUDED.first_participated_at
+										IS NOT NULL
+									AND (
+										origins.first_participated_at
+											IS NULL
+										OR
+										EXCLUDED.first_participated_at
+											<
+										origins.first_participated_at
+									)
+								THEN
+									EXCLUDED.initial_declaration_identity
+								ELSE
+									origins.initial_declaration_identity
+							END,
+							latest_declaration_check_at = CASE
+								WHEN
+									origins.latest_declaration_check_at
+										IS NULL
+									OR
+									EXCLUDED.latest_declaration_check_at
+										>=
+									origins.latest_declaration_check_at
+								THEN
+									EXCLUDED.latest_declaration_check_at
+								ELSE
+									origins.latest_declaration_check_at
+							END,
+							latest_declaration_check_outcome = CASE
+								WHEN
+									origins.latest_declaration_check_at
+										IS NULL
+									OR
+									EXCLUDED.latest_declaration_check_at
+										>=
+									origins.latest_declaration_check_at
+								THEN
+									EXCLUDED.latest_declaration_check_outcome
+								ELSE
+									origins.latest_declaration_check_outcome
+							END
 						RETURNING origin
 					)
 					INSERT INTO verification_observations (
@@ -172,12 +283,13 @@ func (s *Store) RecordVerification(
 						identity
 					)
 					SELECT
-						origin,
-						$2,
-						$3,
-						$4,
-						$5
+						recorded_origin.origin,
+						input.observed_at,
+						input.outcome,
+						input.version,
+						input.identity
 					FROM recorded_origin
+					CROSS JOIN input
 				`,
 				result.Origin.String(),
 				observedAt.UTC(),
