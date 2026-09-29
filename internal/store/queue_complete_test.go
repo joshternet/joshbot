@@ -1089,6 +1089,263 @@ func TestProbeMissesUseBoundedReprobeBackoff(t *testing.T) {
 	}
 }
 
+func TestParticipatingOriginUsesWeeklyStaleRecheckAfterTransientRetries(
+	t *testing.T,
+) {
+	fixture := newCompletionFixture(
+		t,
+		QueueConfig{
+			LeaseDuration:     10 * time.Minute,
+			MinOriginInterval: time.Minute,
+		},
+		queueTestTime(),
+	)
+
+	previousAt := fixture.claimed.Add(-24 * time.Hour)
+	if err := New(fixture.pool).RecordVerification(
+		fixture.ctx,
+		previousAt,
+		validCompletionResult(fixture.source),
+	); err != nil {
+		t.Fatalf(
+			"RecordVerification() error = %v, want nil",
+			err,
+		)
+	}
+
+	wantDelays := []time.Duration{
+		5 * time.Minute,
+		30 * time.Minute,
+		2 * time.Hour,
+		12 * time.Hour,
+		24 * time.Hour,
+		staleParticipantRecheckInterval,
+		staleParticipantRecheckInterval,
+	}
+
+	for index, wantDelay := range wantDelays {
+		completedAt := fixture.lease.ClaimedAt.Add(time.Minute)
+		fixture.queue.clock = fixedQueueClock{
+			now: completedAt,
+		}
+
+		err := fixture.queue.CompleteVerification(
+			fixture.ctx,
+			fixture.lease,
+			declaration.Result{
+				Outcome:         declaration.OutcomeUnavailable,
+				Origin:          fixture.source,
+				FailureCategory: retry.CategoryDNS,
+			},
+			24*time.Hour,
+		)
+		if err != nil {
+			t.Fatalf(
+				"CompleteVerification(%d) error = %v",
+				index,
+				err,
+			)
+		}
+
+		state := readCompletionQueueState(t, fixture)
+		wantAttemptAt := completedAt.Add(wantDelay)
+
+		if state.consecutiveFailures != index+1 {
+			t.Errorf(
+				"completion %d consecutive failures = %d, want %d",
+				index,
+				state.consecutiveFailures,
+				index+1,
+			)
+		}
+
+		if state.nextAttemptAt == nil ||
+			!state.nextAttemptAt.Equal(wantAttemptAt) {
+			t.Fatalf(
+				"completion %d next attempt = %v, want %v",
+				index,
+				state.nextAttemptAt,
+				wantAttemptAt,
+			)
+		}
+
+		if !state.availableAt.Equal(wantAttemptAt) {
+			t.Errorf(
+				"completion %d available at = %v, want %v",
+				index,
+				state.availableAt,
+				wantAttemptAt,
+			)
+		}
+
+		if index == len(wantDelays)-1 {
+			break
+		}
+
+		fixture.queue.clock = fixedQueueClock{
+			now: wantAttemptAt,
+		}
+
+		lease, found, err := fixture.queue.Claim(
+			fixture.ctx,
+			"worker-a",
+		)
+		if err != nil {
+			t.Fatalf(
+				"Claim(%d) error = %v",
+				index,
+				err,
+			)
+		}
+		if !found {
+			t.Fatalf(
+				"Claim(%d) found = false, want true",
+				index,
+			)
+		}
+
+		fixture.lease = lease
+	}
+
+	registry, err := New(fixture.pool).RegistryOrigins(
+		fixture.ctx,
+	)
+	if err != nil {
+		t.Fatalf(
+			"RegistryOrigins() error = %v, want nil",
+			err,
+		)
+	}
+
+	if len(registry) != 1 {
+		t.Fatalf(
+			"RegistryOrigins() length = %d, want 1",
+			len(registry),
+		)
+	}
+
+	entry := registry[0]
+
+	if entry.LatestDeclarationCheckOutcome !=
+		declaration.OutcomeUnavailable {
+		t.Errorf(
+			"latest declaration check outcome = %v, want unavailable",
+			entry.LatestDeclarationCheckOutcome,
+		)
+	}
+
+	if entry.CurrentDeclaration == nil {
+		t.Fatal(
+			"current declaration = nil, want last authoritative declaration",
+		)
+	}
+}
+
+func TestNeverParticipatedOriginKeepsTransientRetryCeiling(
+	t *testing.T,
+) {
+	fixture := newCompletionFixture(
+		t,
+		QueueConfig{
+			LeaseDuration:     10 * time.Minute,
+			MinOriginInterval: time.Minute,
+		},
+		queueTestTime(),
+	)
+
+	wantDelays := []time.Duration{
+		5 * time.Minute,
+		30 * time.Minute,
+		2 * time.Hour,
+		12 * time.Hour,
+		24 * time.Hour,
+		24 * time.Hour,
+	}
+
+	for index, wantDelay := range wantDelays {
+		completedAt := fixture.lease.ClaimedAt.Add(time.Minute)
+		fixture.queue.clock = fixedQueueClock{
+			now: completedAt,
+		}
+
+		err := fixture.queue.CompleteVerification(
+			fixture.ctx,
+			fixture.lease,
+			declaration.Result{
+				Outcome:         declaration.OutcomeUnavailable,
+				Origin:          fixture.source,
+				FailureCategory: retry.CategoryDNS,
+			},
+			24*time.Hour,
+		)
+		if err != nil {
+			t.Fatalf(
+				"CompleteVerification(%d) error = %v",
+				index,
+				err,
+			)
+		}
+
+		state := readCompletionQueueState(t, fixture)
+		wantAttemptAt := completedAt.Add(wantDelay)
+
+		if state.nextAttemptAt == nil ||
+			!state.nextAttemptAt.Equal(wantAttemptAt) {
+			t.Fatalf(
+				"completion %d next attempt = %v, want %v",
+				index,
+				state.nextAttemptAt,
+				wantAttemptAt,
+			)
+		}
+
+		if index == len(wantDelays)-1 {
+			break
+		}
+
+		fixture.queue.clock = fixedQueueClock{
+			now: wantAttemptAt,
+		}
+
+		lease, found, err := fixture.queue.Claim(
+			fixture.ctx,
+			"worker-a",
+		)
+		if err != nil {
+			t.Fatalf(
+				"Claim(%d) error = %v",
+				index,
+				err,
+			)
+		}
+		if !found {
+			t.Fatalf(
+				"Claim(%d) found = false, want true",
+				index,
+			)
+		}
+
+		fixture.lease = lease
+	}
+
+	registry, err := New(fixture.pool).RegistryOrigins(
+		fixture.ctx,
+	)
+	if err != nil {
+		t.Fatalf(
+			"RegistryOrigins() error = %v, want nil",
+			err,
+		)
+	}
+
+	if len(registry) != 0 {
+		t.Errorf(
+			"RegistryOrigins() = %#v, want empty",
+			registry,
+		)
+	}
+}
+
 func TestUnavailableProbePersistsRetryAndSuccessResetsStreak(t *testing.T) {
 	fixture := newCompletionFixture(t, QueueConfig{
 		LeaseDuration: 10 * time.Minute, MinOriginInterval: time.Minute,

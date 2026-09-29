@@ -18,8 +18,10 @@ import (
 const (
 	maxQueueWorkerIDLength = 128
 
-	defaultFirstReprobeInterval = 12 * time.Hour
-	maxReprobeInterval          = 7 * 24 * time.Hour
+	defaultFirstReprobeInterval     = 12 * time.Hour
+	maxReprobeInterval              = 7 * 24 * time.Hour
+	transientRetryBackoffSteps      = 5
+	staleParticipantRecheckInterval = 7 * 24 * time.Hour
 )
 
 var (
@@ -579,21 +581,29 @@ func (q *Queue) CompleteVerification(
 			var (
 				consecutiveFailures int
 				priorReprobeMisses  int64
+				hasParticipated     bool
 			)
 			lockErr := tx.QueryRow(ctx, `
 				SELECT
 					queued.consecutive_failures,
-					COALESCE(reprobe_state.miss_count, 0)
+					COALESCE(reprobe_state.miss_count, 0),
+					stored_origin.first_participated_at IS NOT NULL
 				FROM verification_queue AS queued
 				LEFT JOIN verification_reprobe_state AS reprobe_state
 					ON reprobe_state.origin = queued.origin
+				LEFT JOIN origins AS stored_origin
+					ON stored_origin.origin = queued.origin
 				WHERE queued.origin = $1
 					AND queued.lease_owner = $2
 					AND queued.lease_generation = $3
 					AND queued.lease_expires_at > $4
 				FOR UPDATE OF queued
 			`, lease.Origin.String(), lease.WorkerID, lease.Generation, completedAt).
-				Scan(&consecutiveFailures, &priorReprobeMisses)
+				Scan(
+					&consecutiveFailures,
+					&priorReprobeMisses,
+					&hasParticipated,
+				)
 			if errors.Is(lockErr, pgx.ErrNoRows) {
 				return ErrLeaseLost
 			}
@@ -621,8 +631,17 @@ func (q *Queue) CompleteVerification(
 			nextFailures := 0
 			if transient {
 				nextFailures = consecutiveFailures + 1
+				retryDelay := q.retryPolicy.Delay(
+					nextFailures,
+					result.RetryAfter,
+				)
+				if hasParticipated &&
+					nextFailures > transientRetryBackoffSteps {
+					retryDelay =
+						staleParticipantRecheckInterval
+				}
 				requestedAvailableAt = completedAt.Add(
-					q.retryPolicy.Delay(nextFailures, result.RetryAfter),
+					retryDelay,
 				).UTC()
 				politeAt := lease.ClaimedAt.Add(q.config.MinOriginInterval).UTC()
 				if politeAt.After(requestedAvailableAt) {
