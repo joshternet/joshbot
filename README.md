@@ -645,11 +645,40 @@ The complete table-by-table retention policy is documented in
 
 ## Public registry
 
-A database-connected runtime projects verified participant state into a
-deterministic directory containing `registry.json` and per-origin node files.
+A database-connected runtime projects durable participation history and current
+declaration state into a deterministic directory containing `registry.json` and
+per-origin node files.
 
-Equivalent participant state produces byte-identical output. File paths and
-ordering are deterministic.
+An origin enters the public registry only after JoshBot has observed a valid
+Joshternet declaration for that origin. Once an origin has participated, its
+registry entry remains available as participation history even if a later
+authoritative declaration check establishes that it is no longer participating.
+
+Each registry entry publishes:
+
+- `first_participated_at`;
+- `initial_declaration`;
+- `latest_declaration_check_at`;
+- `latest_declaration_check_outcome`;
+- `declaration` when the origin is currently participating.
+
+The registry does not publish `first_observed_at` or add a separate inferred
+participation-status field. Current participation is represented directly by
+the presence of the current `declaration`.
+
+A `404 Not Found` or `410 Gone` declaration check ends current participation,
+so the historical registry entry remains but its current `declaration` is
+omitted. Temporary retrieval failures such as timeouts, DNS failures, TLS
+failures, and `5xx` responses update the latest check metadata without
+establishing withdrawal or discarding the last authoritative valid declaration.
+
+Origins that have never published a valid declaration do not enter the public
+registry. Automatically discovered crawl sources, curated seeds, blocked
+sources, queue state, discovery provenance, and reporting telemetry remain
+private operational state.
+
+Equivalent durable registry state produces byte-identical output. File paths
+and ordering are deterministic.
 
 Publication occurs separately:
 
@@ -662,10 +691,6 @@ Publication occurs separately:
 
 The JoshBot registry format is an implementation compatibility boundary. It is
 not itself a Joshternet RFC.
-
-Only verified Joshternet participants belong in the public registry.
-Automatically discovered crawl sources, curated seeds, blocked sources, queue
-state, and reporting telemetry remain private operational state.
 
 ## Crawler identity
 

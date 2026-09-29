@@ -482,6 +482,13 @@ cat >"$expected_root/registry.json" <<'JSON'
     {
       "origin": "https://example.com",
       "path": "nodes/10/100680ad546ce6a577f42f52df33b4cfdca756859e664b8d7de329b150d09ce9.json",
+      "first_participated_at": "2026-01-02T03:04:05Z",
+      "initial_declaration": {
+        "version": 1,
+        "josh": true
+      },
+      "latest_declaration_check_at": "2026-01-02T03:04:05Z",
+      "latest_declaration_check_outcome": "valid",
       "declaration": {
         "version": 1,
         "josh": true
@@ -495,6 +502,13 @@ cat >"$expected_root/$expected_node_path" <<'JSON'
 {
   "format_version": 1,
   "origin": "https://example.com",
+  "first_participated_at": "2026-01-02T03:04:05Z",
+  "initial_declaration": {
+    "version": 1,
+    "josh": true
+  },
+  "latest_declaration_check_at": "2026-01-02T03:04:05Z",
+  "latest_declaration_check_outcome": "valid",
   "declaration": {
     "version": 1,
     "josh": true
@@ -787,11 +801,21 @@ SET ROLE joshbot_app;
 
 INSERT INTO origins (
     origin,
-    first_observed_at
+    first_observed_at,
+    first_participated_at,
+    initial_declaration_version,
+    initial_declaration_identity,
+    latest_declaration_check_at,
+    latest_declaration_check_outcome
 )
 VALUES (
     'https://example.com',
-    TIMESTAMPTZ '2026-01-02 03:04:05+00'
+    TIMESTAMPTZ '2026-01-02 03:04:05+00',
+    TIMESTAMPTZ '2026-01-02 03:04:05+00',
+    1,
+    'affirmed',
+    TIMESTAMPTZ '2026-01-02 03:04:05+00',
+    'valid'
 );
 
 INSERT INTO verification_observations (

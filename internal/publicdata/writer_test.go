@@ -10,8 +10,10 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joshternet/joshbot/internal/declaration"
+	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/store"
 )
 
@@ -22,14 +24,14 @@ var errInjectedFileSystem = errors.New(
 func TestWriteDirectoryProducesCompleteTree(
 	t *testing.T,
 ) {
-	files, err := Build(
-		[]store.VerifiedOrigin{
-			verifiedParticipant(
+	files, err := BuildRegistry(
+		[]store.RegistryOrigin{
+			publicDataWriterRegistryParticipant(
 				t,
 				"https://example.com",
 				declaration.IdentityUndeclared,
 			),
-			verifiedParticipant(
+			publicDataWriterRegistryParticipant(
 				t,
 				"https://example.net",
 				declaration.IdentityAffirmed,
@@ -37,7 +39,10 @@ func TestWriteDirectoryProducesCompleteTree(
 		},
 	)
 	if err != nil {
-		t.Fatalf("Build() error = %v, want nil", err)
+		t.Fatalf(
+			"BuildRegistry() error = %v, want nil",
+			err,
+		)
 	}
 
 	parent := t.TempDir()
@@ -848,4 +853,45 @@ func (fileSystem *faultFileSystem) Rename(
 		oldPath,
 		newPath,
 	)
+}
+
+func publicDataWriterRegistryParticipant(
+	t *testing.T,
+	rawOrigin string,
+	identity declaration.Identity,
+) store.RegistryOrigin {
+	t.Helper()
+
+	parsed, err := origin.Parse(rawOrigin)
+	if err != nil {
+		t.Fatalf(
+			"origin.Parse(%q) error = %v",
+			rawOrigin,
+			err,
+		)
+	}
+
+	checkedAt := time.Date(
+		2026,
+		time.September,
+		1,
+		12,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+	declarationState := declaration.Declaration{
+		Version:  1,
+		Identity: identity,
+	}
+
+	return store.RegistryOrigin{
+		Origin:                        parsed,
+		FirstParticipatedAt:           checkedAt,
+		InitialDeclaration:            declarationState,
+		LatestDeclarationCheckAt:      checkedAt,
+		LatestDeclarationCheckOutcome: declaration.OutcomeValid,
+		CurrentDeclaration:            &declarationState,
+	}
 }

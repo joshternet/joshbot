@@ -2,6 +2,12 @@
 {
   "format_version": 1,
   "origin": "https://example.com",
+  "first_participated_at": "2026-09-01T12:00:00Z",
+  "initial_declaration": {
+    "version": 1
+  },
+  "latest_declaration_check_at": "2026-09-01T12:00:00Z",
+  "latest_declaration_check_outcome": "valid",
   "declaration": {
     "version": 1
   }
@@ -11,6 +17,13 @@
 {
   "format_version": 1,
   "origin": "https://example.net",
+  "first_participated_at": "2026-09-01T12:00:00Z",
+  "initial_declaration": {
+    "version": 1,
+    "josh": true
+  },
+  "latest_declaration_check_at": "2026-09-01T12:00:00Z",
+  "latest_declaration_check_outcome": "valid",
   "declaration": {
     "version": 1,
     "josh": true
@@ -21,10 +34,30 @@
 {
   "format_version": 1,
   "origin": "https://example.org",
+  "first_participated_at": "2026-09-01T12:00:00Z",
+  "initial_declaration": {
+    "version": 1,
+    "josh": false
+  },
+  "latest_declaration_check_at": "2026-09-01T12:00:00Z",
+  "latest_declaration_check_outcome": "valid",
   "declaration": {
     "version": 1,
     "josh": false
   }
+}
+
+=== nodes/ff/ff77c3fb74ac8c8748ff822088aa4c52cca0760f2412c424227763234f11ec28.json ===
+{
+  "format_version": 1,
+  "origin": "https://example.edu",
+  "first_participated_at": "2026-09-01T12:00:00Z",
+  "initial_declaration": {
+    "version": 1,
+    "josh": true
+  },
+  "latest_declaration_check_at": "2026-09-01T13:00:00Z",
+  "latest_declaration_check_outcome": "absent"
 }
 
 === registry.json ===
@@ -34,13 +67,37 @@
     {
       "origin": "https://example.com",
       "path": "nodes/10/100680ad546ce6a577f42f52df33b4cfdca756859e664b8d7de329b150d09ce9.json",
+      "first_participated_at": "2026-09-01T12:00:00Z",
+      "initial_declaration": {
+        "version": 1
+      },
+      "latest_declaration_check_at": "2026-09-01T12:00:00Z",
+      "latest_declaration_check_outcome": "valid",
       "declaration": {
         "version": 1
       }
     },
     {
+      "origin": "https://example.edu",
+      "path": "nodes/ff/ff77c3fb74ac8c8748ff822088aa4c52cca0760f2412c424227763234f11ec28.json",
+      "first_participated_at": "2026-09-01T12:00:00Z",
+      "initial_declaration": {
+        "version": 1,
+        "josh": true
+      },
+      "latest_declaration_check_at": "2026-09-01T13:00:00Z",
+      "latest_declaration_check_outcome": "absent"
+    },
+    {
       "origin": "https://example.net",
       "path": "nodes/35/35d5ef135871623822d3d4779a9ecac15bfa2cca75c908ff3b05102937f37bcd.json",
+      "first_participated_at": "2026-09-01T12:00:00Z",
+      "initial_declaration": {
+        "version": 1,
+        "josh": true
+      },
+      "latest_declaration_check_at": "2026-09-01T12:00:00Z",
+      "latest_declaration_check_outcome": "valid",
       "declaration": {
         "version": 1,
         "josh": true
@@ -49,6 +106,13 @@
     {
       "origin": "https://example.org",
       "path": "nodes/50/50d7a905e3046b88638362cc34a31a1ae534766ca55e3aa397951efe653b062b.json",
+      "first_participated_at": "2026-09-01T12:00:00Z",
+      "initial_declaration": {
+        "version": 1,
+        "josh": false
+      },
+      "latest_declaration_check_at": "2026-09-01T12:00:00Z",
+      "latest_declaration_check_outcome": "valid",
       "declaration": {
         "version": 1,
         "josh": false

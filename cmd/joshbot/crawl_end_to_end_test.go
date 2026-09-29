@@ -410,10 +410,25 @@ func TestCuratedSeedCrawlToPublicRegistryEndToEnd(
 		)
 	}
 
-	files, err := publicdata.Build(verified)
+	registry, err := databaseStore.RegistryOrigins(ctx)
 	if err != nil {
 		t.Fatalf(
-			"Build() before probes error = %v, want nil",
+			"RegistryOrigins() before probes error = %v, want nil",
+			err,
+		)
+	}
+
+	if len(registry) != 0 {
+		t.Errorf(
+			"registry origins before probes = %#v, want empty",
+			registry,
+		)
+	}
+
+	files, err := publicdata.BuildRegistry(registry)
+	if err != nil {
+		t.Fatalf(
+			"BuildRegistry() before probes error = %v, want nil",
 			err,
 		)
 	}
@@ -616,10 +631,45 @@ func TestCuratedSeedCrawlToPublicRegistryEndToEnd(
 		)
 	}
 
-	files, err = publicdata.Build(verified)
+	registry, err = databaseStore.RegistryOrigins(ctx)
 	if err != nil {
 		t.Fatalf(
-			"Build() after probes error = %v, want nil",
+			"RegistryOrigins() after probes error = %v, want nil",
+			err,
+		)
+	}
+
+	if len(registry) != 1 {
+		t.Fatalf(
+			"registry origins after probes = %#v, want one",
+			registry,
+		)
+	}
+
+	if registry[0].Origin != validCandidate {
+		t.Errorf(
+			"registry origin = %q, want %q",
+			registry[0].Origin.String(),
+			validCandidate.String(),
+		)
+	}
+
+	if registry[0].CurrentDeclaration == nil ||
+		*registry[0].CurrentDeclaration !=
+			(declaration.Declaration{
+				Version:  1,
+				Identity: declaration.IdentityAffirmed,
+			}) {
+		t.Errorf(
+			"registry current declaration = %#v, want affirmed version 1",
+			registry[0].CurrentDeclaration,
+		)
+	}
+
+	files, err = publicdata.BuildRegistry(registry)
+	if err != nil {
+		t.Fatalf(
+			"BuildRegistry() after probes error = %v, want nil",
 			err,
 		)
 	}

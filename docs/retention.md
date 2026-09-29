@@ -115,9 +115,18 @@ This includes:
 - latest completed declaration-check time;
 - latest completed declaration-check outcome.
 
-Retention cleanup does not expose or reinterpret these fields. It only ensures
-that disposable observation history cannot erase the durable facts already
-recorded for an origin.
+The public registry projects only the participation facts needed for registry
+history: first participation time, initial declaration, latest declaration-check
+time, latest declaration-check outcome, and the current declaration when the
+origin is currently participating.
+
+First observation time remains private operational metadata and is not published
+in the registry. The registry also does not derive or publish separate status
+fields such as `participation_status`, `is_active`, or `ever_participated`.
+
+Retention cleanup does not reinterpret these durable facts. It ensures that
+disposable observation history cannot erase the state needed to preserve the
+same registry and participation semantics after cleanup.
 
 ## Service heartbeats
 

@@ -20,7 +20,7 @@ import (
 
 var publicDataSchemaSequence uint64
 
-func TestStoreProjectionHasSemanticStabilityAndNoQueueLeakage(
+func TestStoreProjectionPublishesParticipationMetadataAndNoQueueLeakage(
 	t *testing.T,
 ) {
 	ctx := context.Background()
@@ -72,9 +72,18 @@ func TestStoreProjectionHasSemanticStabilityAndNoQueueLeakage(
 	)
 	snapshotB := buildStoreSnapshot(t, memory)
 
-	if !reflect.DeepEqual(snapshotA, snapshotB) {
+	if reflect.DeepEqual(snapshotA, snapshotB) {
 		t.Error(
-			"temporary unavailable observation changed public snapshot",
+			"temporary unavailable observation did not update public check metadata",
+		)
+	}
+
+	if !publicDataSnapshotContains(
+		snapshotB,
+		`"latest_declaration_check_outcome": "unavailable"`,
+	) {
+		t.Error(
+			"temporary unavailable outcome is missing from public snapshot",
 		)
 	}
 
@@ -89,9 +98,18 @@ func TestStoreProjectionHasSemanticStabilityAndNoQueueLeakage(
 	)
 	snapshotC := buildStoreSnapshot(t, memory)
 
-	if !reflect.DeepEqual(snapshotA, snapshotC) {
+	if reflect.DeepEqual(snapshotB, snapshotC) {
 		t.Error(
-			"same semantic re-verification changed public snapshot",
+			"same declaration re-verification did not update public check metadata",
+		)
+	}
+
+	if !publicDataSnapshotContains(
+		snapshotC,
+		`"latest_declaration_check_outcome": "valid"`,
+	) {
+		t.Error(
+			"valid re-verification outcome is missing from public snapshot",
 		)
 	}
 
@@ -106,7 +124,7 @@ func TestStoreProjectionHasSemanticStabilityAndNoQueueLeakage(
 	)
 	snapshotD := buildStoreSnapshot(t, memory)
 
-	if reflect.DeepEqual(snapshotA, snapshotD) {
+	if reflect.DeepEqual(snapshotC, snapshotD) {
 		t.Error(
 			"identity change did not change public snapshot",
 		)
@@ -115,7 +133,7 @@ func TestStoreProjectionHasSemanticStabilityAndNoQueueLeakage(
 	if publicDataNodePath(t, snapshotA) !=
 		publicDataNodePath(t, snapshotD) {
 		t.Error(
-			"identity change changed node path",
+			"participation metadata changes changed node path",
 		)
 	}
 
@@ -172,8 +190,6 @@ func TestStoreProjectionHasSemanticStabilityAndNoQueueLeakage(
 
 	forbidden := []string{
 		candidate.String(),
-		"unavailable",
-		"robots_denied",
 		"lease_generation",
 		"last_claimed_at",
 		"lease_expires_at",
@@ -212,25 +228,89 @@ func TestStoreProjectionHasSemanticStabilityAndNoQueueLeakage(
 			Origin:  source,
 		},
 	)
-	removed := buildStoreSnapshot(t, memory)
 
-	empty, err := Build(nil)
+	registry, err := memory.RegistryOrigins(ctx)
 	if err != nil {
 		t.Fatalf(
-			"empty Build() error = %v, want nil",
+			"RegistryOrigins() after absent error = %v, want nil",
 			err,
 		)
 	}
 
-	if !reflect.DeepEqual(removed, empty) {
+	if len(registry) != 1 {
+		t.Fatalf(
+			"RegistryOrigins() after absent = %#v, want one",
+			registry,
+		)
+	}
+
+	entry := registry[0]
+
+	if entry.Origin != source {
 		t.Errorf(
-			"snapshot after absent = %#v, want %#v",
-			removed,
-			empty,
+			"registry origin = %q, want %q",
+			entry.Origin,
+			source,
+		)
+	}
+
+	if !entry.FirstParticipatedAt.Equal(t1) {
+		t.Errorf(
+			"first participated at = %v, want %v",
+			entry.FirstParticipatedAt,
+			t1,
+		)
+	}
+
+	if entry.InitialDeclaration !=
+		(declaration.Declaration{
+			Version:  1,
+			Identity: declaration.IdentityAffirmed,
+		}) {
+		t.Errorf(
+			"initial declaration = %#v, want original affirmed declaration",
+			entry.InitialDeclaration,
+		)
+	}
+
+	if !entry.LatestDeclarationCheckAt.Equal(t5) ||
+		entry.LatestDeclarationCheckOutcome !=
+			declaration.OutcomeAbsent {
+		t.Errorf(
+			"latest declaration check = %v, %v, want %v, absent",
+			entry.LatestDeclarationCheckAt,
+			entry.LatestDeclarationCheckOutcome,
+			t5,
+		)
+	}
+
+	if entry.CurrentDeclaration != nil {
+		t.Errorf(
+			"current declaration after absent = %#v, want nil",
+			entry.CurrentDeclaration,
+		)
+	}
+
+	withdrawn := buildStoreSnapshot(t, memory)
+
+	if !publicDataSnapshotContains(
+		withdrawn,
+		source.String(),
+	) {
+		t.Error(
+			"former participant is missing from public snapshot",
+		)
+	}
+
+	if !publicDataSnapshotContains(
+		withdrawn,
+		`"latest_declaration_check_outcome": "absent"`,
+	) {
+		t.Error(
+			"absent outcome is missing from public snapshot",
 		)
 	}
 }
-
 func TestDiscoveredCandidateBecomesPublicOnlyAfterValidProbe(
 	t *testing.T,
 ) {
@@ -686,20 +766,20 @@ func buildStoreSnapshot(
 ) []File {
 	t.Helper()
 
-	verified, err := memory.VerifiedOrigins(
+	registry, err := memory.RegistryOrigins(
 		context.Background(),
 	)
 	if err != nil {
 		t.Fatalf(
-			"VerifiedOrigins() error = %v, want nil",
+			"RegistryOrigins() error = %v, want nil",
 			err,
 		)
 	}
 
-	snapshot, err := Build(verified)
+	snapshot, err := BuildRegistry(registry)
 	if err != nil {
 		t.Fatalf(
-			"Build() error = %v, want nil",
+			"BuildRegistry() error = %v, want nil",
 			err,
 		)
 	}
@@ -707,6 +787,21 @@ func buildStoreSnapshot(
 	return snapshot
 }
 
+func publicDataSnapshotContains(
+	files []File,
+	value string,
+) bool {
+	for _, file := range files {
+		if strings.Contains(
+			string(file.Data),
+			value,
+		) {
+			return true
+		}
+	}
+
+	return false
+}
 func publicDataNodePath(
 	t *testing.T,
 	files []File,

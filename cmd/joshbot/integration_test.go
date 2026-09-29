@@ -142,20 +142,20 @@ func TestRuntimeOperationsUsePostgreSQL(
 		)
 	}
 
-	verified, err := databaseStore.VerifiedOrigins(
+	registry, err := databaseStore.RegistryOrigins(
 		ctx,
 	)
 	if err != nil {
 		t.Fatalf(
-			"VerifiedOrigins() error = %v, want nil",
+			"RegistryOrigins() error = %v, want nil",
 			err,
 		)
 	}
 
-	expectedFiles, err := publicdata.Build(verified)
+	expectedFiles, err := publicdata.BuildRegistry(registry)
 	if err != nil {
 		t.Fatalf(
-			"Build() error = %v, want nil",
+			"BuildRegistry() error = %v, want nil",
 			err,
 		)
 	}

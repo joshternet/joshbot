@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/githubpublish"
@@ -53,20 +54,36 @@ func TestPublishRuntimeIntegrationReadsRealSnapshotAndConfiguration(
 		)
 	}
 
-	files, err := publicdata.Build(
-		[]store.VerifiedOrigin{
+	declarationState := declaration.Declaration{
+		Version:  1,
+		Identity: declaration.IdentityAffirmed,
+	}
+	checkedAt := time.Date(
+		2026,
+		time.September,
+		1,
+		12,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+
+	files, err := publicdata.BuildRegistry(
+		[]store.RegistryOrigin{
 			{
-				Origin: source,
-				Declaration: declaration.Declaration{
-					Version:  1,
-					Identity: declaration.IdentityAffirmed,
-				},
+				Origin:                        source,
+				FirstParticipatedAt:           checkedAt,
+				InitialDeclaration:            declarationState,
+				LatestDeclarationCheckAt:      checkedAt,
+				LatestDeclarationCheckOutcome: declaration.OutcomeValid,
+				CurrentDeclaration:            &declarationState,
 			},
 		},
 	)
 	if err != nil {
 		t.Fatalf(
-			"publicdata.Build() error = %v",
+			"publicdata.BuildRegistry() error = %v",
 			err,
 		)
 	}
