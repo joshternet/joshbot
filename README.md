@@ -379,8 +379,7 @@ Verification work has three queue modes. Fresh discovered candidates use
 `probe`, terminal misses are retained as delayed `reprobe` work, and verified
 participants use `recurring`. The first reprobe defaults to 12 hours. Repeated
 terminal misses back off to 24 hours, 48 hours, 96 hours, then a seven-day cap.
-Valid recurring origins continue using the normal recheck interval. Fresh
-probes are claimed ahead of reprobes so catch-up work cannot stall new
+Fresh probes are claimed ahead of reprobes so catch-up work cannot stall new
 discovery, and reprobes do not consume pending-probe backpressure capacity.
 
 Queue events include transitions such as:
@@ -406,6 +405,25 @@ for later failures. `Retry-After` can extend a verification or root-page delay
 but is capped at `24h`. Successful or terminal outcomes reset the durable
 streak; a crawl that parsed at least one page is treated as successful for
 source retry state even if another page failed.
+
+A previously valid Joshternet participant uses that normal transient ladder for
+its first five consecutive unreachable declaration checks. Beginning with the
+sixth consecutive transient failure, JoshBot treats the origin as stale and
+rechecks it every seven days. The origin remains scheduled, so recovery is
+detected automatically. A successful or authoritative declaration result
+returns it to normal scheduling and resets the transient failure streak.
+
+Staleness does not mean withdrawal. While a participant is unreachable, its
+last authoritative valid declaration remains current. The public registry shows
+freshness through `latest_declaration_check_at` and
+`latest_declaration_check_outcome`, such as `unavailable`, rather than adding a
+separate participation status. An authoritative non-valid result ends current
+participation according to the normal declaration rules.
+
+Origins that have never participated do not use the stale-participant cadence.
+Their transient verification failures retain the existing 24-hour durable retry
+ceiling. Terminal misses continue to use the separate reprobe schedule described
+above.
 
 Transient categories are `dns`, `transport`, `timeout`, `robots_temporary`,
 `http_408`, `http_429`, `http_5xx`, `declaration_unavailable`, `processor`, and

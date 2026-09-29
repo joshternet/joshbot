@@ -457,6 +457,7 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 						values: []any{
 							0,
 							int64(0),
+							false,
 						},
 					},
 				},
@@ -506,6 +507,7 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 						values: []any{
 							0,
 							int64(0),
+							false,
 						},
 					},
 				},
@@ -554,6 +556,7 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 						values: []any{
 							0,
 							int64(0),
+							false,
 						},
 					},
 				},
@@ -603,6 +606,7 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 						values: []any{
 							0,
 							int64(0),
+							false,
 						},
 					},
 				},
@@ -638,6 +642,125 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 	)
 }
 
+func TestCompleteVerificationUsesStaleParticipantRecheckWithoutDatabase(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	now := time.Date(
+		2026,
+		time.September,
+		29,
+		5,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+	lease := queueUnitLease(
+		t,
+		now.Add(-5*time.Minute),
+		now.Add(5*time.Minute),
+	)
+
+	baseTx := &discoveryPolicyUnitTx{
+		rowResults: []discoveryUnitRow{
+			{
+				values: []any{
+					transientRetryBackoffSteps,
+					int64(0),
+					true,
+				},
+			},
+		},
+		execResults: []discoveryUnitExecResult{
+			{
+				tag: pgconn.NewCommandTag(
+					"UPDATE 1",
+				),
+			},
+		},
+	}
+	tx := &completeVerificationCaptureTx{
+		discoveryPolicyUnitTx: baseTx,
+	}
+
+	queue := queueSimpleDatabaseStore(
+		discoveryPolicyDatabase(tx),
+		completeVerificationClock{
+			now: now,
+		},
+	)
+
+	err := queue.CompleteVerification(
+		ctx,
+		lease,
+		declaration.Result{
+			Outcome:         declaration.OutcomeUnavailable,
+			Origin:          lease.Origin,
+			FailureCategory: retry.CategoryDNS,
+		},
+		24*time.Hour,
+	)
+	if err != nil {
+		t.Fatalf(
+			"CompleteVerification() error = %v",
+			err,
+		)
+	}
+
+	if len(tx.execArguments) != 1 {
+		t.Fatalf(
+			"completion Exec count = %d, want 1",
+			len(tx.execArguments),
+		)
+	}
+
+	arguments := tx.execArguments[0]
+	if len(arguments) != 14 {
+		t.Fatalf(
+			"completion argument count = %d, want 14",
+			len(arguments),
+		)
+	}
+
+	availableAt, ok := arguments[4].(time.Time)
+	if !ok {
+		t.Fatalf(
+			"completion available_at = %#v, want time.Time",
+			arguments[4],
+		)
+	}
+
+	wantAvailableAt := now.Add(
+		staleParticipantRecheckInterval,
+	)
+	if !availableAt.Equal(wantAvailableAt) {
+		t.Fatalf(
+			"completion available_at = %v, want %v",
+			availableAt,
+			wantAvailableAt,
+		)
+	}
+
+	failures, ok := arguments[9].(int)
+	if !ok ||
+		failures != transientRetryBackoffSteps+1 {
+		t.Fatalf(
+			"completion consecutive failures = %#v, want %d",
+			arguments[9],
+			transientRetryBackoffSteps+1,
+		)
+	}
+
+	transient, ok := arguments[11].(bool)
+	if !ok || !transient {
+		t.Fatalf(
+			"completion transient = %#v, want true",
+			arguments[11],
+		)
+	}
+}
+
 func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 	t *testing.T,
 ) {
@@ -664,6 +787,7 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 				values: []any{
 					0,
 					int64(2),
+					false,
 				},
 			},
 		},

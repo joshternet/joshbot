@@ -26,10 +26,12 @@ one-shot probe. A valid declaration promotes the origin to recurring work.
 Absent, invalid, unsupported-version, cross-origin, and robots-denied results
 convert fresh probes into delayed reprobes. The first reprobe defaults to 12
 hours, then repeated terminal misses back off to 24 hours, 48 hours, 96 hours,
-and finally a seven-day cap. Valid recurring origins continue using the normal
-recheck interval. Fresh probes are claimed before reprobes, and reprobes do not
-consume pending-probe backpressure capacity. Transient unavailable work retains
-its queue mode with retry state.
+and finally a seven-day cap. Fresh probes are claimed before reprobes, and
+reprobes do not consume pending-probe backpressure capacity. Transient
+unavailable work retains its queue mode and authoritative declaration state
+with durable retry state. A previously valid participant uses the normal
+transient retry ladder for five consecutive failures, then moves to a
+seven-day stale-participant recheck cadence beginning with the sixth failure.
 
 JoshBot does not promise exactly-once network requests.
 
@@ -345,11 +347,21 @@ deferred durably. Unsafe addresses remain in private evidence but are recorded
 as network-rejected.
 
 Verification, root-page crawling, and automatic-admission resolution make at
-most three immediate attempts for transient failures in one cycle. Durable
-consecutive-failure delays are exactly `5m`, `30m`, `2h`, `12h`, then `24h`.
-Valid `Retry-After` values can extend verification or root-page delays to the
-`24h` cap. Non-root page requests are not retried, and a crawl that parsed at
-least one page clears source retry state even when a later page failed.
+most three immediate attempts for transient failures in one cycle. The normal
+durable consecutive-failure delays are exactly `5m`, `30m`, `2h`, `12h`, then
+`24h`. Valid `Retry-After` values can extend verification or root-page delays
+to the `24h` cap.
+
+For an origin that has previously published a valid Joshternet declaration,
+verification switches to a seven-day stale-participant recheck cadence after
+five consecutive transient failures. The origin remains queued, and temporary
+unreachability does not clear its last authoritative valid declaration. A
+successful or authoritative result resets the transient streak and restores
+normal scheduling. Origins that have never participated retain the normal
+24-hour transient retry ceiling.
+
+Non-root page requests are not retried, and a crawl that parsed at least one
+page clears source retry state even when a later page failed.
 
 The pending-probe setting is a high-water mark for automatic expansion. When
 the verification queue reaches that many probe jobs, JoshBot keeps every

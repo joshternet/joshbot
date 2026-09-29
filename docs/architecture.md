@@ -227,10 +227,13 @@ against one `JobTimeout` plus `CompletionGrace`, renewing only when that budget
 is insufficient. Completion always uses the latest authoritative lease.
 
 Durable per-origin retry delays (`5m`, `30m`, `2h`, `12h`, then `24h`) are
-applied only when queue completion records a transient failure. The worker
-process itself continues claiming unrelated due work after a claimed origin
-fails. Claim and other pre-work processor failures wait for `PollInterval`
-rather than the durable origin schedule.
+applied only when queue completion records a transient failure. For an origin
+that has previously published a valid Joshternet declaration, the sixth
+consecutive transient verification failure moves subsequent checks to a
+seven-day stale-participant cadence while preserving the last authoritative
+declaration. The worker process itself continues claiming unrelated due work
+after a claimed origin fails. Claim and other pre-work processor failures wait
+for `PollInterval` rather than the durable origin schedule.
 
 Recording the observation, releasing the lease, and scheduling subsequent work
 occur transactionally.
@@ -353,17 +356,22 @@ reprobe work. The first reprobe defaults to 12 hours. Repeated terminal misses
 back off to 24 hours, 48 hours, 96 hours, then a seven-day cap. Fresh probes
 are claimed before reprobes so catch-up work cannot stall newly discovered
 origins. Reprobe work does not consume pending-probe backpressure capacity. A
-later valid reprobe promotes the origin to recurring work, while already-valid
-recurring origins continue using the normal recheck interval.
+later valid reprobe promotes the origin to recurring work.
 
 A transient unavailable outcome retains the current queue mode with durable
-retry state.
+retry state and does not replace the latest authoritative declaration state.
 
 Transient work receives at most three immediate verification attempts per
-claim. Consecutive transient failures persist their category and next due time
-using `5m`, `30m`, `2h`, `12h`, and a capped `24h` thereafter. A successful or
-terminal completion clears that state. `Retry-After` may extend the selected
-delay but cannot exceed `24h`.
+claim. Consecutive transient failures normally persist their category and next
+due time using `5m`, `30m`, `2h`, `12h`, and a capped `24h` thereafter.
+Origins that have previously participated use that ladder for the first five
+consecutive transient failures, then switch to a seven-day recheck cadence
+beginning with the sixth failure. They remain queued so recovery can be
+detected without treating unreachability as withdrawal. A successful or
+authoritative completion clears the transient streak and restores normal
+scheduling. `Retry-After` may extend a normal transient delay but cannot exceed
+`24h`; the stale-participant cadence is a separate queue policy rather than a
+`Retry-After` extension.
 
 ### Leases
 

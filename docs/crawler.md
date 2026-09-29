@@ -428,10 +428,18 @@ are terminal for retry scheduling.
 
 Declaration verification, the root page of a source crawl, and
 automatic-admission DNS resolution make at most three immediate attempts in a
-processing cycle. Non-root pages are attempted once. The durable
+processing cycle. Non-root pages are attempted once. The normal durable
 consecutive-failure schedule is `5m`, `30m`, `2h`, `12h`, then `24h` for each
 later failure. Valid `Retry-After` values can extend verification and root-page
 delays up to the same `24h` cap.
+
+A previously valid Joshternet participant uses that normal schedule for its
+first five consecutive transient declaration-check failures. Beginning with the
+sixth consecutive transient failure, verification moves to a seven-day
+stale-participant recheck cadence. The origin remains scheduled, and the last
+authoritative valid declaration remains current until an authoritative result
+establishes otherwise. Unreachability therefore changes check freshness, not
+participation state.
 
 An exhausted three-attempt cycle is one logical queue claim, one root
 frontier-page attempt, or one admission decision. Verification writes one
