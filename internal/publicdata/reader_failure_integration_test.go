@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
@@ -26,70 +27,97 @@ func TestPublicDataReaderFailureIntegrationRejectsInvalidBuildInput(
 		t,
 		"https://example.com",
 	)
-	valid := store.VerifiedOrigin{
-		Origin: validOrigin,
-		Declaration: declaration.Declaration{
+	checkedAt := time.Date(
+		2026,
+		time.September,
+		1,
+		12,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+
+	validRegistryOrigin := func() store.RegistryOrigin {
+		declarationState := declaration.Declaration{
 			Version:  1,
 			Identity: declaration.IdentityAffirmed,
-		},
+		}
+
+		return store.RegistryOrigin{
+			Origin:                        validOrigin,
+			FirstParticipatedAt:           checkedAt,
+			InitialDeclaration:            declarationState,
+			LatestDeclarationCheckAt:      checkedAt,
+			LatestDeclarationCheckOutcome: declaration.OutcomeValid,
+			CurrentDeclaration:            &declarationState,
+		}
 	}
+
+	zeroOrigin := validRegistryOrigin()
+	zeroOrigin.Origin = origin.Origin{}
+
+	badVersion := validRegistryOrigin()
+	badVersion.InitialDeclaration.Version = 2
+
+	badIdentity := validRegistryOrigin()
+	badIdentity.InitialDeclaration.Identity =
+		declaration.Identity(255)
+
+	badCurrentVersion := validRegistryOrigin()
+	badCurrentDeclaration := *badCurrentVersion.CurrentDeclaration
+	badCurrentDeclaration.Version = 2
+	badCurrentVersion.CurrentDeclaration = &badCurrentDeclaration
+
+	unknownOutcome := validRegistryOrigin()
+	unknownOutcome.LatestDeclarationCheckOutcome =
+		declaration.Outcome(255)
+
+	valid := validRegistryOrigin()
 
 	tests := []struct {
 		name  string
-		input []store.VerifiedOrigin
+		input []store.RegistryOrigin
 		want  error
 	}{
 		{
-			name: "zero origin",
-			input: []store.VerifiedOrigin{
-				{
-					Declaration: declaration.Declaration{
-						Version:  1,
-						Identity: declaration.IdentityAffirmed,
-					},
-				},
-			},
-			want: ErrInvalidVerifiedOrigin,
+			name:  "zero origin",
+			input: []store.RegistryOrigin{zeroOrigin},
+			want:  ErrInvalidRegistryOrigin,
 		},
 		{
-			name: "bad version",
-			input: []store.VerifiedOrigin{
-				{
-					Origin: validOrigin,
-					Declaration: declaration.Declaration{
-						Version:  2,
-						Identity: declaration.IdentityAffirmed,
-					},
-				},
-			},
-			want: ErrInvalidVerifiedOrigin,
+			name:  "bad version",
+			input: []store.RegistryOrigin{badVersion},
+			want:  ErrInvalidRegistryOrigin,
 		},
 		{
-			name: "bad identity",
-			input: []store.VerifiedOrigin{
-				{
-					Origin: validOrigin,
-					Declaration: declaration.Declaration{
-						Version:  1,
-						Identity: declaration.Identity(255),
-					},
-				},
-			},
-			want: ErrInvalidVerifiedOrigin,
+			name:  "bad identity",
+			input: []store.RegistryOrigin{badIdentity},
+			want:  ErrInvalidRegistryOrigin,
+		},
+		{
+			name:  "bad current version",
+			input: []store.RegistryOrigin{badCurrentVersion},
+			want:  ErrInvalidRegistryOrigin,
+		},
+		{
+			name:  "unknown outcome",
+			input: []store.RegistryOrigin{unknownOutcome},
+			want:  ErrInvalidRegistryOrigin,
 		},
 		{
 			name:  "duplicate origin",
-			input: []store.VerifiedOrigin{valid, valid},
+			input: []store.RegistryOrigin{valid, valid},
 			want:  ErrDuplicateOrigin,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			files, err := Build(test.input)
+			files, err := BuildRegistry(test.input)
 			if !errors.Is(err, test.want) {
 				t.Fatalf(
-					"Build() error = %v, want %v",
+					"BuildRegistry() error = %v, want %v",
 					err,
 					test.want,
 				)
@@ -97,7 +125,7 @@ func TestPublicDataReaderFailureIntegrationRejectsInvalidBuildInput(
 
 			if files != nil {
 				t.Errorf(
-					"Build() files = %#v, want nil",
+					"BuildRegistry() files = %#v, want nil",
 					files,
 				)
 			}

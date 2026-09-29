@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
@@ -17,7 +18,7 @@ import (
 func TestPublicDataIntegrationBuildWriteReadRoundTrip(
 	t *testing.T,
 ) {
-	participants := []store.VerifiedOrigin{
+	participants := []store.RegistryOrigin{
 		publicDataIntegrationParticipant(
 			t,
 			"https://example.org",
@@ -35,10 +36,10 @@ func TestPublicDataIntegrationBuildWriteReadRoundTrip(
 		),
 	}
 
-	files, err := publicdata.Build(participants)
+	files, err := publicdata.BuildRegistry(participants)
 	if err != nil {
 		t.Fatalf(
-			"Build() error = %v, want nil",
+			"BuildRegistry() error = %v, want nil",
 			err,
 		)
 	}
@@ -180,8 +181,8 @@ func TestPublicDataIntegrationRejectsUnsafeFilesystemState(
 	t.Run(
 		"symbolic link entry",
 		func(t *testing.T) {
-			files, err := publicdata.Build(
-				[]store.VerifiedOrigin{
+			files, err := publicdata.BuildRegistry(
+				[]store.RegistryOrigin{
 					publicDataIntegrationParticipant(
 						t,
 						"https://example.com",
@@ -191,7 +192,7 @@ func TestPublicDataIntegrationRejectsUnsafeFilesystemState(
 			)
 			if err != nil {
 				t.Fatalf(
-					"Build() error = %v",
+					"BuildRegistry() error = %v",
 					err,
 				)
 			}
@@ -221,7 +222,7 @@ func TestPublicDataIntegrationRejectsUnsafeFilesystemState(
 			}
 			if nodePath == "" {
 				t.Fatal(
-					"Build() produced no node path",
+					"BuildRegistry() produced no node path",
 				)
 			}
 
@@ -383,7 +384,7 @@ func publicDataIntegrationParticipant(
 	t *testing.T,
 	rawOrigin string,
 	identity declaration.Identity,
-) store.VerifiedOrigin {
+) store.RegistryOrigin {
 	t.Helper()
 
 	parsed, err := origin.Parse(rawOrigin)
@@ -395,11 +396,27 @@ func publicDataIntegrationParticipant(
 		)
 	}
 
-	return store.VerifiedOrigin{
-		Origin: parsed,
-		Declaration: declaration.Declaration{
-			Version:  1,
-			Identity: identity,
-		},
+	checkedAt := time.Date(
+		2026,
+		time.September,
+		1,
+		12,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+	declarationState := declaration.Declaration{
+		Version:  1,
+		Identity: identity,
+	}
+
+	return store.RegistryOrigin{
+		Origin:                        parsed,
+		FirstParticipatedAt:           checkedAt,
+		InitialDeclaration:            declarationState,
+		LatestDeclarationCheckAt:      checkedAt,
+		LatestDeclarationCheckOutcome: declaration.OutcomeValid,
+		CurrentDeclaration:            &declarationState,
 	}
 }

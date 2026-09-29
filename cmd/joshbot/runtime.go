@@ -38,10 +38,10 @@ type runtimeQueue interface {
 	) error
 }
 
-type verifiedOriginSource interface {
-	VerifiedOrigins(
+type registryOriginSource interface {
+	RegistryOrigins(
 		context.Context,
-	) ([]store.VerifiedOrigin, error)
+	) ([]store.RegistryOrigin, error)
 }
 
 type workerRunner interface {
@@ -77,7 +77,7 @@ type runtimeOperations struct {
 
 	newStore func(
 		*pgxpool.Pool,
-	) verifiedOriginSource
+	) registryOriginSource
 
 	newDiscoveryStore func(
 		*pgxpool.Pool,
@@ -98,7 +98,7 @@ type runtimeOperations struct {
 	) (discoveryRunner, error)
 
 	buildRegistry func(
-		[]store.VerifiedOrigin,
+		[]store.RegistryOrigin,
 	) ([]publicdata.File, error)
 
 	writeRegistry func(
@@ -142,7 +142,7 @@ func newRuntimeOperations(
 		newDatabase:         newPostgresDatabase,
 		migrateDatabase:     migrateDatabase,
 		newQueue:            newStoreQueue,
-		newStore:            newVerifiedOriginStore,
+		newStore:            newRegistryOriginStore,
 		newDiscoveryStore:   newRuntimeCrawlSeedStore,
 		newCrawlSourceStore: newRuntimeCrawlSourceStore,
 		newHeartbeatStore:   newRuntimeHeartbeatStore,
@@ -195,16 +195,16 @@ func newStoreQueue(
 	return store.NewQueue(pool, config)
 }
 
-func newVerifiedOriginStore(
+func newRegistryOriginStore(
 	pool *pgxpool.Pool,
-) verifiedOriginSource {
+) registryOriginSource {
 	return store.New(pool)
 }
 
 func buildRegistry(
-	verified []store.VerifiedOrigin,
+	registry []store.RegistryOrigin,
 ) ([]publicdata.File, error) {
-	return publicdata.Build(verified)
+	return publicdata.BuildRegistry(registry)
 }
 
 func writeRegistry(
@@ -363,18 +363,18 @@ func (operations runtimeOperations) export(
 	return operations.withDatabase(
 		ctx,
 		func(connection databaseConnection) error {
-			verified, err := operations.newStore(
+			registry, err := operations.newStore(
 				connection.Pool(),
-			).VerifiedOrigins(ctx)
+			).RegistryOrigins(ctx)
 			if err != nil {
 				return fmt.Errorf(
-					"query verified origins: %w",
+					"query registry origins: %w",
 					err,
 				)
 			}
 
 			files, err := operations.buildRegistry(
-				verified,
+				registry,
 			)
 			if err != nil {
 				return fmt.Errorf(

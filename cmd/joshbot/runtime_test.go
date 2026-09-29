@@ -674,7 +674,7 @@ func TestRuntimeExport(t *testing.T) {
 			"test build failure",
 		)
 		operations.buildRegistry = func(
-			[]store.VerifiedOrigin,
+			[]store.RegistryOrigin,
 		) ([]publicdata.File, error) {
 			return nil, buildFailure
 		}
@@ -1003,8 +1003,8 @@ func TestRuntimeProductionAdapters(t *testing.T) {
 		)
 	}
 
-	if newVerifiedOriginStore(nil) == nil {
-		t.Error("newVerifiedOriginStore() is nil")
+	if newRegistryOriginStore(nil) == nil {
+		t.Error("newRegistryOriginStore() is nil")
 	}
 
 	files, err := buildRegistry(nil)
@@ -1079,7 +1079,7 @@ func (reader failingRuntimeReader) Read(
 type runtimeTestState struct {
 	database       *fakeRuntimeDatabase
 	queue          *fakeRuntimeQueue
-	store          *fakeVerifiedOriginSource
+	store          *fakeRegistryOriginSource
 	runner         *fakeWorkerRunner
 	migrateCount   int
 	migrateErr     error
@@ -1098,8 +1098,8 @@ func newTestRuntimeOperations(
 	state := &runtimeTestState{
 		database: &fakeRuntimeDatabase{},
 		queue:    &fakeRuntimeQueue{},
-		store: &fakeVerifiedOriginSource{
-			verified: nil,
+		store: &fakeRegistryOriginSource{
+			registry: nil,
 		},
 		runner: &fakeWorkerRunner{},
 	}
@@ -1134,7 +1134,7 @@ func newTestRuntimeOperations(
 		},
 		newStore: func(
 			*pgxpool.Pool,
-		) verifiedOriginSource {
+		) registryOriginSource {
 			return state.store
 		},
 		newDiscoveryRunner: func(
@@ -1145,7 +1145,7 @@ func newTestRuntimeOperations(
 			return &fakeDiscoveryRunner{}, nil
 		},
 		buildRegistry: func(
-			[]store.VerifiedOrigin,
+			[]store.RegistryOrigin,
 		) ([]publicdata.File, error) {
 			return []publicdata.File{
 				{
@@ -1269,15 +1269,15 @@ func (queue *fakeRuntimeQueue) CompleteVerification(
 	return nil
 }
 
-type fakeVerifiedOriginSource struct {
-	verified []store.VerifiedOrigin
+type fakeRegistryOriginSource struct {
+	registry []store.RegistryOrigin
 	err      error
 }
 
-func (source *fakeVerifiedOriginSource) VerifiedOrigins(
+func (source *fakeRegistryOriginSource) RegistryOrigins(
 	context.Context,
-) ([]store.VerifiedOrigin, error) {
-	return source.verified, source.err
+) ([]store.RegistryOrigin, error) {
+	return source.registry, source.err
 }
 
 type fakeWorkerRunner struct {

@@ -88,13 +88,13 @@ func (queue *runtimeBoundaryIntegrationQueue) Schedule(
 	return queue.scheduleErr
 }
 
-type runtimeBoundaryIntegrationVerifiedSource struct {
+type runtimeBoundaryIntegrationRegistrySource struct {
 	err error
 }
 
-func (source *runtimeBoundaryIntegrationVerifiedSource) VerifiedOrigins(
+func (source *runtimeBoundaryIntegrationRegistrySource) RegistryOrigins(
 	context.Context,
-) ([]store.VerifiedOrigin, error) {
+) ([]store.RegistryOrigin, error) {
 	return nil, source.err
 }
 
@@ -164,7 +164,7 @@ func (*runtimeBoundaryIntegrationHeartbeatStore) PurgeCrawlTelemetry(
 type runtimeBoundaryIntegrationState struct {
 	database  *runtimeBoundaryIntegrationDatabase
 	queue     *runtimeBoundaryIntegrationQueue
-	store     *runtimeBoundaryIntegrationVerifiedSource
+	store     *runtimeBoundaryIntegrationRegistrySource
 	publisher *runtimeBoundaryIntegrationPublisher
 	runner    *runtimeBoundaryIntegrationRunner
 }
@@ -335,7 +335,7 @@ func TestRuntimeBoundaryIntegrationDatabaseAndCommands(
 			runtimeBoundaryIntegrationOperations(t)
 
 		operations.buildRegistry = func(
-			[]store.VerifiedOrigin,
+			[]store.RegistryOrigin,
 		) ([]publicdata.File, error) {
 			return nil,
 				errRuntimeBoundaryIntegration
@@ -878,7 +878,7 @@ func runtimeBoundaryIntegrationOperations(
 	state := &runtimeBoundaryIntegrationState{
 		database:  &runtimeBoundaryIntegrationDatabase{},
 		queue:     &runtimeBoundaryIntegrationQueue{},
-		store:     &runtimeBoundaryIntegrationVerifiedSource{},
+		store:     &runtimeBoundaryIntegrationRegistrySource{},
 		publisher: &runtimeBoundaryIntegrationPublisher{},
 		runner:    &runtimeBoundaryIntegrationRunner{},
 	}
@@ -918,12 +918,12 @@ func runtimeBoundaryIntegrationOperations(
 
 		newStore: func(
 			*pgxpool.Pool,
-		) verifiedOriginSource {
+		) registryOriginSource {
 			return state.store
 		},
 
 		buildRegistry: func(
-			[]store.VerifiedOrigin,
+			[]store.RegistryOrigin,
 		) ([]publicdata.File, error) {
 			return []publicdata.File{
 				{

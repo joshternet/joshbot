@@ -88,7 +88,7 @@ valid Joshternet participants
 | Automatic sources admitted | `crawl_run_automatic_admission_batches`; `discovery_source_state.automatically_discovered`; metrics `joshbot_retained_origins_promoted` / `joshbot_retained_origins_deferred` |
 | Verification probes | `verification_queue` where `mode='probe'`; `GET /api/v1/queue`; metrics `joshbot_verification_queue{mode="probe"}`, `joshbot_pending_probes` |
 | Declarations checked | `verification_observations` in PostgreSQL (no dedicated reporting list endpoint) |
-| Valid participants | latest authoritative `outcome='valid'` via store export / public registry files; reporting exposes verified **count** through sources/metrics, not a participant list API |
+| Valid participants | latest authoritative `outcome='valid'` via current verification state; reporting exposes verified **count** through sources/metrics, not a participant list API. Public registry files also retain former participants and are not a current-participant count. |
 
 ## Observation availability
 
