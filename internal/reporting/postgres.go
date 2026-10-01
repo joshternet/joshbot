@@ -83,22 +83,48 @@ func (reader *PostgresReader) Status(
 	err := reader.pool.QueryRow(
 		ctx,
 		`
-			WITH source_classification AS (
+			WITH source_universe AS (
+				SELECT source_origin
+				FROM discovery_source_state
+
+				UNION
+
+				SELECT source_origin
+				FROM discovery_source_schedule
+			),
+			source_classification AS (
 				SELECT
-					state.seeded,
-					state.automatically_discovered,
-					state.crawl_blocked,
+					COALESCE(
+						state.seeded,
+						false
+					) AS seeded,
+					COALESCE(
+						state.automatically_discovered,
+						false
+					) AS automatically_discovered,
+					COALESCE(
+						state.crawl_blocked,
+						false
+					) AS crawl_blocked,
 					COALESCE(
 						effective.outcome = 'valid',
 						false
-					) AS verified
-				FROM discovery_source_state AS state
+					) AS verified,
+					schedule.source_origin IS NOT NULL
+						AS scheduled
+				FROM source_universe AS source
+				LEFT JOIN discovery_source_state AS state
+					ON state.source_origin =
+						source.source_origin
+				LEFT JOIN discovery_source_schedule AS schedule
+					ON schedule.source_origin =
+						source.source_origin
 				LEFT JOIN LATERAL (
 					SELECT observation.outcome
 					FROM verification_observations
 						AS observation
 					WHERE observation.origin =
-							state.source_origin
+							source.source_origin
 						AND observation.outcome IN (
 							'valid',
 							'absent',
@@ -177,11 +203,7 @@ func (reader *PostgresReader) Status(
 					SELECT COUNT(*)
 					FROM source_classification
 					WHERE NOT crawl_blocked
-						AND (
-							seeded
-							OR automatically_discovered
-							OR verified
-						)
+						AND scheduled
 				)
 			FROM crawl_control AS control
 			WHERE control.singleton
@@ -249,39 +271,67 @@ func (reader *PostgresReader) Sources(
 	rows, err := reader.pool.Query(
 		ctx,
 		`
+			WITH source_universe AS (
+				SELECT source_origin
+				FROM discovery_source_state
+
+				UNION
+
+				SELECT source_origin
+				FROM discovery_source_schedule
+			)
 			SELECT
-				state.source_origin,
-				state.seeded,
-				state.automatically_discovered,
-				state.crawl_blocked,
+				source.source_origin,
+				COALESCE(
+					state.seeded,
+					false
+				) AS seeded,
+				COALESCE(
+					state.automatically_discovered,
+					false
+				) AS automatically_discovered,
+				COALESCE(
+					state.crawl_blocked,
+					false
+				) AS crawl_blocked,
 				COALESCE(
 					effective.outcome = 'valid',
 					false
 				) AS verified,
-				NOT state.crawl_blocked
-					AND (
-						state.seeded
-						OR state.automatically_discovered
-						OR COALESCE(
-							effective.outcome = 'valid',
-							false
-						)
-					) AS crawl_eligible,
+				NOT COALESCE(
+					state.crawl_blocked,
+					false
+				)
+					AND schedule.source_origin IS NOT NULL
+					AS crawl_eligible,
 				candidate.first_discovered_at,
 				candidate.last_discovered_at,
-				state.lease_generation,
-				COALESCE(state.lease_owner, ''),
+				COALESCE(
+					state.lease_generation,
+					0
+				),
+				COALESCE(
+					state.lease_owner,
+					''
+				),
 				state.lease_expires_at,
 				state.last_claimed_at
-			FROM discovery_source_state AS state
+			FROM source_universe AS source
+			LEFT JOIN discovery_source_state AS state
+				ON state.source_origin =
+					source.source_origin
+			LEFT JOIN discovery_source_schedule AS schedule
+				ON schedule.source_origin =
+					source.source_origin
 			LEFT JOIN discovery_candidates AS candidate
-				ON candidate.origin = state.source_origin
+				ON candidate.origin =
+					source.source_origin
 			LEFT JOIN LATERAL (
 				SELECT observation.outcome
 				FROM verification_observations
 					AS observation
 				WHERE observation.origin =
-						state.source_origin
+						source.source_origin
 					AND observation.outcome IN (
 						'valid',
 						'absent',
@@ -294,7 +344,7 @@ func (reader *PostgresReader) Sources(
 					observation.id DESC
 				LIMIT 1
 			) AS effective ON true
-			ORDER BY state.source_origin
+			ORDER BY source.source_origin
 			LIMIT $1
 		`,
 		limit,

@@ -32,6 +32,13 @@ var (
 // ClaimDiscoverySourceLease leases one due crawl source without consuming its
 // discovery interval.
 //
+// Active discovery work comes only from discovery_source_schedule. Durable
+// source classification and history do not independently create crawl work.
+//
+// Curated seeds and currently verified participants remain claimable while
+// automatic expansion is paused or verification-queue backpressure is active.
+// Other scheduled sources observe those automatic-expansion controls.
+//
 // last_attempted_at records completed crawl attempts only. Claiming instead
 // advances lease_generation and records a renewable expiration. If the
 // claimant disappears, the source becomes eligible again after the lease
@@ -70,6 +77,17 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 		ctx,
 		s.pool,
 		func(tx pgx.Tx) error {
+			if _, err := tx.Exec(
+				ctx,
+				"SELECT pg_advisory_xact_lock($1)",
+				discoveryClaimAdvisoryLockKey,
+			); err != nil {
+				return fmt.Errorf(
+					"store: lock discovery claim: %w",
+					err,
+				)
+			}
+
 			now, err := s.clock.NowTransaction(
 				ctx,
 				tx,
@@ -84,21 +102,11 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 			now = now.UTC()
 			expiresAt := now.Add(leaseDuration).UTC()
 
-			if _, err := tx.Exec(
-				ctx,
-				"SELECT pg_advisory_xact_lock($1)",
-				discoveryClaimAdvisoryLockKey,
-			); err != nil {
-				return fmt.Errorf(
-					"store: lock discovery claim: %w",
-					err,
-				)
-			}
-
 			var (
 				discoveryPaused          bool
 				automaticExpansionPaused bool
 			)
+
 			if err := tx.QueryRow(
 				ctx,
 				`
@@ -127,47 +135,52 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 					!automaticExpansionPaused
 
 			var storedOrigin string
+
 			scanErr := tx.QueryRow(
 				ctx,
 				`
-					WITH verified_candidate AS (
+					WITH scheduled_candidate AS (
 						SELECT
-							stored_origin.origin
-								AS source_origin,
+							schedule.source_origin,
 							source_state.last_attempted_at,
 							COALESCE(
 								source_state.seeded,
 								false
 							) AS seeded
-						FROM origins AS stored_origin
-						JOIN LATERAL (
+						FROM discovery_source_schedule
+							AS schedule
+						LEFT JOIN discovery_source_state
+							AS source_state
+							ON source_state.source_origin =
+								schedule.source_origin
+						LEFT JOIN LATERAL (
 							SELECT observation.outcome
 							FROM verification_observations
 								AS observation
 							WHERE observation.origin =
-								stored_origin.origin
+								schedule.source_origin
 								AND observation.outcome IN (
-									'valid',
-									'absent',
-									'invalid',
-									'unsupported_version',
-									'cross_origin_redirect'
+								'valid',
+								'absent',
+								'invalid',
+								'unsupported_version',
+								'cross_origin_redirect'
 								)
 							ORDER BY
 								observation.observed_at DESC,
 								observation.id DESC
 							LIMIT 1
-						) AS effective
-							ON effective.outcome = 'valid'
-						LEFT JOIN discovery_source_state
-							AS source_state
-							ON source_state.source_origin =
-								stored_origin.origin
+						) AS effective ON true
+						CROSS JOIN LATERAL (
+							SELECT count(*) AS count
+							FROM (
+								SELECT 1
+								FROM verification_queue
+								WHERE mode = 'probe'
+								LIMIT $4::bigint
+							) AS pending_probe
+						) AS pending_probes
 						WHERE NOT COALESCE(
-								source_state.seeded,
-								false
-							)
-							AND NOT COALESCE(
 								source_state.crawl_blocked,
 								false
 							)
@@ -180,101 +193,35 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 								IS NULL
 								OR source_state.last_attempted_at
 								<= (
-									$1::timestamptz -
-									make_interval(
-										secs =>
-										$2::double precision
-									)
+								$1::timestamptz -
+								make_interval(
+								secs =>
+								$2::double precision
+								)
 								)
 							)
 							AND (
-								source_state.lease_expires_at
-								IS NULL
-								OR source_state.lease_expires_at
-								<= $1
+								source_state.lease_expires_at IS NULL
+								OR source_state.lease_expires_at <= $1
 							)
-						ORDER BY
-							source_state.last_attempted_at
-								ASC NULLS FIRST,
-							stored_origin.origin ASC
-						FOR UPDATE OF stored_origin
-							SKIP LOCKED
-						LIMIT 1
-					),
-					seeded_candidate AS (
-						SELECT
-							source_state.source_origin,
-							source_state.last_attempted_at,
-							source_state.seeded
-						FROM discovery_source_state
-							AS source_state
-						WHERE NOT source_state.crawl_blocked
 							AND (
-								source_state.seeded
+								COALESCE(
+								source_state.seeded,
+								false
+								)
+								OR effective.outcome = 'valid'
 								OR (
-									$3::boolean
-									AND source_state.
-									automatically_discovered
-									AND (
-										SELECT count(*)
-										FROM (
-											SELECT 1
-											FROM verification_queue
-											WHERE mode = 'probe'
-											LIMIT $4::bigint
-										) AS pending_probe
-									) < $4::bigint
+								$3::boolean
+								AND pending_probes.count <
+								$4::bigint
 								)
-							)
-							AND (
-								source_state.next_attempt_at IS NULL
-								OR source_state.next_attempt_at <= $1
-							)
-							AND (
-								source_state.last_attempted_at
-								IS NULL
-								OR source_state.last_attempted_at
-								<= (
-									$1::timestamptz -
-									make_interval(
-										secs =>
-										$2::double precision
-									)
-								)
-							)
-							AND (
-								source_state.lease_expires_at
-								IS NULL
-								OR source_state.lease_expires_at
-								<= $1
 							)
 						ORDER BY
 							source_state.last_attempted_at
 								ASC NULLS FIRST,
-							source_state.source_origin ASC
-						FOR UPDATE OF source_state
+							schedule.source_origin ASC
+						FOR UPDATE OF schedule
 							SKIP LOCKED
-						LIMIT 1
-					),
-					candidate AS (
-						SELECT
-							source_origin,
-							last_attempted_at,
-							seeded
-						FROM verified_candidate
-
-						UNION ALL
-
-						SELECT
-							source_origin,
-							last_attempted_at,
-							seeded
-						FROM seeded_candidate
-
-						ORDER BY
-							last_attempted_at
-								ASC NULLS FIRST,
-							source_origin ASC
 						LIMIT 1
 					)
 					INSERT INTO discovery_source_state (
@@ -286,18 +233,18 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 						lease_expires_at
 					)
 					SELECT
-						candidate.source_origin,
-						candidate.seeded,
+						source_origin,
+						seeded,
 						1,
 						$6::text,
 						$1::timestamptz,
 						$5::timestamptz
-					FROM candidate
+					FROM scheduled_candidate
 					ON CONFLICT (source_origin) DO UPDATE
 					SET
 						lease_generation =
 							discovery_source_state.
-							lease_generation + 1,
+								lease_generation + 1,
 						lease_owner =
 							EXCLUDED.lease_owner,
 						last_claimed_at =

@@ -64,6 +64,7 @@ func TestDiscoveryStoreClaimsEveryValidIdentity(
 				declaration.OutcomeValid,
 				test.identity,
 			)
+			seedDiscoveryTestSchedule(t, pool, source)
 
 			discoveryStore := newDiscoveryTestStore(
 				t,
@@ -123,7 +124,7 @@ func TestDiscoveryStoreClaimsEveryValidIdentity(
 	}
 }
 
-func TestDiscoveryStoreExcludesNonVerifiedSources(
+func TestDiscoveryStoreDoesNotClaimKnownUnscheduledSources(
 	t *testing.T,
 ) {
 	outcomes := []declaration.Outcome{
@@ -266,6 +267,7 @@ func TestDiscoveryStoreTemporaryFailuresPreserveEligibility(
 					declaration.OutcomeValid,
 					declaration.IdentityUndeclared,
 				)
+				seedDiscoveryTestSchedule(t, pool, source)
 				seedDiscoveryTestObservation(
 					t,
 					pool,
@@ -331,6 +333,7 @@ func TestDiscoveryStoreUsesDeterministicClaimOrderAndInterval(
 			declaration.OutcomeValid,
 			declaration.IdentityUndeclared,
 		)
+		seedDiscoveryTestSchedule(t, pool, source)
 	}
 
 	interval := time.Hour
@@ -465,6 +468,7 @@ func TestDiscoveryStoreUsesPostgreSQLClock(
 		declaration.OutcomeValid,
 		declaration.IdentityAffirmed,
 	)
+	seedDiscoveryTestSchedule(t, pool, source)
 
 	discoveryStore, err := NewDiscoveryStore(pool)
 	if err != nil {
@@ -556,6 +560,7 @@ func TestDiscoveryStoreConcurrentClaimsReturnOneSource(
 		declaration.OutcomeValid,
 		declaration.IdentityAffirmed,
 	)
+	seedDiscoveryTestSchedule(t, pool, source)
 
 	discoveryStore := newDiscoveryTestStore(
 		t,
@@ -651,6 +656,7 @@ func TestDiscoveryStoreSkipsLockedSource(
 			declaration.OutcomeValid,
 			declaration.IdentityUndeclared,
 		)
+		seedDiscoveryTestSchedule(t, pool, source)
 	}
 
 	transaction, err := pool.Begin(ctx)
@@ -665,9 +671,9 @@ func TestDiscoveryStoreSkipsLockedSource(
 	err = transaction.QueryRow(
 		ctx,
 		`
-			SELECT origin
-			FROM origins
-			WHERE origin = $1
+			SELECT source_origin
+			FROM discovery_source_schedule
+			WHERE source_origin = $1
 			FOR UPDATE
 		`,
 		first.String(),
@@ -2159,6 +2165,11 @@ func TestDiscoveryStoreReturnsClockAndDatabaseFailures(
 					1,
 					'undeclared'
 				);
+
+				INSERT INTO discovery_source_schedule (
+					source_origin
+				)
+				VALUES ('not-an-origin');
 			`,
 			pgx.QueryExecModeSimpleProtocol,
 			now,
@@ -2202,7 +2213,7 @@ func TestDiscoveryStoreReturnsClockAndDatabaseFailures(
 
 		_, err := pool.Exec(
 			ctx,
-			"DROP TABLE origins CASCADE",
+			"DROP TABLE discovery_source_schedule",
 		)
 		if err != nil {
 			t.Fatalf("drop origins: %v", err)
@@ -2366,6 +2377,7 @@ func seedDiscoveryTestSource(
 		declaration.IdentityUndeclared,
 	)
 
+	seedDiscoveryTestSchedule(t, pool, source)
 	return source
 }
 
@@ -2398,6 +2410,31 @@ func seedDiscoveryTestObservation(
 	); err != nil {
 		t.Fatalf(
 			"seed RecordVerification() error = %v",
+			err,
+		)
+	}
+}
+
+func seedDiscoveryTestSchedule(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	source origin.Origin,
+) {
+	t.Helper()
+
+	if _, err := pool.Exec(
+		context.Background(),
+		`
+			INSERT INTO discovery_source_schedule (
+				source_origin
+			)
+			VALUES ($1)
+			ON CONFLICT (source_origin) DO NOTHING
+		`,
+		source.String(),
+	); err != nil {
+		t.Fatalf(
+			"seed discovery schedule: %v",
 			err,
 		)
 	}

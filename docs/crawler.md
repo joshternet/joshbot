@@ -58,22 +58,32 @@ participation.
 
 ## Crawl sources
 
-JoshBot crawls an origin only when it is:
+JoshBot separates durable knowledge about an origin from active discovery
+scheduling. An origin can remain known even when no discovery crawl is
+scheduled.
 
-- an independently verified Joshternet participant; or
-- explicitly configured by the operator as a curated seed; or
-- a discovered crawl source admitted by the optional automatic
-  expansion policy.
+Active scheduling can result from:
 
-A curated seed grants permission to use that origin as a discovery source. It
-does not assert that the origin participates in the Joshternet.
+- an independently verified Joshternet participant;
+- explicit operator curation as a seed;
+- admission through the optional automatic expansion policy; or
+- fresh rediscovery of a previously known automatic source or former
+  participant.
 
-Removing a seed prevents seed status from making it crawl-eligible. Existing
-verification observations and discovery provenance are not erased.
+A curated seed grants permission to use that origin as a discovery source and
+creates scheduling intent. It does not assert that the origin participates in
+the Joshternet.
+
+Removing a seed removes that scheduling reason. Existing verification
+observations, automatic-source classification, candidate evidence, and
+discovery provenance are not erased.
 
 Automatic sources remain distinct from curated seeds and verified
-participants. Automatic promotion records crawl eligibility only. It does not
-assert trust, ownership, endorsement, identity, or Joshternet participation.
+participants. Automatic promotion records durable classification and active
+scheduling separately. An authoritative terminal miss may remove scheduling
+without deleting the classification. Fresh rediscovery can reactivate the
+source. None of these states assert trust, ownership, endorsement, identity, or
+Joshternet participation.
 
 ## How pages are crawled
 
@@ -95,8 +105,15 @@ External HTTP and HTTPS links contribute their canonical origins as
 declaration-verification candidates.
 
 External origins are not followed as pages during the current source crawl.
-They become crawl-eligible only after independent verification, explicit
-operator curation, or admission by the enabled automatic expansion policy.
+A newly discovered origin becomes crawl-eligible only after independent
+verification, explicit operator curation, or admission by the enabled automatic
+expansion policy.
+
+A previously known automatic source or former participant can also regain
+active discovery scheduling when later discovery evidence is strictly newer
+than its latest authoritative declaration observation. Rediscovery preserves
+the existing classification, verification history, and provenance rather than
+creating a new source identity.
 
 Outbound robots-aware requests use a shared per-origin schedule. The effective
 delay for an origin is the greater of `JOSHBOT_CRAWL_REQUEST_DELAY` and the
@@ -231,11 +248,11 @@ disables it, blocks a source, pauses automatic expansion, pauses discovery, or
 no eligible source is due.
 
 When the pending verification probe queue reaches the configured high-water
-mark, JoshBot temporarily delays automatically discovered sources while
-retaining them for later. Curated seeds and verified participants remain
-eligible, and automatic claims resume after the worker drains the probe queue.
-This backpressure bounds active verification work without imposing a lifetime
-limit on discovery.
+mark, JoshBot temporarily delays scheduled sources that are neither curated
+seeds nor currently verified. Curated seeds and verified participants remain
+eligible, and those claims resume after the worker drains the probe queue. This
+backpressure bounds active verification work without discarding durable source
+knowledge or imposing a lifetime limit on discovery.
 
 ### Pausing automatic expansion
 
@@ -256,8 +273,8 @@ receive verification probes while automatic expansion is paused.
 
 The pause prevents two forms of automatic growth:
 
-- automatically discovered sources that are eligible only because of their
-  automatic classification are not selected for new discovery claims;
+- scheduled sources that are neither curated seeds nor currently verified
+  participants are not selected for new discovery claims;
 - newly resolved candidates are not promoted into automatic crawl sources.
 
 A crawl or admission operation already in progress may complete up to the
@@ -312,10 +329,11 @@ joshbot source block https://example.org
 joshbot source allow https://example.org
 ```
 
-The list reports curated, automatically discovered, verified, and blocked
-status independently. Blocking prevents future discovery claims even when an
-origin is curated or verified. Allowing restores eligibility according to its
-remaining classifications and the automatic-expansion configuration.
+The list reports curated, automatically discovered, verified, blocked, and
+crawl-eligible status independently. Blocking prevents future discovery claims
+even when an origin is curated or verified. Allowing removes the explicit
+block; discovery eligibility then depends on active scheduling and the
+automatic-expansion controls that apply to that scheduled source.
 
 ## Content handling
 

@@ -406,7 +406,7 @@ func TestAddCrawlSeedDatabasePathsWithoutDatabase(
 	t.Run(
 		"success",
 		func(t *testing.T) {
-			database := &discoveryUnitDatabase{
+			tx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{
 						tag: pgconn.NewCommandTag(
@@ -417,7 +417,7 @@ func TestAddCrawlSeedDatabasePathsWithoutDatabase(
 			}
 
 			store := discoverySimpleDatabaseStore(
-				database,
+				discoveryPolicyDatabase(tx),
 			)
 
 			if err := store.AddCrawlSeed(
@@ -433,13 +433,82 @@ func TestAddCrawlSeedDatabasePathsWithoutDatabase(
 	)
 
 	t.Run(
+		"begin failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test add seed begin failure",
+			)
+
+			store := discoverySimpleDatabaseStore(
+				&discoveryPolicyUnitDatabase{
+					discoveryUnitDatabase: &discoveryUnitDatabase{},
+					beginErr:              testErr,
+				},
+			)
+
+			err := store.AddCrawlSeed(
+				ctx,
+				source,
+			)
+
+			if !errors.Is(err, testErr) ||
+				!strings.Contains(
+					err.Error(),
+					"store: add crawl seed",
+				) {
+				t.Fatalf(
+					"AddCrawlSeed() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"schedule lock failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test discovery schedule lock failure",
+			)
+
+			tx := &discoveryPolicyUnitTx{
+				discoveryScheduleLockErr: testErr,
+			}
+
+			store := discoverySimpleDatabaseStore(
+				discoveryPolicyDatabase(tx),
+			)
+
+			err := store.AddCrawlSeed(
+				ctx,
+				source,
+			)
+
+			if !errors.Is(err, testErr) ||
+				!strings.Contains(
+					err.Error(),
+					"lock discovery schedule origin",
+				) ||
+				!strings.Contains(
+					err.Error(),
+					"store: add crawl seed",
+				) {
+				t.Fatalf(
+					"AddCrawlSeed() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
 		"database failure",
 		func(t *testing.T) {
 			testErr := errors.New(
 				"test add seed failure",
 			)
 
-			database := &discoveryUnitDatabase{
+			tx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{
 						err: testErr,
@@ -448,7 +517,7 @@ func TestAddCrawlSeedDatabasePathsWithoutDatabase(
 			}
 
 			store := discoverySimpleDatabaseStore(
-				database,
+				discoveryPolicyDatabase(tx),
 			)
 
 			err := store.AddCrawlSeed(
@@ -507,18 +576,18 @@ func TestRemoveCrawlSeedDatabasePathsWithoutDatabase(
 	t.Run(
 		"success",
 		func(t *testing.T) {
-			database := &discoveryUnitDatabase{
+			tx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{
 						tag: pgconn.NewCommandTag(
-							"UPDATE 1",
+							"DELETE 1",
 						),
 					},
 				},
 			}
 
 			store := discoverySimpleDatabaseStore(
-				database,
+				discoveryPolicyDatabase(tx),
 			)
 
 			if err := store.RemoveCrawlSeed(
@@ -534,13 +603,82 @@ func TestRemoveCrawlSeedDatabasePathsWithoutDatabase(
 	)
 
 	t.Run(
+		"begin failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test remove seed begin failure",
+			)
+
+			store := discoverySimpleDatabaseStore(
+				&discoveryPolicyUnitDatabase{
+					discoveryUnitDatabase: &discoveryUnitDatabase{},
+					beginErr:              testErr,
+				},
+			)
+
+			err := store.RemoveCrawlSeed(
+				ctx,
+				source,
+			)
+
+			if !errors.Is(err, testErr) ||
+				!strings.Contains(
+					err.Error(),
+					"store: remove crawl seed",
+				) {
+				t.Fatalf(
+					"RemoveCrawlSeed() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"schedule lock failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test discovery schedule lock failure",
+			)
+
+			tx := &discoveryPolicyUnitTx{
+				discoveryScheduleLockErr: testErr,
+			}
+
+			store := discoverySimpleDatabaseStore(
+				discoveryPolicyDatabase(tx),
+			)
+
+			err := store.RemoveCrawlSeed(
+				ctx,
+				source,
+			)
+
+			if !errors.Is(err, testErr) ||
+				!strings.Contains(
+					err.Error(),
+					"lock discovery schedule origin",
+				) ||
+				!strings.Contains(
+					err.Error(),
+					"store: remove crawl seed",
+				) {
+				t.Fatalf(
+					"RemoveCrawlSeed() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
 		"database failure",
 		func(t *testing.T) {
 			testErr := errors.New(
 				"test remove seed failure",
 			)
 
-			database := &discoveryUnitDatabase{
+			tx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{
 						err: testErr,
@@ -549,7 +687,7 @@ func TestRemoveCrawlSeedDatabasePathsWithoutDatabase(
 			}
 
 			store := discoverySimpleDatabaseStore(
-				database,
+				discoveryPolicyDatabase(tx),
 			)
 
 			err := store.RemoveCrawlSeed(

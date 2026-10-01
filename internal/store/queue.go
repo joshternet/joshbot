@@ -229,13 +229,18 @@ func (q *Queue) VerificationPaused(ctx context.Context) (bool, error) {
 	if err := q.validate(ctx); err != nil {
 		return false, err
 	}
+
 	var paused bool
 	if err := q.pool.QueryRow(
 		ctx,
 		"SELECT verification_paused FROM crawl_control WHERE singleton",
 	).Scan(&paused); err != nil {
-		return false, fmt.Errorf("store: read queue control: %w", err)
+		return false, fmt.Errorf(
+			"store: read queue control: %w",
+			err,
+		)
 	}
+
 	return paused, nil
 }
 
@@ -277,8 +282,12 @@ func (q *Queue) Claim(
 				ctx,
 				"SELECT verification_paused FROM crawl_control WHERE singleton",
 			).Scan(&paused); err != nil {
-				return fmt.Errorf("store: read queue control: %w", err)
+				return fmt.Errorf(
+					"store: read queue control: %w",
+					err,
+				)
 			}
+
 			if paused {
 				return nil
 			}
@@ -562,9 +571,12 @@ func (q *Queue) CompleteVerification(
 	failureCategory := result.FailureCategory
 	if result.Outcome == declaration.OutcomeUnavailable &&
 		failureCategory == retry.CategoryNone {
-		failureCategory = retry.CategoryDeclarationUnavailable
+		failureCategory =
+			retry.CategoryDeclarationUnavailable
 	}
-	transient := result.Outcome == declaration.OutcomeUnavailable &&
+
+	transient := result.Outcome ==
+		declaration.OutcomeUnavailable &&
 		failureCategory.Transient()
 	reprobe := shouldReprobeOutcome(result.Outcome)
 
@@ -572,6 +584,14 @@ func (q *Queue) CompleteVerification(
 		ctx,
 		q.pool,
 		func(tx pgx.Tx) error {
+			if err := lockDiscoveryScheduleOrigin(
+				ctx,
+				tx,
+				lease.Origin.String(),
+			); err != nil {
+				return err
+			}
+
 			completedAt, clockErr :=
 				q.completionTime(ctx, tx)
 			if clockErr != nil {
@@ -583,41 +603,60 @@ func (q *Queue) CompleteVerification(
 				priorReprobeMisses  int64
 				hasParticipated     bool
 			)
-			lockErr := tx.QueryRow(ctx, `
-				SELECT
-					queued.consecutive_failures,
-					COALESCE(reprobe_state.miss_count, 0),
-					stored_origin.first_participated_at IS NOT NULL
-				FROM verification_queue AS queued
-				LEFT JOIN verification_reprobe_state AS reprobe_state
-					ON reprobe_state.origin = queued.origin
-				LEFT JOIN origins AS stored_origin
-					ON stored_origin.origin = queued.origin
-				WHERE queued.origin = $1
-					AND queued.lease_owner = $2
-					AND queued.lease_generation = $3
-					AND queued.lease_expires_at > $4
-				FOR UPDATE OF queued
-			`, lease.Origin.String(), lease.WorkerID, lease.Generation, completedAt).
-				Scan(
-					&consecutiveFailures,
-					&priorReprobeMisses,
-					&hasParticipated,
-				)
+
+			lockErr := tx.QueryRow(
+				ctx,
+				`
+					SELECT
+						queued.consecutive_failures,
+						COALESCE(
+							reprobe_state.miss_count,
+							0
+						),
+						stored_origin.first_participated_at
+							IS NOT NULL
+					FROM verification_queue AS queued
+					LEFT JOIN verification_reprobe_state
+						AS reprobe_state
+						ON reprobe_state.origin =
+							queued.origin
+					LEFT JOIN origins AS stored_origin
+						ON stored_origin.origin =
+							queued.origin
+					WHERE queued.origin = $1
+						AND queued.lease_owner = $2
+						AND queued.lease_generation = $3
+						AND queued.lease_expires_at > $4
+					FOR UPDATE OF queued
+				`,
+				lease.Origin.String(),
+				lease.WorkerID,
+				lease.Generation,
+				completedAt,
+			).Scan(
+				&consecutiveFailures,
+				&priorReprobeMisses,
+				&hasParticipated,
+			)
 			if errors.Is(lockErr, pgx.ErrNoRows) {
 				return ErrLeaseLost
 			}
+
 			if lockErr != nil {
 				return lockErr
 			}
 
-			requestedAvailableAt := completedAt.Add(recheckAfter).UTC()
+			requestedAvailableAt := completedAt.
+				Add(recheckAfter).
+				UTC()
 			reprobeAvailableAt := requestedAvailableAt
 
 			if reprobe {
-				firstReprobeInterval := q.config.FirstReprobeInterval
+				firstReprobeInterval :=
+					q.config.FirstReprobeInterval
 				if firstReprobeInterval == 0 {
-					firstReprobeInterval = defaultFirstReprobeInterval
+					firstReprobeInterval =
+						defaultFirstReprobeInterval
 				}
 
 				reprobeAvailableAt = completedAt.Add(
@@ -630,21 +669,31 @@ func (q *Queue) CompleteVerification(
 
 			nextFailures := 0
 			if transient {
-				nextFailures = consecutiveFailures + 1
+				nextFailures =
+					consecutiveFailures + 1
 				retryDelay := q.retryPolicy.Delay(
 					nextFailures,
 					result.RetryAfter,
 				)
+
 				if hasParticipated &&
-					nextFailures > transientRetryBackoffSteps {
+					nextFailures >
+						transientRetryBackoffSteps {
 					retryDelay =
 						staleParticipantRecheckInterval
 				}
-				requestedAvailableAt = completedAt.Add(
-					retryDelay,
+
+				requestedAvailableAt =
+					completedAt.Add(
+						retryDelay,
+					).UTC()
+
+				politeAt := lease.ClaimedAt.Add(
+					q.config.MinOriginInterval,
 				).UTC()
-				politeAt := lease.ClaimedAt.Add(q.config.MinOriginInterval).UTC()
-				if politeAt.After(requestedAvailableAt) {
+				if politeAt.After(
+					requestedAvailableAt,
+				) {
 					requestedAvailableAt = politeAt
 				}
 			}
@@ -692,8 +741,8 @@ func (q *Queue) CompleteVerification(
 								END,
 								queued.last_claimed_at +
 								make_interval(
-								secs =>
-								$6::double precision
+									secs =>
+										$6::double precision
 								)
 							),
 							consecutive_failures = $10,
@@ -701,12 +750,12 @@ func (q *Queue) CompleteVerification(
 							next_attempt_at = CASE
 								WHEN $12::boolean
 								THEN GREATEST(
-								$5,
-								queued.last_claimed_at +
-								make_interval(
-								secs =>
-								$6::double precision
-								)
+									$5,
+									queued.last_claimed_at +
+									make_interval(
+										secs =>
+											$6::double precision
+									)
 								)
 								ELSE NULL
 							END,
@@ -880,6 +929,45 @@ func (q *Queue) CompleteVerification(
 							verification_reprobe_state.miss_count +
 							EXCLUDED.miss_count
 						RETURNING origin
+					),
+					scheduled_discovery_source AS (
+						INSERT INTO discovery_source_schedule (
+							source_origin
+						)
+						SELECT
+							recorded_reprobe_state.origin
+						FROM recorded_reprobe_state
+						WHERE $7::text = 'valid'
+						ON CONFLICT (source_origin) DO NOTHING
+					),
+					unscheduled_discovery_source AS (
+						DELETE FROM discovery_source_schedule
+						USING recorded_reprobe_state
+						WHERE
+							discovery_source_schedule.source_origin =
+								recorded_reprobe_state.origin
+							AND $7::text IN (
+								'absent',
+								'invalid',
+								'unsupported_version',
+								'cross_origin_redirect'
+							)
+							AND NOT EXISTS (
+								SELECT 1
+								FROM discovery_source_state
+									AS source_state
+								WHERE source_state.source_origin =
+										recorded_reprobe_state.origin
+									AND source_state.seeded
+							)
+							AND NOT EXISTS (
+								SELECT 1
+								FROM discovery_candidates AS candidate
+								WHERE candidate.origin =
+										recorded_reprobe_state.origin
+									AND candidate.last_discovered_at >
+										$4::timestamptz
+							)
 					)
 					INSERT INTO verification_observations (
 						origin,
@@ -906,7 +994,10 @@ func (q *Queue) CompleteVerification(
 				version,
 				identity,
 				nextFailures,
-				nullableFailureCategory(transient, failureCategory),
+				nullableFailureCategory(
+					transient,
+					failureCategory,
+				),
 				transient,
 				reprobe,
 				reprobeAvailableAt,
@@ -936,10 +1027,14 @@ func (q *Queue) CompleteVerification(
 	return nil
 }
 
-func nullableFailureCategory(transient bool, category retry.Category) any {
+func nullableFailureCategory(
+	transient bool,
+	category retry.Category,
+) any {
 	if !transient {
 		return nil
 	}
+
 	return string(category)
 }
 

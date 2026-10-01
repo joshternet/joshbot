@@ -281,6 +281,67 @@ func TestRecordDiscoveryDatabasePathsWithoutDatabase(
 	)
 
 	t.Run(
+		"schedule lock failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test discovery schedule lock failure",
+			)
+
+			tx := &discoveryPolicyUnitTx{
+				discoveryScheduleLockErr: testErr,
+			}
+
+			database := &recordDiscoveryUnitDatabase{
+				beginResults: []recordDiscoveryBeginResult{
+					{
+						tx: tx,
+					},
+				},
+			}
+
+			store := recordDiscoveryStore(
+				t,
+				database,
+				recordDiscoveryUnitClock{
+					now: now,
+				},
+				true,
+			)
+
+			result, err := store.recordDiscovery(
+				ctx,
+				0,
+				source,
+				[]discovery.Candidate{
+					candidate,
+				},
+			)
+
+			if result != (discovery.RecordResult{}) {
+				t.Fatalf(
+					"recordDiscovery() result = %#v, want zero",
+					result,
+				)
+			}
+
+			if !errors.Is(err, testErr) ||
+				!strings.Contains(
+					err.Error(),
+					"store: lock discovery schedule origin",
+				) ||
+				!strings.Contains(
+					err.Error(),
+					"store: record discovery",
+				) {
+				t.Fatalf(
+					"recordDiscovery() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
 		"clock failure",
 		func(t *testing.T) {
 			testErr := errors.New(
