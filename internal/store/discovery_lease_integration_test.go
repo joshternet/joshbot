@@ -54,10 +54,11 @@ func TestDiscoverySourceLeaseReclaimCancelsAbandonedCrawlRun(
 
 	firstLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx, testDiscoveryLeaseOwner,
-
+			ctx,
+			testDiscoveryLeaseOwner,
 			interval,
-			leaseDuration)
+			leaseDuration,
+		)
 
 	if err != nil {
 		t.Fatal(err)
@@ -67,25 +68,44 @@ func TestDiscoverySourceLeaseReclaimCancelsAbandonedCrawlRun(
 	}
 
 	var runID int64
-	if err := pool.QueryRow(ctx, `
-		INSERT INTO crawl_runs (
-			source_origin, started_at, max_depth, max_pages,
-			max_page_bytes, request_delay_milliseconds,
-			redirect_limit, page_timeout_milliseconds
-		) VALUES (
-			$1, $2, 0, 1, 1, 0, 0, 1
-		)
-		RETURNING id
-	`, source.String(), firstClaimAt).Scan(&runID); err != nil {
+	if err := pool.QueryRow(
+		ctx,
+		`
+			INSERT INTO crawl_runs (
+				source_origin,
+				started_at,
+				max_depth,
+				max_pages,
+				max_page_bytes,
+				request_delay_milliseconds,
+				redirect_limit,
+				page_timeout_milliseconds
+			)
+			VALUES (
+				$1,
+				$2,
+				0,
+				1,
+				1,
+				0,
+				0,
+				1
+			)
+			RETURNING id
+		`,
+		source.String(),
+		firstClaimAt,
+	).Scan(&runID); err != nil {
 		t.Fatal(err)
 	}
 
 	blockedLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx, testDiscoveryLeaseOwner,
-
+			ctx,
+			testDiscoveryLeaseOwner,
 			interval,
-			leaseDuration)
+			leaseDuration,
+		)
 
 	if err != nil {
 		t.Fatal(err)
@@ -102,11 +122,19 @@ func TestDiscoverySourceLeaseReclaimCancelsAbandonedCrawlRun(
 		stopReason string
 		finishedAt *time.Time
 	)
-	if err := pool.QueryRow(ctx, `
-		SELECT outcome, stop_reason, finished_at
-		FROM crawl_runs
-		WHERE id = $1
-	`, runID).Scan(
+
+	if err := pool.QueryRow(
+		ctx,
+		`
+			SELECT
+				outcome,
+				stop_reason,
+				finished_at
+			FROM crawl_runs
+			WHERE id = $1
+		`,
+		runID,
+	).Scan(
 		&outcome,
 		&stopReason,
 		&finishedAt,
@@ -127,10 +155,11 @@ func TestDiscoverySourceLeaseReclaimCancelsAbandonedCrawlRun(
 
 	reclaimedLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx, testDiscoveryLeaseOwner,
-
+			ctx,
+			testDiscoveryLeaseOwner,
 			interval,
-			leaseDuration)
+			leaseDuration,
+		)
 
 	if err != nil {
 		t.Fatal(err)
@@ -146,11 +175,18 @@ func TestDiscoverySourceLeaseReclaimCancelsAbandonedCrawlRun(
 		)
 	}
 
-	if err := pool.QueryRow(ctx, `
-		SELECT outcome, stop_reason, finished_at
-		FROM crawl_runs
-		WHERE id = $1
-	`, runID).Scan(
+	if err := pool.QueryRow(
+		ctx,
+		`
+			SELECT
+				outcome,
+				stop_reason,
+				finished_at
+			FROM crawl_runs
+			WHERE id = $1
+		`,
+		runID,
+	).Scan(
 		&outcome,
 		&stopReason,
 		&finishedAt,
@@ -159,7 +195,10 @@ func TestDiscoverySourceLeaseReclaimCancelsAbandonedCrawlRun(
 	}
 
 	if outcome != "canceled" {
-		t.Errorf("reclaimed outcome = %q, want canceled", outcome)
+		t.Errorf(
+			"reclaimed outcome = %q, want canceled",
+			outcome,
+		)
 	}
 	if stopReason != "lease_reclaimed" {
 		t.Errorf(
@@ -228,10 +267,11 @@ func TestDiscoverySourceLeaseCrashRecovery(
 
 	firstLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx, testDiscoveryLeaseOwner,
-
+			ctx,
+			testDiscoveryLeaseOwner,
 			interval,
-			leaseDuration)
+			leaseDuration,
+		)
 
 	if err != nil {
 		t.Fatalf(
@@ -314,10 +354,11 @@ func TestDiscoverySourceLeaseCrashRecovery(
 
 	blockedLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx, testDiscoveryLeaseOwner,
-
+			ctx,
+			testDiscoveryLeaseOwner,
 			interval,
-			leaseDuration)
+			leaseDuration,
+		)
 
 	if err != nil {
 		t.Fatalf(
@@ -358,10 +399,11 @@ func TestDiscoverySourceLeaseCrashRecovery(
 
 	reclaimedLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx, testDiscoveryLeaseOwner,
-
+			ctx,
+			testDiscoveryLeaseOwner,
 			interval,
-			leaseDuration)
+			leaseDuration,
+		)
 
 	if err != nil {
 		t.Fatalf(
@@ -547,10 +589,11 @@ func TestDiscoverySourceLeaseCrashRecovery(
 
 	earlyLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx, testDiscoveryLeaseOwner,
-
+			ctx,
+			testDiscoveryLeaseOwner,
 			interval,
-			leaseDuration)
+			leaseDuration,
+		)
 
 	if err != nil {
 		t.Fatalf(
@@ -567,10 +610,11 @@ func TestDiscoverySourceLeaseCrashRecovery(
 
 	dueLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx, testDiscoveryLeaseOwner,
-
+			ctx,
+			testDiscoveryLeaseOwner,
 			interval,
-			leaseDuration)
+			leaseDuration,
+		)
 
 	if err != nil {
 		t.Fatalf(
@@ -660,10 +704,11 @@ func TestDiscoverySourceLeaseRenewAndStaleRenew(
 
 	firstLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx, testDiscoveryLeaseOwner,
-
+			ctx,
+			testDiscoveryLeaseOwner,
 			interval,
-			leaseDuration)
+			leaseDuration,
+		)
 
 	if err != nil {
 		t.Fatalf(
@@ -759,10 +804,11 @@ func TestDiscoverySourceLeaseRenewAndStaleRenew(
 
 	blockedLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx, testDiscoveryLeaseOwner,
-
+			ctx,
+			testDiscoveryLeaseOwner,
 			interval,
-			leaseDuration)
+			leaseDuration,
+		)
 
 	if err != nil {
 		t.Fatalf(
@@ -779,10 +825,11 @@ func TestDiscoverySourceLeaseRenewAndStaleRenew(
 
 	reclaimedLease, found, err :=
 		discoveryStore.ClaimDiscoverySourceLease(
-			ctx, testDiscoveryLeaseOwner,
-
+			ctx,
+			testDiscoveryLeaseOwner,
 			interval,
-			leaseDuration)
+			leaseDuration,
+		)
 
 	if err != nil {
 		t.Fatalf(
@@ -997,8 +1044,14 @@ func TestDiscoverySourceLeasePauseKeepsSeedsAndVerifiedOrigins(
 	pool := newStoreTestPool(t)
 	now := queueTestTime()
 
-	automatic := mustStoreOrigin(t, "https://a-auto.example")
-	seed := mustStoreOrigin(t, "https://b-seed.example")
+	scheduled := mustStoreOrigin(
+		t,
+		"https://a-scheduled.example",
+	)
+	seed := mustStoreOrigin(
+		t,
+		"https://b-seed.example",
+	)
 	verified := seedDiscoveryTestSource(
 		t,
 		pool,
@@ -1006,22 +1059,27 @@ func TestDiscoverySourceLeasePauseKeepsSeedsAndVerifiedOrigins(
 		now,
 	)
 
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO discovery_source_state (
-			source_origin,
-			automatically_discovered
-		) VALUES ($1, true)
-	`, automatic.String()); err != nil {
+	if _, err := pool.Exec(
+		ctx,
+		`
+			INSERT INTO discovery_source_schedule (
+				source_origin
+			)
+			VALUES ($1)
+		`,
+		scheduled.String(),
+	); err != nil {
 		t.Fatal(err)
 	}
 
-	discoveryStore, err := NewDiscoveryStoreWithAutomaticCrawling(
-		pool,
-		AutomaticCrawlConfig{
-			Enabled:          true,
-			MaxPendingProbes: 10,
-		},
-	)
+	discoveryStore, err :=
+		NewDiscoveryStoreWithAutomaticCrawling(
+			pool,
+			AutomaticCrawlConfig{
+				Enabled:          true,
+				MaxPendingProbes: 10,
+			},
+		)
 	if err != nil {
 		t.Fatalf(
 			"NewDiscoveryStoreWithAutomaticCrawling() error = %v",
@@ -1029,23 +1087,34 @@ func TestDiscoverySourceLeasePauseKeepsSeedsAndVerifiedOrigins(
 		)
 	}
 
-	if err := discoveryStore.AddCrawlSeed(ctx, seed); err != nil {
-		t.Fatalf("AddCrawlSeed() error = %v", err)
+	if err := discoveryStore.AddCrawlSeed(
+		ctx,
+		seed,
+	); err != nil {
+		t.Fatalf(
+			"AddCrawlSeed() error = %v",
+			err,
+		)
 	}
 
-	if _, err := pool.Exec(ctx, `
-		UPDATE crawl_control
-		SET automatic_expansion_paused = true
-		WHERE singleton
-	`); err != nil {
+	if _, err := pool.Exec(
+		ctx,
+		`
+			UPDATE crawl_control
+			SET automatic_expansion_paused = true
+			WHERE singleton
+		`,
+	); err != nil {
 		t.Fatal(err)
 	}
 
-	first, found, err := discoveryStore.ClaimDiscoverySourceLease(
-		ctx, testDiscoveryLeaseOwner,
-
-		time.Hour,
-		time.Minute)
+	first, found, err :=
+		discoveryStore.ClaimDiscoverySourceLease(
+			ctx,
+			testDiscoveryLeaseOwner,
+			time.Hour,
+			time.Minute,
+		)
 
 	if err != nil {
 		t.Fatalf(
@@ -1053,7 +1122,8 @@ func TestDiscoverySourceLeasePauseKeepsSeedsAndVerifiedOrigins(
 			err,
 		)
 	}
-	if !found || first.Origin.String() != seed.String() {
+	if !found ||
+		first.Origin.String() != seed.String() {
 		t.Fatalf(
 			"seed claim = found:%t origin:%q, want true/%s",
 			found,
@@ -1062,11 +1132,13 @@ func TestDiscoverySourceLeasePauseKeepsSeedsAndVerifiedOrigins(
 		)
 	}
 
-	second, found, err := discoveryStore.ClaimDiscoverySourceLease(
-		ctx, testDiscoveryLeaseOwner,
-
-		time.Hour,
-		time.Minute)
+	second, found, err :=
+		discoveryStore.ClaimDiscoverySourceLease(
+			ctx,
+			testDiscoveryLeaseOwner,
+			time.Hour,
+			time.Minute,
+		)
 
 	if err != nil {
 		t.Fatalf(
@@ -1074,7 +1146,8 @@ func TestDiscoverySourceLeasePauseKeepsSeedsAndVerifiedOrigins(
 			err,
 		)
 	}
-	if !found || second.Origin.String() != verified.String() {
+	if !found ||
+		second.Origin.String() != verified.String() {
 		t.Fatalf(
 			"verified claim = found:%t origin:%q, want true/%s",
 			found,
@@ -1083,32 +1156,46 @@ func TestDiscoverySourceLeasePauseKeepsSeedsAndVerifiedOrigins(
 		)
 	}
 
-	_, found, err = discoveryStore.ClaimDiscoverySourceLease(
-		ctx, testDiscoveryLeaseOwner,
-
-		time.Hour,
-		time.Minute)
+	_, found, err =
+		discoveryStore.ClaimDiscoverySourceLease(
+			ctx,
+			testDiscoveryLeaseOwner,
+			time.Hour,
+			time.Minute,
+		)
 
 	if err != nil {
 		t.Fatalf(
-			"automatic ClaimDiscoverySourceLease() error = %v",
+			"scheduled ClaimDiscoverySourceLease() error = %v",
 			err,
 		)
 	}
 	if found {
-		t.Fatal("automatic-only source was claimed while expansion is paused")
+		t.Fatal(
+			"scheduled non-seed non-valid source was claimed while automatic expansion is paused",
+		)
 	}
 
-	var claimed bool
-	if err := pool.QueryRow(ctx, `
-		SELECT lease_expires_at IS NOT NULL
-		FROM discovery_source_state
-		WHERE source_origin = $1
-	`, automatic.String()).Scan(&claimed); err != nil {
+	var leased bool
+	if err := pool.QueryRow(
+		ctx,
+		`
+			SELECT EXISTS (
+				SELECT 1
+				FROM discovery_source_state
+				WHERE source_origin = $1
+					AND lease_expires_at IS NOT NULL
+			)
+		`,
+		scheduled.String(),
+	).Scan(&leased); err != nil {
 		t.Fatal(err)
 	}
-	if claimed {
-		t.Fatal("automatic-only source received a discovery lease")
+
+	if leased {
+		t.Fatal(
+			"scheduled non-seed non-valid source received a discovery lease",
+		)
 	}
 }
 

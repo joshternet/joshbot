@@ -12,7 +12,7 @@ import (
 	"github.com/joshternet/joshbot/internal/origin"
 )
 
-func TestCrawlSeedAddsUnverifiedOriginWithoutSideEffects(
+func TestCrawlSeedAddsUnverifiedOriginWithoutVerificationSideEffects(
 	t *testing.T,
 ) {
 	ctx := context.Background()
@@ -68,6 +68,17 @@ func TestCrawlSeedAddsUnverifiedOriginWithoutSideEffects(
 	if !seeded {
 		t.Error(
 			"seeded = false, want true",
+		)
+	}
+
+	if !discoverySourceIsScheduled(
+		t,
+		ctx,
+		pool,
+		source.String(),
+	) {
+		t.Error(
+			"crawl seed is not scheduled",
 		)
 	}
 
@@ -524,6 +535,17 @@ func TestCrawlSeedRemoveDisablesUnverifiedSource(
 		)
 	}
 
+	if discoverySourceIsScheduled(
+		t,
+		ctx,
+		pool,
+		source.String(),
+	) {
+		t.Error(
+			"removed seed remains scheduled",
+		)
+	}
+
 	seeds, err := crawlStore.CrawlSeeds(ctx)
 	if err != nil {
 		t.Fatalf(
@@ -753,6 +775,17 @@ func TestCrawlSeedRemovalPreservesVerifiedEligibilityAndState(
 		t.Errorf(
 			"CrawlSeeds() = %#v, want empty",
 			seeds,
+		)
+	}
+
+	if !discoverySourceIsScheduled(
+		t,
+		ctx,
+		pool,
+		source.String(),
+	) {
+		t.Error(
+			"verified source lost discovery scheduling after seed removal",
 		)
 	}
 

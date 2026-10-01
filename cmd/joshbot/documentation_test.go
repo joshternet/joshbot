@@ -388,6 +388,7 @@ func testDocumentedRetention(t *testing.T) {
 		"crawl_run_automatic_admission_batches",
 		"discovery_candidates",
 		"discovery_edges",
+		"discovery_source_schedule",
 		"discovery_source_state",
 		"operator_audit_events",
 		"schema_migrations",

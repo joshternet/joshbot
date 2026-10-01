@@ -31,6 +31,21 @@ func (tx *completeVerificationCaptureTx) Exec(
 	query string,
 	arguments ...any,
 ) (pgconn.CommandTag, error) {
+	if strings.Contains(
+		query,
+		"pg_advisory_xact_lock",
+	) &&
+		len(arguments) == 1 {
+		key, ok := arguments[0].(int64)
+		if ok && key < 0 {
+			return tx.discoveryPolicyUnitTx.Exec(
+				ctx,
+				query,
+				arguments...,
+			)
+		}
+	}
+
 	tx.execQueries = append(
 		tx.execQueries,
 		query,
@@ -306,6 +321,48 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 				err,
 				testErr,
 			) ||
+				!strings.Contains(
+					err.Error(),
+					"store: complete verification",
+				) {
+				t.Fatalf(
+					"CompleteVerification() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"schedule lock failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test discovery schedule lock failure",
+			)
+
+			tx := &discoveryPolicyUnitTx{
+				discoveryScheduleLockErr: testErr,
+			}
+
+			queue := queueSimpleDatabaseStore(
+				discoveryPolicyDatabase(tx),
+				completeVerificationClock{
+					now: now,
+				},
+			)
+
+			err := queue.CompleteVerification(
+				ctx,
+				lease,
+				validResult,
+				time.Hour,
+			)
+
+			if !errors.Is(err, testErr) ||
+				!strings.Contains(
+					err.Error(),
+					"store: lock discovery schedule origin",
+				) ||
 				!strings.Contains(
 					err.Error(),
 					"store: complete verification",
@@ -879,6 +936,7 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 		strings.Fields(tx.execQueries[0]),
 		" ",
 	)
+
 	if !strings.Contains(
 		normalizedQuery,
 		"THEN $14::timestamptz ELSE $5::timestamptz END",
@@ -899,6 +957,22 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 		t.Fatalf(
 			"completion query does not retain existing reprobes",
 		)
+	}
+
+	for _, fragment := range []string{
+		"DELETE FROM discovery_source_schedule USING recorded_reprobe_state",
+		"source_state.seeded",
+		"candidate.last_discovered_at > $4::timestamptz",
+	} {
+		if !strings.Contains(
+			normalizedQuery,
+			fragment,
+		) {
+			t.Fatalf(
+				"completion query does not protect newer discovery evidence: missing %q",
+				fragment,
+			)
+		}
 	}
 }
 

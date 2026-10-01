@@ -15,8 +15,19 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   `crawl_control.automatic_expansion_paused`, changed through
   `POST /api/v1/control/automatic-expansion/{pause|resume}`, and visible on
   status and `joshbot_automatic_expansion_paused` (#78).
-- The embedded schema now contains eighteen migrations, `0001` through
-  `0018`, including `0018_automatic_expansion_control.sql`.
+- Discovery scheduling is separate from durable discovery knowledge.
+  `discovery_source_schedule` is the set of origins that currently have crawl
+  intent. An origin, candidate, or provenance edge can stay known after an
+  authoritative terminal miss removes that intent. A strictly newer
+  rediscovery can schedule the same origin again. Known origins are not
+  capped (#139).
+- `registry-export` writes a fresh public registry snapshot every
+  `JOSHBOT_REGISTRY_PUBLISH_INTERVAL` (default 15 minutes). It has database
+  access and no GitHub token.
+- `registry-publish` publishes each new snapshot. An unchanged registry
+  does not create a commit. It has the GitHub token and no database access.
+- The embedded schema now contains twenty-three migrations, `0001` through
+  `0023`, including `0023_discovery_source_schedule.sql`.
 
 ## [1.1.0] - 2026-09-21
 

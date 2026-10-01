@@ -13,14 +13,22 @@ import (
 )
 
 type claimDiscoveryClock struct {
-	now time.Time
-	err error
+	now    time.Time
+	err    error
+	events *[]string
 }
 
 func (clock claimDiscoveryClock) NowTransaction(
 	context.Context,
 	pgx.Tx,
 ) (time.Time, error) {
+	if clock.events != nil {
+		*clock.events = append(
+			*clock.events,
+			"clock",
+		)
+	}
+
 	return clock.now, clock.err
 }
 
@@ -49,6 +57,7 @@ func claimDiscoveryUnitStore(
 type discoveryLeaseCaptureTx struct {
 	*discoveryPolicyUnitTx
 
+	events       *[]string
 	claimQuery   string
 	claimArgs    []any
 	cleanupQuery string
@@ -60,6 +69,17 @@ func (tx *discoveryLeaseCaptureTx) Exec(
 	query string,
 	args ...any,
 ) (pgconn.CommandTag, error) {
+	if tx.events != nil &&
+		strings.Contains(
+			query,
+			"pg_advisory_xact_lock",
+		) {
+		*tx.events = append(
+			*tx.events,
+			"lock",
+		)
+	}
+
 	if strings.Contains(
 		query,
 		"UPDATE crawl_runs",
@@ -85,7 +105,7 @@ func (tx *discoveryLeaseCaptureTx) QueryRow(
 ) pgx.Row {
 	if strings.Contains(
 		query,
-		"WITH verified_candidate AS",
+		"WITH scheduled_candidate AS",
 	) {
 		tx.claimQuery = query
 		tx.claimArgs = append(
@@ -125,10 +145,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			lease, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					interval,
-					leaseDuration)
+					leaseDuration,
+				)
 
 			if lease.Origin.String() != "" ||
 				lease.Generation != 0 ||
@@ -174,10 +195,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					0,
-					leaseDuration)
+					leaseDuration,
+				)
 
 			if found {
 				t.Fatal(
@@ -213,10 +235,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					interval,
-					0)
+					0,
+				)
 
 			if found {
 				t.Fatal(
@@ -253,10 +276,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					interval,
-					leaseDuration)
+					leaseDuration,
+				)
 
 			if found {
 				t.Fatal(
@@ -287,22 +311,37 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				"test discovery lease clock failure",
 			)
 
-			tx := &discoveryPolicyUnitTx{}
+			events := make(
+				[]string,
+				0,
+				2,
+			)
+			baseTx := &discoveryPolicyUnitTx{
+				execResults: []discoveryUnitExecResult{
+					{},
+				},
+			}
+			tx := &discoveryLeaseCaptureTx{
+				discoveryPolicyUnitTx: baseTx,
+				events:                &events,
+			}
 
 			store := claimDiscoveryUnitStore(
 				t,
 				discoveryPolicyDatabase(tx),
 				claimDiscoveryClock{
-					err: testErr,
+					err:    testErr,
+					events: &events,
 				},
 			)
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					interval,
-					leaseDuration)
+					leaseDuration,
+				)
 
 			if found {
 				t.Fatal(
@@ -320,6 +359,22 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 					err,
 				)
 			}
+
+			if len(events) != 2 ||
+				events[0] != "lock" ||
+				events[1] != "clock" {
+				t.Fatalf(
+					"claim ordering = %#v, want [lock clock]",
+					events,
+				)
+			}
+
+			if baseTx.rowIndex != 0 {
+				t.Fatalf(
+					"database rows read after clock failure = %d, want 0",
+					baseTx.rowIndex,
+				)
+			}
 		},
 	)
 
@@ -330,28 +385,39 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				"test discovery lease lock failure",
 			)
 
-			tx := &discoveryPolicyUnitTx{
+			events := make(
+				[]string,
+				0,
+				1,
+			)
+			baseTx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{
 						err: testErr,
 					},
 				},
 			}
+			tx := &discoveryLeaseCaptureTx{
+				discoveryPolicyUnitTx: baseTx,
+				events:                &events,
+			}
 
 			store := claimDiscoveryUnitStore(
 				t,
 				discoveryPolicyDatabase(tx),
 				claimDiscoveryClock{
-					now: now,
+					now:    now,
+					events: &events,
 				},
 			)
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					interval,
-					leaseDuration)
+					leaseDuration,
+				)
 
 			if found {
 				t.Fatal(
@@ -367,6 +433,14 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				t.Fatalf(
 					"ClaimDiscoverySourceLease() error = %v",
 					err,
+				)
+			}
+
+			if len(events) != 1 ||
+				events[0] != "lock" {
+				t.Fatalf(
+					"claim ordering = %#v, want [lock]",
+					events,
 				)
 			}
 		},
@@ -400,10 +474,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					interval,
-					leaseDuration)
+					leaseDuration,
+				)
 
 			if found {
 				t.Fatal(
@@ -451,10 +526,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			lease, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					interval,
-					leaseDuration)
+					leaseDuration,
+				)
 
 			if err != nil {
 				t.Fatalf(
@@ -519,10 +595,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			lease, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					interval,
-					leaseDuration)
+					leaseDuration,
+				)
 
 			if err != nil {
 				t.Fatalf(
@@ -590,10 +667,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			lease, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					interval,
-					leaseDuration)
+					leaseDuration,
+				)
 
 			if err != nil {
 				t.Fatalf(
@@ -651,10 +729,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					interval,
-					leaseDuration)
+					leaseDuration,
+				)
 
 			if found {
 				t.Fatal(
@@ -714,10 +793,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			_, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					interval,
-					leaseDuration)
+					leaseDuration,
+				)
 
 			if found {
 				t.Fatal(
@@ -785,10 +865,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			lease, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					interval,
-					leaseDuration)
+					leaseDuration,
+				)
 
 			if found {
 				t.Fatal(
@@ -832,6 +913,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				leaseDuration,
 			).In(location)
 
+			events := make(
+				[]string,
+				0,
+				2,
+			)
 			baseTx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{},
@@ -856,12 +942,14 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 			}
 			tx := &discoveryLeaseCaptureTx{
 				discoveryPolicyUnitTx: baseTx,
+				events:                &events,
 			}
 
 			store, err := newDiscoveryStoreWithConfig(
 				discoveryPolicyDatabase(tx),
 				claimDiscoveryClock{
-					now: now,
+					now:    now,
+					events: &events,
 				},
 				AutomaticCrawlConfig{
 					Enabled: true,
@@ -876,10 +964,11 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 
 			lease, found, err :=
 				store.ClaimDiscoverySourceLease(
-					ctx, testDiscoveryLeaseOwner,
-
+					ctx,
+					testDiscoveryLeaseOwner,
 					interval,
-					leaseDuration)
+					leaseDuration,
+				)
 
 			if err != nil {
 				t.Fatalf(
@@ -891,6 +980,15 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 			if !found {
 				t.Fatal(
 					"ClaimDiscoverySourceLease() found = false, want true",
+				)
+			}
+
+			if len(events) != 2 ||
+				events[0] != "lock" ||
+				events[1] != "clock" {
+				t.Fatalf(
+					"claim ordering = %#v, want [lock clock]",
+					events,
 				)
 			}
 
@@ -938,14 +1036,41 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				" ",
 			)
 
-			if !strings.Contains(
-				normalizedQuery,
+			for _, fragment := range []string{
+				"WITH scheduled_candidate AS",
+				"FROM discovery_source_schedule AS schedule",
+				"FROM scheduled_candidate",
+				"FOR UPDATE OF schedule SKIP LOCKED",
 				"source_state.lease_expires_at IS NULL OR source_state.lease_expires_at <= $1",
-			) {
-				t.Fatalf(
-					"claim query does not exclude active leases: %s",
+			} {
+				if !strings.Contains(
 					normalizedQuery,
-				)
+					fragment,
+				) {
+					t.Fatalf(
+						"claim query missing %q: %s",
+						fragment,
+						normalizedQuery,
+					)
+				}
+			}
+
+			for _, fragment := range []string{
+				"WITH verified_candidate AS",
+				"seeded_candidate AS",
+				"FROM candidate",
+				"automatically_discovered",
+			} {
+				if strings.Contains(
+					normalizedQuery,
+					fragment,
+				) {
+					t.Fatalf(
+						"claim query contains stale scheduling dependency %q: %s",
+						fragment,
+						normalizedQuery,
+					)
+				}
 			}
 
 			if !strings.Contains(
@@ -1043,7 +1168,8 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				)
 			}
 
-			if got, ok := tx.claimArgs[2].(bool); !ok || !got {
+			if got, ok := tx.claimArgs[2].(bool); !ok ||
+				!got {
 				t.Fatalf(
 					"automatic crawl enabled argument = %#v, want true",
 					tx.claimArgs[2],

@@ -211,6 +211,8 @@ the conformance target.
 ## Crawl sources
 
 JoshBot distinguishes crawl-source status from Joshternet participation.
+It also separates durable knowledge about a source from active discovery
+scheduling. An origin can remain known without having discovery work scheduled.
 
 A source may be:
 
@@ -220,10 +222,14 @@ A source may be:
 - more than one of the above;
 - explicitly blocked from crawling by an operator.
 
+These classifications are durable history and policy state. Active discovery
+work is represented separately by discovery scheduling state. Known does not
+mean scheduled.
+
 ### Verified participants
 
 An origin with an effective valid Joshternet declaration is independently
-verified and may be used as a crawl source.
+verified and receives active discovery scheduling intent.
 
 Verification is what determines participation in the public registry.
 
@@ -231,14 +237,25 @@ Verification is what determines participation in the public registry.
 
 An operator can explicitly add an origin as a private curated crawl seed.
 
-A curated seed grants permission to use that origin as a discovery source. It
-does not declare that the origin participates in the Joshternet and does not
-place it in the public registry.
+A curated seed grants permission to use that origin as a discovery source and
+creates active discovery scheduling intent. It does not declare that the origin
+participates in the Joshternet and does not place it in the public registry.
+
+Removing seed status removes that scheduling reason. The origin remains
+scheduled when another current reason still applies, such as a valid
+declaration or qualifying fresh rediscovery.
 
 ### Automatically discovered crawl sources
 
 When automatic crawling is enabled, JoshBot can promote discovered candidate
-origins into private crawl sources under bounded policy.
+origins into private crawl sources under bounded policy. Promotion records the
+durable automatic-source classification and creates active discovery scheduling
+intent.
+
+The durable classification can outlive active scheduling. An authoritative
+non-valid verification result can remove discovery scheduling while retaining
+what JoshBot learned about the source. Fresh rediscovery can reactivate that
+known source without discarding or recreating its history.
 
 Automatic source promotion is operational state only. It does not:
 
@@ -253,10 +270,11 @@ Automatic source promotion is operational state only. It does not:
 Automatically discovered sources can be excluded by configured host policy and
 can be blocked explicitly by an operator.
 
-Automatic discovery also observes verification-queue backpressure. When the
-number of pending probe jobs reaches the configured threshold, JoshBot stops
-claiming additional automatic discovery work until queue pressure falls below
-the limit.
+Scheduled sources that are neither curated seeds nor currently verified
+continue to observe automatic-expansion controls and verification-queue
+backpressure. When the number of pending probe jobs reaches the configured
+threshold, JoshBot stops claiming that work until queue pressure falls below
+the limit. Durable source knowledge and scheduling intent remain intact.
 
 ## Crawling
 
@@ -296,10 +314,11 @@ JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS
 Automatic crawling is disabled unless explicitly enabled.
 
 When automatic crawling is enabled, operators can pause automatic expansion at
-runtime without pausing discovery or verification. Curated seeds and verified
-sources remain eligible for discovery, candidate verification can continue,
-and new automatic source claims and promotions remain paused until the operator
-resumes expansion.
+runtime without pausing discovery or verification. Curated seeds and currently
+verified sources remain eligible for discovery, and candidate verification can
+continue. Scheduled sources that are neither curated seeds nor currently
+verified are not claimed while automatic expansion is paused, and new automatic
+source promotions are also paused until the operator resumes expansion.
 
 The pending-probe limit provides backpressure between discovery and declaration
 verification. This prevents discovery from producing verification work faster
@@ -526,8 +545,9 @@ success audits commit atomically, while rejected attempts are audited after
 rollback. Responses never include token, reason, or database error details.
 
 The automatic-expansion pause is independent from the discovery processor
-pause. It prevents automatic-only source claims and new automatic promotions
-while allowing curated seeds, verified sources, and verification work to
+pause. It prevents discovery claims for scheduled sources that are neither
+curated seeds nor currently verified, and it prevents new automatic
+promotions. Curated seeds, currently verified sources, and verification work
 continue. Paused candidates retain their evidence and can be reconsidered
 after expansion resumes.
 
@@ -698,7 +718,15 @@ private operational state.
 Equivalent durable registry state produces byte-identical output. File paths
 and ordering are deterministic.
 
-Publication occurs separately:
+Publication occurs separately, and it also repeats on its own.
+
+`registry-export` and `registry-publish` start with the long-running
+deployment. Every `JOSHBOT_REGISTRY_PUBLISH_INTERVAL` (15 minutes by default)
+the database-connected exporter writes a snapshot. The publisher, which has
+the GitHub token and no database access, publishes that snapshot. An identical
+registry tree does not create a commit.
+
+One explicit publication is still:
 
 1. The tools runtime exports the snapshot without GitHub credentials.
 2. The publisher receives a read-only snapshot and GitHub credentials.
@@ -807,6 +835,8 @@ joshbot report
 joshbot control
 joshbot export --output <directory>
 joshbot publish --input <directory>
+joshbot export-registry
+joshbot publish-registry
 joshbot conformance web-bot-auth --expect unregistered|verified
 joshbot help
 ```
@@ -931,8 +961,14 @@ Publishes an existing registry snapshot to the configured GitHub repository.
 joshbot publish --input <directory>
 ```
 
-The normal deployment uses `deploy/publish.sh` so database export and GitHub
-publication occur in separate containers.
+The normal deployment refreshes the public registry automatically.
+`export-registry` and `publish-registry` are the long-running halves of that
+cycle. `deploy/publish.sh` still performs one explicit export and publish.
+
+```bash
+joshbot export-registry
+joshbot publish-registry
+```
 
 ### `conformance`
 

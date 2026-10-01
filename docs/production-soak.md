@@ -40,8 +40,9 @@ Use the private reporting service (default `127.0.0.1:8788`, bearer token from
 10. Sample robots decisions from crawl page attempts and source detail
     `latest_robots_observation`.
 11. Note blocked or avoided origins and whether they match operator intent.
-12. After export/publish cycles, note public registry growth from the published
-    tree (not from private crawl-source tables).
+12. The public registry refreshes every `JOSHBOT_REGISTRY_PUBLISH_INTERVAL`
+    (15 minutes by default). Compare published registry files, not private
+    crawl-source tables. An unchanged snapshot does not create a commit.
 13. Log notable observations in the soak log below.
 14. Open a GitHub issue only when evidence shows a concrete defect, operational
     deficiency, or clearly justified enhancement.

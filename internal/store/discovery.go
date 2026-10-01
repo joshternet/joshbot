@@ -127,8 +127,9 @@ func (s *DiscoveryStore) SetCrawlBlocked(
 	return nil
 }
 
-// CrawlSources returns every origin with private crawl-source state, including
-// its independent curated, automatic, blocked, and verified classifications.
+// CrawlSources returns every origin represented by durable crawl-source state
+// or active discovery scheduling, including its independent curated, automatic,
+// blocked, and verified classifications.
 func (s *DiscoveryStore) CrawlSources(
 	ctx context.Context,
 ) ([]CrawlSource, error) {
@@ -137,21 +138,32 @@ func (s *DiscoveryStore) CrawlSources(
 	}
 
 	rows, err := s.pool.Query(ctx, `
+		WITH source_universe AS (
+			SELECT source_origin
+			FROM discovery_source_state
+
+			UNION
+
+			SELECT source_origin
+			FROM discovery_source_schedule
+		)
 		SELECT
-			state.source_origin,
-			state.seeded,
-			state.automatically_discovered,
-			state.crawl_blocked,
+			source.source_origin,
+			COALESCE(state.seeded, false),
+			COALESCE(state.automatically_discovered, false),
+			COALESCE(state.crawl_blocked, false),
 			COALESCE(effective.outcome = 'valid', false),
 			candidate.first_discovered_at,
 			candidate.last_discovered_at
-		FROM discovery_source_state AS state
+		FROM source_universe AS source
+		LEFT JOIN discovery_source_state AS state
+			ON state.source_origin = source.source_origin
 		LEFT JOIN discovery_candidates AS candidate
-			ON candidate.origin = state.source_origin
+			ON candidate.origin = source.source_origin
 		LEFT JOIN LATERAL (
 			SELECT observation.outcome
 			FROM verification_observations AS observation
-			WHERE observation.origin = state.source_origin
+			WHERE observation.origin = source.source_origin
 				AND observation.outcome IN (
 					'valid', 'absent', 'invalid', 'unsupported_version',
 					'cross_origin_redirect'
@@ -159,7 +171,7 @@ func (s *DiscoveryStore) CrawlSources(
 			ORDER BY observation.observed_at DESC, observation.id DESC
 			LIMIT 1
 		) AS effective ON true
-		ORDER BY state.source_origin
+		ORDER BY source.source_origin
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list crawl sources: %w", err)
@@ -305,8 +317,9 @@ func newDiscoveryStoreWithConfig(
 
 // AddCrawlSeed marks an origin as an explicitly curated crawl source.
 //
-// Adding a seed does not create verification observations or verification
-// queue work. Existing crawl scheduling state is preserved.
+// Adding a seed creates active discovery scheduling intent without creating
+// verification observations or verification queue work. Existing crawl retry,
+// attempt, and lease state is preserved.
 func (s *DiscoveryStore) AddCrawlSeed(
 	ctx context.Context,
 	source origin.Origin,
@@ -319,18 +332,47 @@ func (s *DiscoveryStore) AddCrawlSeed(
 		return errInvalidOrigin
 	}
 
-	_, err := s.pool.Exec(
+	err := pgx.BeginFunc(
 		ctx,
-		`
-			INSERT INTO discovery_source_state (
-				source_origin,
-				seeded
+		s.pool,
+		func(tx pgx.Tx) error {
+			if err := lockDiscoveryScheduleOrigin(
+				ctx,
+				tx,
+				source.String(),
+			); err != nil {
+				return err
+			}
+
+			_, err := tx.Exec(
+				ctx,
+				`
+					WITH scheduled_source AS (
+						INSERT INTO discovery_source_schedule (
+							source_origin
+						)
+						VALUES ($1)
+						ON CONFLICT (source_origin) DO UPDATE
+						SET source_origin =
+							EXCLUDED.source_origin
+						RETURNING source_origin
+					)
+					INSERT INTO discovery_source_state (
+						source_origin,
+						seeded
+					)
+					SELECT
+						source_origin,
+						true
+					FROM scheduled_source
+					ON CONFLICT (source_origin) DO UPDATE
+					SET seeded = true
+				`,
+				source.String(),
 			)
-			VALUES ($1, true)
-			ON CONFLICT (source_origin) DO UPDATE
-			SET seeded = true
-		`,
-		source.String(),
+
+			return err
+		},
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -342,10 +384,6 @@ func (s *DiscoveryStore) AddCrawlSeed(
 	return nil
 }
 
-// RemoveCrawlSeed removes explicit seed status from an origin.
-//
-// Verification observations, candidate provenance, queue state, and crawl
-// scheduling history remain unchanged.
 func (s *DiscoveryStore) RemoveCrawlSeed(
 	ctx context.Context,
 	source origin.Origin,
@@ -358,14 +396,119 @@ func (s *DiscoveryStore) RemoveCrawlSeed(
 		return errInvalidOrigin
 	}
 
-	_, err := s.pool.Exec(
+	err := pgx.BeginFunc(
 		ctx,
-		`
-			UPDATE discovery_source_state
-			SET seeded = false
-			WHERE source_origin = $1
-		`,
-		source.String(),
+		s.pool,
+		func(tx pgx.Tx) error {
+			if err := lockDiscoveryScheduleOrigin(
+				ctx,
+				tx,
+				source.String(),
+			); err != nil {
+				return err
+			}
+
+			_, err := tx.Exec(
+				ctx,
+				`
+					WITH locked_schedule AS (
+						SELECT source_origin
+						FROM discovery_source_schedule
+						WHERE source_origin = $1
+						FOR UPDATE
+					),
+					schedule_lock AS (
+						SELECT count(*)
+						FROM locked_schedule
+					),
+					updated_source AS (
+						UPDATE discovery_source_state
+						SET seeded = false
+						FROM schedule_lock
+						WHERE source_origin = $1
+						RETURNING
+							source_origin,
+							automatically_discovered
+					),
+					source_facts AS (
+						SELECT
+							updated_source.source_origin,
+							updated_source.
+								automatically_discovered,
+							stored_origin.
+								first_participated_at
+								IS NOT NULL AS participated,
+							effective.observed_at
+								AS authoritative_observed_at,
+							effective.outcome
+								AS authoritative_outcome,
+							candidate.last_discovered_at
+						FROM updated_source
+						LEFT JOIN origins AS stored_origin
+							ON stored_origin.origin =
+								updated_source.source_origin
+						LEFT JOIN discovery_candidates
+							AS candidate
+							ON candidate.origin =
+								updated_source.source_origin
+						LEFT JOIN LATERAL (
+							SELECT
+								observation.observed_at,
+								observation.outcome
+							FROM verification_observations
+								AS observation
+							WHERE observation.origin =
+								updated_source.
+								source_origin
+								AND observation.outcome IN (
+								'valid',
+								'absent',
+								'invalid',
+								'unsupported_version',
+								'cross_origin_redirect'
+								)
+							ORDER BY
+								observation.observed_at DESC,
+								observation.id DESC
+							LIMIT 1
+						) AS effective ON true
+					)
+					DELETE FROM discovery_source_schedule
+						AS schedule
+					USING source_facts AS facts
+					WHERE schedule.source_origin =
+							facts.source_origin
+						AND COALESCE(
+							facts.authoritative_outcome,
+							''
+						) <> 'valid'
+						AND NOT (
+							facts.automatically_discovered
+							AND facts.
+								authoritative_observed_at
+								IS NULL
+						)
+						AND NOT (
+							(
+								facts.
+								automatically_discovered
+								OR facts.participated
+							)
+							AND facts.
+								authoritative_observed_at
+								IS NOT NULL
+							AND facts.last_discovered_at
+								IS NOT NULL
+							AND facts.last_discovered_at >
+								facts.
+								authoritative_observed_at
+						)
+				`,
+				source.String(),
+			)
+
+			return err
+		},
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -511,6 +654,16 @@ func (s *DiscoveryStore) recordDiscovery(
 		ctx,
 		s.pool,
 		func(tx pgx.Tx) error {
+			for _, rawOrigin := range candidateOrigins {
+				if err := lockDiscoveryScheduleOrigin(
+					ctx,
+					tx,
+					rawOrigin,
+				); err != nil {
+					return err
+				}
+			}
+
 			now, err := s.clock.NowTransaction(
 				ctx,
 				tx,
@@ -603,7 +756,71 @@ func (s *DiscoveryStore) recordDiscovery(
 								last_discovered_at,
 								EXCLUDED.last_discovered_at
 							)
-						RETURNING origin
+						RETURNING origin, last_discovered_at
+					),
+					reactivated_sources AS (
+						INSERT INTO discovery_source_schedule (
+							source_origin
+						)
+						SELECT
+							stored_candidates.origin
+						FROM stored_candidates
+						LEFT JOIN discovery_source_state
+							AS source_state
+							ON source_state.source_origin =
+								stored_candidates.origin
+						LEFT JOIN origins AS stored_origin
+							ON stored_origin.origin =
+								stored_candidates.origin
+						LEFT JOIN LATERAL (
+							SELECT
+								observation.observed_at,
+								observation.outcome
+							FROM verification_observations
+								AS observation
+							WHERE observation.origin =
+								stored_candidates.origin
+								AND observation.outcome IN (
+								'valid',
+								'absent',
+								'invalid',
+								'unsupported_version',
+								'cross_origin_redirect'
+								)
+							ORDER BY
+								observation.observed_at DESC,
+								observation.id DESC
+							LIMIT 1
+						) AS effective ON true
+						WHERE
+							effective.outcome = 'valid'
+							OR (
+								COALESCE(
+								source_state.
+								automatically_discovered,
+								false
+								)
+								AND effective.observed_at
+								IS NULL
+							)
+							OR (
+								(
+								COALESCE(
+								source_state.
+								automatically_discovered,
+								false
+								)
+								OR stored_origin.
+								first_participated_at
+								IS NOT NULL
+								)
+								AND effective.observed_at
+								IS NOT NULL
+								AND stored_candidates.
+								last_discovered_at >
+								effective.observed_at
+							)
+						ON CONFLICT (source_origin) DO NOTHING
 					),
 					stored_edges AS (
 						INSERT INTO discovery_edges (
@@ -840,6 +1057,26 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 						ON run_candidate.candidate_origin = candidate.origin
 					LEFT JOIN discovery_source_state AS source_state
 						ON source_state.source_origin = candidate.origin
+					LEFT JOIN discovery_source_schedule AS schedule
+						ON schedule.source_origin = candidate.origin
+					LEFT JOIN LATERAL (
+						SELECT
+							observation.observed_at,
+							observation.outcome
+						FROM verification_observations AS observation
+						WHERE observation.origin = candidate.origin
+							AND observation.outcome IN (
+								'valid',
+								'absent',
+								'invalid',
+								'unsupported_version',
+								'cross_origin_redirect'
+							)
+						ORDER BY
+							observation.observed_at DESC,
+							observation.id DESC
+						LIMIT 1
+					) AS effective ON true
 					WHERE EXISTS (
 						SELECT 1 FROM discovery_edges AS edge
 						WHERE edge.candidate_origin = candidate.origin
@@ -854,6 +1091,15 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 							false
 						)
 						AND NOT COALESCE(source_state.crawl_blocked, false)
+						AND schedule.source_origin IS NULL
+						AND (
+							effective.observed_at IS NULL
+							OR (
+								effective.outcome <> 'valid'
+								AND candidate.last_discovered_at >
+									effective.observed_at
+							)
+						)
 						AND NOT EXISTS (
 							SELECT 1
 							FROM crawl_run_automatic_admission_batches AS prior
@@ -1128,10 +1374,6 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 		).Scan(&pendingProbes); err != nil {
 			return fmt.Errorf("count pending probes: %w", err)
 		}
-		now, err := s.clock.NowTransaction(ctx, tx)
-		if err != nil {
-			return fmt.Errorf("store: read discovery clock: %w", err)
-		}
 
 		var batch []string
 		if err := tx.QueryRow(ctx, `
@@ -1143,6 +1385,21 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 			WHERE admission_run_id = $1 AND outcome = 'pending'
 		`, int64(runID)).Scan(&batch); err != nil {
 			return fmt.Errorf("collect automatic admission batch: %w", err)
+		}
+
+		for _, rawOrigin := range batch {
+			if err := lockDiscoveryScheduleOrigin(
+				ctx,
+				tx,
+				rawOrigin,
+			); err != nil {
+				return err
+			}
+		}
+
+		now, err := s.clock.NowTransaction(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("store: read discovery clock: %w", err)
 		}
 
 		for _, rawOrigin := range batch {
@@ -1206,29 +1463,63 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 			`, rawOrigin); err != nil {
 				return fmt.Errorf("reset admission retry streak: %w", err)
 			}
+
 			var (
 				automaticallyDiscovered bool
 				crawlBlocked            bool
+				scheduled               bool
+				verified                bool
+				staleTerminalEvidence   bool
 				queueExists             bool
 			)
 			if err := tx.QueryRow(ctx, `
 				SELECT
-					COALESCE((
-						SELECT automatically_discovered
-						FROM discovery_source_state
-						WHERE source_origin = $1
-					), false),
-					COALESCE((
-						SELECT crawl_blocked
-						FROM discovery_source_state
-						WHERE source_origin = $1
-					), false),
+					COALESCE(source_state.automatically_discovered, false),
+					COALESCE(source_state.crawl_blocked, false),
+					schedule.source_origin IS NOT NULL,
+					COALESCE(effective.outcome = 'valid', false),
+					COALESCE(
+						effective.outcome <> 'valid'
+							AND candidate.last_discovered_at <=
+								effective.observed_at,
+						false
+					),
 					EXISTS (
-						SELECT 1 FROM verification_queue WHERE origin = $1
+						SELECT 1
+						FROM verification_queue
+						WHERE origin = input.origin
 					)
+				FROM (VALUES ($1::text)) AS input(origin)
+				LEFT JOIN discovery_source_state AS source_state
+					ON source_state.source_origin = input.origin
+				LEFT JOIN discovery_source_schedule AS schedule
+					ON schedule.source_origin = input.origin
+				LEFT JOIN discovery_candidates AS candidate
+					ON candidate.origin = input.origin
+				LEFT JOIN LATERAL (
+					SELECT
+						observation.observed_at,
+						observation.outcome
+					FROM verification_observations AS observation
+					WHERE observation.origin = input.origin
+						AND observation.outcome IN (
+							'valid',
+							'absent',
+							'invalid',
+							'unsupported_version',
+							'cross_origin_redirect'
+						)
+					ORDER BY
+						observation.observed_at DESC,
+						observation.id DESC
+					LIMIT 1
+				) AS effective ON true
 			`, rawOrigin).Scan(
 				&automaticallyDiscovered,
 				&crawlBlocked,
+				&scheduled,
+				&verified,
+				&staleTerminalEvidence,
 				&queueExists,
 			); err != nil {
 				return fmt.Errorf("read candidate admission state: %w", err)
@@ -1243,13 +1534,23 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 				}
 				continue
 			}
-			if automaticallyDiscovered {
+			if automaticallyDiscovered || scheduled || verified {
 				if _, err := tx.Exec(ctx, `
 					UPDATE crawl_run_automatic_admission_batches
 					SET outcome = 'existing'
 					WHERE admission_run_id = $1 AND candidate_origin = $2
 				`, int64(runID), rawOrigin); err != nil {
-					return fmt.Errorf("record existing automatic source: %w", err)
+					return fmt.Errorf("record existing discovery source: %w", err)
+				}
+				continue
+			}
+			if staleTerminalEvidence {
+				if _, err := tx.Exec(ctx, `
+					UPDATE crawl_run_automatic_admission_batches
+					SET outcome = 'policy_deferred'
+					WHERE admission_run_id = $1 AND candidate_origin = $2
+				`, int64(runID), rawOrigin); err != nil {
+					return fmt.Errorf("record stale-evidence admission deferral: %w", err)
 				}
 				continue
 			}
@@ -1295,10 +1596,24 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 				continue
 			}
 			if _, err := tx.Exec(ctx, `
+				WITH scheduled_source AS (
+					INSERT INTO discovery_source_schedule (
+						source_origin
+					)
+					VALUES ($1)
+					ON CONFLICT (source_origin) DO UPDATE
+					SET source_origin =
+						EXCLUDED.source_origin
+					RETURNING source_origin
+				)
 				INSERT INTO discovery_source_state (
 					source_origin,
 					automatically_discovered
-				) VALUES ($1, true)
+				)
+				SELECT
+					source_origin,
+					true
+				FROM scheduled_source
 				ON CONFLICT (source_origin) DO UPDATE
 				SET automatically_discovered = true
 			`, rawOrigin); err != nil {
