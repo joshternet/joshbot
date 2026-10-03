@@ -1,4 +1,4 @@
-package joshbot
+package main
 
 import (
 	"os"
@@ -9,7 +9,7 @@ import (
 func TestWorkerUsesContainerLivenessInsteadOfDatabaseHealthcheck(
 	t *testing.T,
 ) {
-	contents, err := os.ReadFile("compose.yaml")
+	contents, err := os.ReadFile(documentationRepositoryPath("compose.yaml"))
 	if err != nil {
 		t.Fatalf(
 			"read compose.yaml: %v",
@@ -48,7 +48,7 @@ func TestWorkerUsesContainerLivenessInsteadOfDatabaseHealthcheck(
 }
 
 func TestComposePinsStableServiceInstanceIDs(t *testing.T) {
-	contents, err := os.ReadFile("compose.yaml")
+	contents, err := os.ReadFile(documentationRepositoryPath("compose.yaml"))
 	if err != nil {
 		t.Fatalf("read compose.yaml: %v", err)
 	}

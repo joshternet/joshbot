@@ -8,6 +8,8 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Added
 
+- The durable domain avoid list includes `centerblog.net`, so that neighborhood
+  is not promoted automatically (#51).
 - Operators can pause automatic expansion without pausing discovery or
   verification. Curated seeds and verified origins stay eligible for discovery
   claims, candidate verification continues, and new automatic source claims
@@ -26,8 +28,20 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   access and no GitHub token.
 - `registry-publish` publishes each new snapshot. An unchanged registry
   does not create a commit. It has the GitHub token and no database access.
-- The embedded schema now contains twenty-three migrations, `0001` through
-  `0023`, including `0023_discovery_source_schedule.sql`.
+- The embedded schema now contains twenty-four migrations, `0001` through
+  `0024`, including `0023_discovery_source_schedule.sql` and
+  `0024_amplification_domain_avoid.sql`.
+
+### Fixed
+
+- Concurrent queue claim tests give each database attempt its own 30-second
+  limit. A shared deadline no longer cancels workers that are still claiming.
+  Each claim must still succeed, and distinct origins remain required.
+- Store tests borrow one of four isolated schemas, matching the four store
+  tests run at once. A schema is truncated after a test that left its tables
+  in place. A test that changes tables, indexes, triggers, or constraints gets
+  that same schema rebuilt before it is reused. The package no longer creates
+  and drops a spare schema for every test.
 
 ## [1.1.0] - 2026-09-21
 

@@ -1,4 +1,4 @@
-package joshbot
+package main
 
 import (
 	"fmt"
@@ -45,7 +45,7 @@ func TestRawOutboundHTTPIsRestrictedToApprovedBoundaries(t *testing.T) {
 			t.Errorf("approved raw HTTP file %q has no reason", path)
 		}
 
-		info, err := os.Stat(path)
+		info, err := os.Stat(documentationRepositoryPath(path))
 		if err != nil {
 			t.Errorf("approved raw HTTP file %q: %v", path, err)
 			continue
@@ -61,7 +61,7 @@ func TestRawOutboundHTTPIsRestrictedToApprovedBoundaries(t *testing.T) {
 
 	for _, root := range []string{"cmd", "internal"} {
 		err := filepath.WalkDir(
-			root,
+			documentationRepositoryPath(root),
 			func(path string, entry fs.DirEntry, walkErr error) error {
 				if walkErr != nil {
 					return walkErr
@@ -75,7 +75,14 @@ func TestRawOutboundHTTPIsRestrictedToApprovedBoundaries(t *testing.T) {
 					return nil
 				}
 
-				repositoryPath := filepath.ToSlash(path)
+				repositoryPath, err := filepath.Rel(
+					documentationRepositoryPath("."),
+					path,
+				)
+				if err != nil {
+					return err
+				}
+				repositoryPath = filepath.ToSlash(repositoryPath)
 				if _, approved := approvedRawOutboundHTTPFiles[repositoryPath]; approved {
 					return nil
 				}

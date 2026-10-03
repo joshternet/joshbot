@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,24 +16,43 @@ import (
 )
 
 var (
-	storeSchemaSequence    uint64
-	storeAdminPoolOnce     sync.Once
-	storeAdminPool         *pgxpool.Pool
-	storeAdminPoolError    error
-	parallelStoreTests     sync.Map
-	storeMigrationsOnce    sync.Once
-	storeMigrationsSQL     string
-	storeMigrationsErr     error
-	storeTemplateOnce      sync.Once
-	storeTemplateErr       error
-	storeMigrationTemplate = "store_migration_template"
-	storeSchemaCloneMutex  sync.Mutex
+	storeAdminPoolOnce      sync.Once
+	storeAdminPool          *pgxpool.Pool
+	storeAdminPoolError     error
+	parallelStoreTests      sync.Map
+	storeMigrationsOnce     sync.Once
+	storeMigrationsSQL      string
+	storeMigrationsErr      error
+	storeTemplateOnce       sync.Once
+	storeTemplateErr        error
+	storeMigrationTemplate  = "store_migration_template"
+	createdSchemasMu        sync.Mutex
+	createdSchemas          []string
+	reusableSchemas         chan string
+	schemaRebuildMu         sync.Mutex
+	templateTableNames      string
+	templateIndexNames      string
+	templateTriggerNames    string
+	templateConstraintNames string
 )
+
+// storeSchemaPoolSize is one schema per store test the quality gate
+// runs at once. The gate passes -parallel 4 for this package. A test
+// that changes the schema returns it restored, so the pool does not
+// keep a spare copy for every test.
+const storeSchemaPoolSize = 4
 
 const storeTestMaxConnections = 4
 
 func TestMain(testingMain *testing.M) {
+	if os.Getenv("JOSHBOT_TEST_DATABASE_URL") != "" {
+		if err := buildReusableStoreSchemas(); err != nil {
+			fmt.Fprintf(os.Stderr, "store schema pool: %v\n", err)
+			os.Exit(1)
+		}
+	}
 	exitCode := testingMain.Run()
+	dropCreatedStoreSchemas()
 	if storeAdminPool != nil {
 		storeAdminPool.Close()
 	}
@@ -208,7 +226,7 @@ func TestStoreRecordsValidAffirmedVerification(
 func newStoreTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	markStoreTestParallel(t)
-	return newIsolatedStoreTestPool(t, storeTestMaxConnections)
+	return openReusableSchema(t, storeTestMaxConnections)
 }
 
 func newSerialStoreTestPool(t *testing.T) *pgxpool.Pool {
@@ -229,54 +247,19 @@ func newIsolatedStoreTestPool(
 	maxConnections int32,
 ) *pgxpool.Pool {
 	t.Helper()
+	return openReusableSchema(t, maxConnections)
+}
 
-	databaseURL := os.Getenv(
-		"JOSHBOT_TEST_DATABASE_URL",
-	)
-	if databaseURL == "" {
-		if os.Getenv(
-			"JOSHBOT_REQUIRE_DATABASE_TESTS",
-		) == "1" {
-			t.Fatal(
-				"JOSHBOT_TEST_DATABASE_URL is required",
-			)
-		}
-
-		t.Skip(
-			"JOSHBOT_TEST_DATABASE_URL is not configured",
-		)
-	}
-
-	adminPool := sharedStoreAdminPool(t, databaseURL)
-	ensureStoreMigrationTemplate(t, adminPool)
-
-	schema := fmt.Sprintf(
-		"store_test_%d_%d",
-		os.Getpid(),
-		atomic.AddUint64(
-			&storeSchemaSequence,
-			1,
-		),
-	)
-	cloneStoreMigrationSchema(t, adminPool, schema)
-	t.Cleanup(func() {
-		_, cleanupErr := adminPool.Exec(
-			context.Background(),
-			"DROP SCHEMA "+
-				pgx.Identifier{schema}.Sanitize()+
-				" CASCADE",
-		)
-		if cleanupErr != nil {
-			t.Errorf(
-				"drop isolated test schema: %v",
-				cleanupErr,
-			)
-		}
-	})
+func connectIsolatedSchema(
+	t *testing.T,
+	adminPool *pgxpool.Pool,
+	schema string,
+	maxConnections int32,
+) *pgxpool.Pool {
+	t.Helper()
 
 	testConfig := adminPool.Config()
-	testConfig.ConnConfig.RuntimeParams["search_path"] =
-		schema
+	testConfig.ConnConfig.RuntimeParams["search_path"] = schema
 	testConfig.MaxConns = maxConnections
 	testConfig.MinConns = 0
 
@@ -290,15 +273,38 @@ func newIsolatedStoreTestPool(
 		)
 	}
 	t.Cleanup(testPool.Close)
-
 	return testPool
 }
 
-func ensureStoreMigrationTemplate(
-	t *testing.T,
-	adminPool *pgxpool.Pool,
-) {
-	t.Helper()
+func dropCreatedStoreSchemas() {
+	if storeAdminPool == nil {
+		return
+	}
+
+	createdSchemasMu.Lock()
+	names := append([]string(nil), createdSchemas...)
+	createdSchemasMu.Unlock()
+	dropStoreSchemas(names)
+}
+
+func dropStoreSchemas(names []string) {
+	if storeAdminPool == nil || len(names) == 0 {
+		return
+	}
+
+	var statement strings.Builder
+	statement.WriteString("DROP SCHEMA IF EXISTS ")
+	for index, schema := range names {
+		if index > 0 {
+			statement.WriteString(", ")
+		}
+		statement.WriteString(pgx.Identifier{schema}.Sanitize())
+	}
+	statement.WriteString(" CASCADE")
+	_, _ = storeAdminPool.Exec(context.Background(), statement.String())
+}
+
+func installStoreTemplate(adminPool *pgxpool.Pool) error {
 
 	storeTemplateOnce.Do(func() {
 		ctx := context.Background()
@@ -362,18 +368,16 @@ func ensureStoreMigrationTemplate(
 		if _, err := adminPool.Exec(
 			ctx,
 			`
-CREATE OR REPLACE FUNCTION store_migration_template.clone_to(destination text)
+CREATE OR REPLACE FUNCTION store_migration_template.copy_into(destination text)
 RETURNS void
 LANGUAGE plpgsql
-AS $clone$
+AS $copy$
 DECLARE
 	source constant text := 'store_migration_template';
 	table_row record;
 	constraint_row record;
 	definition text;
 BEGIN
-	EXECUTE format('CREATE SCHEMA %I', destination);
-
 	FOR table_row IN
 		SELECT c.relname AS table_name
 		FROM pg_class AS c
@@ -508,7 +512,113 @@ BEGIN
 		source
 	);
 END;
+$copy$;
+
+CREATE OR REPLACE FUNCTION store_migration_template.clone_to(destination text)
+RETURNS void
+LANGUAGE plpgsql
+AS $clone$
+BEGIN
+	EXECUTE format('CREATE SCHEMA %I', destination);
+	PERFORM store_migration_template.copy_into(destination);
+END;
 $clone$;
+
+CREATE OR REPLACE FUNCTION store_migration_template.rebuild_clone(destination text)
+RETURNS void
+LANGUAGE plpgsql
+AS $rebuild$
+DECLARE
+	object_row record;
+BEGIN
+	FOR object_row IN
+		SELECT c.relname
+		FROM pg_class AS c
+		JOIN pg_namespace AS n ON n.oid = c.relnamespace
+		WHERE n.nspname = destination
+			AND c.relkind = 'v'
+	LOOP
+		EXECUTE format(
+			'DROP VIEW IF EXISTS %I.%I CASCADE',
+			destination,
+			object_row.relname
+		);
+	END LOOP;
+
+	FOR object_row IN
+		SELECT c.relname
+		FROM pg_class AS c
+		JOIN pg_namespace AS n ON n.oid = c.relnamespace
+		WHERE n.nspname = destination
+			AND c.relkind = 'r'
+	LOOP
+		EXECUTE format(
+			'DROP TABLE IF EXISTS %I.%I CASCADE',
+			destination,
+			object_row.relname
+		);
+	END LOOP;
+
+	FOR object_row IN
+		SELECT c.relname
+		FROM pg_class AS c
+		JOIN pg_namespace AS n ON n.oid = c.relnamespace
+		WHERE n.nspname = destination
+			AND c.relkind = 'S'
+	LOOP
+		EXECUTE format(
+			'DROP SEQUENCE IF EXISTS %I.%I CASCADE',
+			destination,
+			object_row.relname
+		);
+	END LOOP;
+
+	FOR object_row IN
+		SELECT p.oid::regprocedure::text AS signature
+		FROM pg_proc AS p
+		JOIN pg_namespace AS n ON n.oid = p.pronamespace
+		WHERE n.nspname = destination
+	LOOP
+		EXECUTE format('DROP FUNCTION %s CASCADE', object_row.signature);
+	END LOOP;
+
+	PERFORM store_migration_template.copy_into(destination);
+END;
+$rebuild$;
+
+CREATE OR REPLACE FUNCTION store_migration_template.reset_clone(destination text)
+RETURNS void
+LANGUAGE plpgsql
+AS $reset$
+DECLARE
+	tables text;
+BEGIN
+	SELECT string_agg(
+		format('%I.%I', destination, c.relname),
+		', '
+		ORDER BY c.relname
+	)
+	INTO tables
+	FROM pg_class AS c
+	JOIN pg_namespace AS n ON n.oid = c.relnamespace
+	WHERE n.nspname = destination
+		AND c.relkind = 'r';
+
+	IF tables IS NULL THEN
+		RAISE EXCEPTION 'store test schema % has no tables', destination;
+	END IF;
+
+	EXECUTE 'TRUNCATE TABLE ' || tables || ' RESTART IDENTITY CASCADE';
+	EXECUTE format(
+		'INSERT INTO %I.crawl_control SELECT * FROM store_migration_template.crawl_control',
+		destination
+	);
+	EXECUTE format(
+		'INSERT INTO %I.crawl_domain_avoid_rules SELECT * FROM store_migration_template.crawl_domain_avoid_rules',
+		destination
+	);
+END;
+$reset$;
 `,
 		); err != nil {
 			storeTemplateErr = fmt.Errorf(
@@ -517,31 +627,7 @@ $clone$;
 			)
 		}
 	})
-	if storeTemplateErr != nil {
-		t.Fatal(storeTemplateErr)
-	}
-}
-
-func cloneStoreMigrationSchema(
-	t *testing.T,
-	adminPool *pgxpool.Pool,
-	destination string,
-) {
-	t.Helper()
-
-	// Serialize clones: parallel CREATE TABLE LIKE against one template
-	// stampedes the catalog under -race and blows the package timeout.
-	storeSchemaCloneMutex.Lock()
-	defer storeSchemaCloneMutex.Unlock()
-
-	ctx := context.Background()
-	if _, err := adminPool.Exec(
-		ctx,
-		"SELECT store_migration_template.clone_to($1)",
-		destination,
-	); err != nil {
-		t.Fatalf("clone store migration schema: %v", err)
-	}
+	return storeTemplateErr
 }
 
 func loadStoreTestMigrations() (string, error) {
@@ -574,6 +660,239 @@ func loadStoreTestMigrations() (string, error) {
 	return storeMigrationsSQL, nil
 }
 
+func buildReusableStoreSchemas() error {
+	if err := openSharedAdmin(
+		os.Getenv("JOSHBOT_TEST_DATABASE_URL"),
+	); err != nil {
+		return err
+	}
+	if err := dropLeftoverStoreSchemas(); err != nil {
+		return err
+	}
+	if err := installStoreTemplate(storeAdminPool); err != nil {
+		return err
+	}
+
+	reusableSchemas = make(chan string, storeSchemaPoolSize)
+	jobs := make(chan int, storeSchemaPoolSize)
+	for index := 0; index < storeSchemaPoolSize; index++ {
+		jobs <- index
+	}
+	close(jobs)
+
+	var (
+		waitGroup sync.WaitGroup
+		errOnce   sync.Once
+		buildErr  error
+	)
+	recordErr := func(err error) {
+		errOnce.Do(func() {
+			buildErr = err
+		})
+	}
+	for worker := 0; worker < 1; worker++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for index := range jobs {
+				if buildErr != nil {
+					return
+				}
+				name := fmt.Sprintf(
+					"store_pool_%d_%d",
+					os.Getpid(),
+					index,
+				)
+				if _, err := storeAdminPool.Exec(
+					context.Background(),
+					"SELECT store_migration_template.clone_to($1)",
+					name,
+				); err != nil {
+					recordErr(fmt.Errorf(
+						"prepare isolated test schema: %w",
+						err,
+					))
+					return
+				}
+				createdSchemasMu.Lock()
+				createdSchemas = append(createdSchemas, name)
+				createdSchemasMu.Unlock()
+				reusableSchemas <- name
+			}
+		}()
+	}
+	waitGroup.Wait()
+	if buildErr != nil {
+		return buildErr
+	}
+	return snapshotTemplateSchemaCounts()
+}
+
+func openReusableSchema(
+	t *testing.T,
+	maxConnections int32,
+) *pgxpool.Pool {
+	t.Helper()
+	if os.Getenv("JOSHBOT_TEST_DATABASE_URL") == "" {
+		if os.Getenv("JOSHBOT_REQUIRE_DATABASE_TESTS") == "1" {
+			t.Fatal("JOSHBOT_TEST_DATABASE_URL is required")
+		}
+		t.Skip("JOSHBOT_TEST_DATABASE_URL is not configured")
+	}
+
+	schema := <-reusableSchemas
+	t.Cleanup(func() {
+		if !schemaMatchesTemplate(schema) {
+			schemaRebuildMu.Lock()
+			err := rebuildStoreSchema(storeAdminPool, schema)
+			schemaRebuildMu.Unlock()
+			if err != nil || !schemaMatchesTemplate(schema) {
+				fmt.Fprintf(
+					os.Stderr,
+					"restore isolated test schema %s: %v\n",
+					schema,
+					err,
+				)
+				os.Exit(1)
+			}
+		} else if err := resetStoreSchema(storeAdminPool, schema); err != nil {
+			fmt.Fprintf(
+				os.Stderr,
+				"reset isolated test schema %s: %v\n",
+				schema,
+				err,
+			)
+			os.Exit(1)
+		}
+		reusableSchemas <- schema
+	})
+	return connectIsolatedSchema(
+		t,
+		storeAdminPool,
+		schema,
+		maxConnections,
+	)
+}
+
+func snapshotTemplateSchemaCounts() error {
+	var err error
+	templateTableNames,
+		templateIndexNames,
+		templateTriggerNames,
+		templateConstraintNames,
+		err = schemaObjectNames(storeMigrationTemplate)
+	return err
+}
+
+func schemaObjectNames(
+	schema string,
+) (tables string, indexes string, triggers string, constraints string, err error) {
+	err = storeAdminPool.QueryRow(
+		context.Background(),
+		`
+			SELECT
+				(
+					SELECT COALESCE(string_agg(c.relname, ',' ORDER BY c.relname), '')
+					FROM pg_class AS c
+					JOIN pg_namespace AS n ON n.oid = c.relnamespace
+					WHERE n.nspname = $1
+						AND c.relkind = 'r'
+				),
+				(
+					SELECT COALESCE(string_agg(index_class.relname, ',' ORDER BY index_class.relname), '')
+					FROM pg_index AS i
+					JOIN pg_class AS index_class ON index_class.oid = i.indexrelid
+					JOIN pg_class AS table_class ON table_class.oid = i.indrelid
+					JOIN pg_namespace AS n ON n.oid = table_class.relnamespace
+					WHERE n.nspname = $1
+				),
+				(
+					SELECT COALESCE(string_agg(trigger_row.tgname, ',' ORDER BY trigger_row.tgname), '')
+					FROM pg_trigger AS trigger_row
+					JOIN pg_class AS c ON c.oid = trigger_row.tgrelid
+					JOIN pg_namespace AS n ON n.oid = c.relnamespace
+					WHERE n.nspname = $1
+						AND NOT trigger_row.tgisinternal
+				),
+				(
+					SELECT COALESCE(string_agg(constraint_row.conname, ',' ORDER BY constraint_row.conname), '')
+					FROM pg_constraint AS constraint_row
+					JOIN pg_namespace AS n
+						ON n.oid = constraint_row.connamespace
+					WHERE n.nspname = $1
+				)
+		`,
+		schema,
+	).Scan(&tables, &indexes, &triggers, &constraints)
+	return tables, indexes, triggers, constraints, err
+}
+
+func schemaMatchesTemplate(schema string) bool {
+	tables, indexes, triggers, constraints, err := schemaObjectNames(schema)
+	if err != nil {
+		return false
+	}
+	return tables == templateTableNames &&
+		indexes == templateIndexNames &&
+		triggers == templateTriggerNames &&
+		constraints == templateConstraintNames
+}
+
+func dropLeftoverStoreSchemas() error {
+	rows, err := storeAdminPool.Query(
+		context.Background(),
+		`
+			SELECT nspname
+			FROM pg_namespace
+			WHERE nspname LIKE 'store_pool_%'
+				OR nspname LIKE 'store_test_%'
+			ORDER BY nspname
+		`,
+	)
+	if err != nil {
+		return fmt.Errorf("list leftover store test schemas: %w", err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("read leftover store test schema: %w", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list leftover store test schemas: %w", err)
+	}
+	dropStoreSchemas(names)
+	return nil
+}
+
+func rebuildStoreSchema(adminPool *pgxpool.Pool, schema string) error {
+	_, err := adminPool.Exec(
+		context.Background(),
+		"SELECT store_migration_template.rebuild_clone($1)",
+		schema,
+	)
+	if err != nil {
+		return fmt.Errorf("rebuild schema %s: %w", schema, err)
+	}
+	return nil
+}
+
+func resetStoreSchema(adminPool *pgxpool.Pool, schema string) error {
+	_, err := adminPool.Exec(
+		context.Background(),
+		"SELECT store_migration_template.reset_clone($1)",
+		schema,
+	)
+	if err != nil {
+		return fmt.Errorf("reset schema %s: %w", schema, err)
+	}
+	return nil
+}
+
 func markStoreTestParallel(t *testing.T) {
 	t.Helper()
 	if _, loaded := parallelStoreTests.LoadOrStore(t, struct{}{}); loaded {
@@ -590,6 +909,13 @@ func sharedStoreAdminPool(
 	databaseURL string,
 ) *pgxpool.Pool {
 	t.Helper()
+	if err := openSharedAdmin(databaseURL); err != nil {
+		t.Fatal(err)
+	}
+	return storeAdminPool
+}
+
+func openSharedAdmin(databaseURL string) error {
 	storeAdminPoolOnce.Do(func() {
 		adminConfig, err := pgxpool.ParseConfig(databaseURL)
 		if err != nil {
@@ -621,10 +947,7 @@ func sharedStoreAdminPool(
 			)
 		}
 	})
-	if storeAdminPoolError != nil {
-		t.Fatal(storeAdminPoolError)
-	}
-	return storeAdminPool
+	return storeAdminPoolError
 }
 
 func mustStoreOrigin(

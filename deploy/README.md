@@ -330,10 +330,10 @@ requests made by both the worker and discovery services. An applicable robots
 `Crawl-delay` can increase that interval but cannot reduce it.
 
 The durable domain avoid list is managed through the operator control API and
-starts with the hosted publishing and social-platform defaults. An environment
-value adds emergency rules to that list; dashboard removal cannot override an
-environment rule. Use a family such as `blogspot.*` to cover regional public
-suffixes.
+starts with the hosted publishing and social-platform defaults, including
+`centerblog.net`. An environment value adds emergency rules to that list;
+dashboard removal cannot override an environment rule. Use a family such as
+`blogspot.*` to cover regional public suffixes.
 
 The root page is depth zero. Redirect hops do not consume additional frontier
 slots. Requests within one source crawl are sequential.
