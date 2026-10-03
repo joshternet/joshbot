@@ -8,6 +8,12 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Added
 
+- `publish-registry` checks every 15 minutes and publishes a changed registry
+  to the configured GitHub branch. A failed publish is retried until that
+  update succeeds. An unchanged registry does not create a commit.
+  Deployment smoke creates the GitHub token file that service mounts.
+- The durable domain avoid list includes `centerblog.net`, so that neighborhood
+  is not promoted automatically (#51).
 - Operators can pause automatic expansion without pausing discovery or
   verification. Curated seeds and verified origins stay eligible for discovery
   claims, candidate verification continues, and new automatic source claims
@@ -17,6 +23,22 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   status and `joshbot_automatic_expansion_paused` (#78).
 - The embedded schema now contains eighteen migrations, `0001` through
   `0018`, including `0018_automatic_expansion_control.sql`.
+
+### Fixed
+
+- `publish-registry` integration tests cover the registry publish loop and CLI
+  dispatch, so the independent integration coverage gate includes that command.
+- Concurrent queue claim tests give each database attempt its own 30-second
+  limit. A shared deadline no longer cancels workers that are still claiming.
+  Each claim must still succeed, and distinct origins remain required.
+- Store tests borrow one of four isolated schemas, matching the four store
+  tests run at once. A schema is truncated after a test that left its tables
+  in place. A test that changes tables, indexes, triggers, or constraints gets
+  that same schema rebuilt before it is reused. The package no longer creates
+  and drops a spare schema for every test.
+- The Barf quality gate drops idle `joshbot_quality_*` databases and roles
+  left by earlier runs before it creates the database for the current run.
+  A database with a connected client is left in place.
 
 ## [1.1.0] - 2026-09-21
 

@@ -81,6 +81,8 @@ The Compose deployment includes:
 - `control`: private authenticated mutation API, enabled with the `control`
   profile;
 - `tools`: database-backed operator commands and exports;
+- `registry`: every 15 minutes, publishes registry updates to the configured
+  GitHub branch and retries until a failed update succeeds;
 - `publisher`: one-shot GitHub registry publication;
 - `backup`: logical PostgreSQL backups;
 - `restore`: controlled logical restoration.
@@ -322,10 +324,10 @@ requests made by both the worker and discovery services. An applicable robots
 `Crawl-delay` can increase that interval but cannot reduce it.
 
 The durable domain avoid list is managed through the operator control API and
-starts with the hosted publishing and social-platform defaults. An environment
-value adds emergency rules to that list; dashboard removal cannot override an
-environment rule. Use a family such as `blogspot.*` to cover regional public
-suffixes.
+starts with the hosted publishing and social-platform defaults, including
+`centerblog.net`. An environment value adds emergency rules to that list;
+dashboard removal cannot override an environment rule. Use a family such as
+`blogspot.*` to cover regional public suffixes.
 
 The root page is depth zero. Redirect hops do not consume additional frontier
 slots. Requests within one source crawl are sequential.
@@ -1511,7 +1513,8 @@ docker compose \
   --detach \
   --no-deps \
   worker \
-  discovery
+  discovery \
+  registry
 ```
 
 If reporting is enabled:

@@ -35,6 +35,7 @@ Usage:
   joshbot control
   joshbot export --output <directory>
   joshbot publish --input <directory>
+  joshbot publish-registry
   joshbot conformance web-bot-auth --expect unregistered|verified
   joshbot help
 
@@ -50,6 +51,7 @@ Commands:
   control    Serve the private operator mutation API
   export     Write a deterministic public registry snapshot
   publish    Publish an existing registry snapshot to GitHub
+  publish-registry Publish registry updates every 15 minutes
   conformance Check the signature directory and Cloudflare Web Bot Auth
   help       Show this help
 `
@@ -80,6 +82,10 @@ type crawlSeedCommandOperations interface {
 
 type controlCommandOperations interface {
 	control(context.Context) error
+}
+
+type registryPublishOperations interface {
+	publishRegistry(context.Context) error
 }
 
 type crawlSourceCommandOperations interface {
@@ -606,6 +612,34 @@ func runWithOperations(
 			_, _ = fmt.Fprintln(
 				stdout,
 				"registry unchanged",
+			)
+		}
+
+		return exitSuccess
+
+	case "publish-registry":
+		registryOperations, available :=
+			operations.(registryPublishOperations)
+		if !available {
+			return reportCommandFailure(
+				stderr,
+				command,
+				errOperationsUnavailable,
+			)
+		}
+
+		if len(commandArgs) != 0 {
+			return reportUsage(
+				stderr,
+				"publish-registry does not accept arguments",
+			)
+		}
+
+		if err := registryOperations.publishRegistry(ctx); err != nil {
+			return reportCommandFailure(
+				stderr,
+				command,
+				err,
 			)
 		}
 

@@ -931,8 +931,18 @@ Publishes an existing registry snapshot to the configured GitHub repository.
 joshbot publish --input <directory>
 ```
 
-The normal deployment uses `deploy/publish.sh` so database export and GitHub
-publication occur in separate containers.
+```bash
+joshbot publish-registry
+```
+
+`publish-registry` checks the current registry every
+`JOSHBOT_REGISTRY_PUBLISH_INTERVAL` (15 minutes by default). When the registry
+has changed, it publishes that update to the configured GitHub branch. An
+unchanged registry does not create a commit. A failed publish is retried until
+the update succeeds.
+
+The normal one-shot deployment uses `deploy/publish.sh` so database export and
+GitHub publication occur in separate containers.
 
 ### `conformance`
 

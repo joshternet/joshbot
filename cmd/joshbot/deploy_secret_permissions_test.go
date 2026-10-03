@@ -1,4 +1,4 @@
-package joshbot
+package main
 
 import (
 	"os"
@@ -9,7 +9,7 @@ import (
 func TestDeploymentGuideMakesDatabaseSecretsReadableToContainerUsers(
 	t *testing.T,
 ) {
-	contents, err := os.ReadFile("deploy/README.md")
+	contents, err := os.ReadFile(documentationRepositoryPath("deploy/README.md"))
 	if err != nil {
 		t.Fatalf(
 			"read deploy/README.md: %v",

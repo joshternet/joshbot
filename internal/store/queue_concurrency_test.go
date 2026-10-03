@@ -113,18 +113,27 @@ func TestQueueActiveLeaseBlocksDuplicateClaim(t *testing.T) {
 	}
 }
 
+// queueAttemptContext gives one database attempt its own 30-second limit.
+// Concurrent workers must not share that limit. A shared deadline cancels
+// claims that are still in progress, so the test can no longer tell whether
+// every worker received distinct work.
+func queueAttemptContext(
+	t *testing.T,
+) (context.Context, context.CancelFunc) {
+	t.Helper()
+
+	return context.WithTimeout(
+		t.Context(),
+		30*time.Second,
+	)
+}
+
 func TestQueueConcurrentWorkersClaimDistinctOrigins(
 	t *testing.T,
 ) {
 	const claimCount = 12
 
 	pool := newConcurrentStoreTestPool(t, 16)
-
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		30*time.Second,
-	)
-	defer cancel()
 
 	now := queueTestTime()
 	queue := newFixedQueue(
@@ -146,7 +155,10 @@ func TestQueueConcurrentWorkersClaimDistinctOrigins(
 			),
 		)
 
-		if err := queue.Schedule(ctx, source, now); err != nil {
+		scheduleContext, cancelSchedule := queueAttemptContext(t)
+		err := queue.Schedule(scheduleContext, source, now)
+		cancelSchedule()
+		if err != nil {
 			t.Fatalf(
 				"Schedule(%q) error = %v, want nil",
 				source,
@@ -170,13 +182,15 @@ func TestQueueConcurrentWorkersClaimDistinctOrigins(
 
 			<-start
 
+			claimContext, cancelClaim := queueAttemptContext(t)
 			lease, found, err := queue.Claim(
-				ctx,
+				claimContext,
 				fmt.Sprintf(
 					"worker-%02d",
 					workerIndex,
 				),
 			)
+			cancelClaim()
 			results <- concurrentClaimResult{
 				lease: lease,
 				found: found,
@@ -257,12 +271,6 @@ func TestQueueSingleOriginHasOneConcurrentWinner(
 
 	pool := newConcurrentStoreTestPool(t, 16)
 
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		30*time.Second,
-	)
-	defer cancel()
-
 	now := queueTestTime()
 	queue := newFixedQueue(
 		t,
@@ -275,7 +283,10 @@ func TestQueueSingleOriginHasOneConcurrentWinner(
 	)
 	source := mustStoreOrigin(t, "https://example.com")
 
-	if err := queue.Schedule(ctx, source, now); err != nil {
+	scheduleContext, cancelSchedule := queueAttemptContext(t)
+	err := queue.Schedule(scheduleContext, source, now)
+	cancelSchedule()
+	if err != nil {
 		t.Fatalf("Schedule() error = %v, want nil", err)
 	}
 
@@ -294,13 +305,15 @@ func TestQueueSingleOriginHasOneConcurrentWinner(
 
 			<-start
 
+			claimContext, cancelClaim := queueAttemptContext(t)
 			lease, found, err := queue.Claim(
-				ctx,
+				claimContext,
 				fmt.Sprintf(
 					"worker-%02d",
 					workerIndex,
 				),
 			)
+			cancelClaim()
 			results <- concurrentClaimResult{
 				lease: lease,
 				found: found,
@@ -365,8 +378,10 @@ func TestQueueSingleOriginHasOneConcurrentWinner(
 	}
 
 	var generation int64
-	err := pool.QueryRow(
-		ctx,
+	readContext, cancelRead := queueAttemptContext(t)
+	defer cancelRead()
+	err = pool.QueryRow(
+		readContext,
 		`
 			SELECT lease_generation
 			FROM verification_queue

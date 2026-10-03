@@ -79,6 +79,7 @@ export JOSHBOT_OPERATOR_PASSWORD_FILE="$smoke_root/secrets/joshbot_operator_pass
 export JOSHBOT_BACKUP_PASSWORD_FILE="$smoke_root/secrets/joshbot_backup_password"
 export JOSHBOT_REPORT_TOKEN_FILE="$smoke_root/secrets/joshbot_report_token"
 export JOSHBOT_OPERATOR_TOKEN_FILE="$smoke_root/secrets/joshbot_operator_token"
+export JOSHBOT_GITHUB_TOKEN_FILE="$smoke_root/secrets/joshbot_github_token"
 export JOSHBOT_WEB_BOT_AUTH_MODE=required
 export JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE="$smoke_root/secrets/joshbot_web_bot_auth_active_private_key"
 
@@ -464,6 +465,7 @@ create_secret "$JOSHBOT_OPERATOR_PASSWORD_FILE"
 create_secret "$JOSHBOT_BACKUP_PASSWORD_FILE"
 create_secret "$JOSHBOT_REPORT_TOKEN_FILE"
 create_secret "$JOSHBOT_OPERATOR_TOKEN_FILE"
+create_secret "$JOSHBOT_GITHUB_TOKEN_FILE"
 create_secret "$restore_password_file"
 
 openssl genpkey \
@@ -527,7 +529,7 @@ compose up \
   --detach \
   --wait
 
-pass "PostgreSQL, migration, worker, and discovery services started successfully"
+pass "PostgreSQL, migration, worker, discovery, and registry services started successfully"
 
 migrate_container="$(
   compose ps \
@@ -550,6 +552,13 @@ discovery_container="$(
     discovery
 )"
 
+registry_container="$(
+  compose ps \
+    --all \
+    --quiet \
+    registry
+)"
+
 postgres_container="$(
   compose ps \
     --all \
@@ -568,6 +577,10 @@ assert_nonempty \
 assert_nonempty \
   "$discovery_container" \
   "discovery container was not created"
+
+assert_nonempty \
+  "$registry_container" \
+  "registry container was not created"
 
 assert_nonempty \
   "$postgres_container" \
@@ -597,6 +610,16 @@ assert_equal \
   "$(docker inspect "$discovery_container" --format '{{.State.Health.Status}}')" \
   "healthy" \
   "discovery health"
+
+assert_equal \
+  "$(docker inspect "$registry_container" --format '{{.State.Health.Status}}')" \
+  "healthy" \
+  "registry health"
+
+assert_equal \
+  "$(docker inspect "$registry_container" --format '{{.RestartCount}}')" \
+  "0" \
+  "registry restart count"
 
 discovery_environment="$(
   docker inspect \
@@ -1320,6 +1343,11 @@ assert_hardened_container \
   'discovery container'
 
 assert_hardened_container \
+  "$registry_container" \
+  '65532:65532' \
+  'registry container'
+
+assert_hardened_container \
   "$migrate_container" \
   '65532:65532' \
   'migration container'
@@ -1391,6 +1419,11 @@ assert_equal \
   "discovery network membership"
 
 assert_equal \
+  "$(inspect_network_names "$registry_container")" \
+  "$expected_discovery_networks" \
+  "registry network membership"
+
+assert_equal \
   "$(inspect_network_names "$migrate_container")" \
   "$expected_database_network" \
   "migration network membership"
@@ -1450,6 +1483,19 @@ assert_equal \
   "$(inspect_mount_destinations "$discovery_container")" \
   "$expected_crawler_mounts" \
   "discovery mount boundary"
+
+expected_registry_mounts="$(
+  printf '%s\n' \
+    '/exports' \
+    '/run/secrets/joshbot_app_password' \
+    '/run/secrets/joshbot_github_token' |
+    sort
+)"
+
+assert_equal \
+  "$(inspect_mount_destinations "$registry_container")" \
+  "$expected_registry_mounts" \
+  "registry mount boundary"
 
 expected_migrate_mounts='/run/secrets/joshbot_migrator_password'
 
