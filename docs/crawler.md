@@ -209,9 +209,7 @@ Go duration syntax is used. For example, one week is `168h`, not `7d`.
 
 The durable domain avoid list starts with common hosted publishing and social
 platforms, including `centerblog.net`, and is editable through the operator
-control API. The next amplification neighborhood is added with
-`POST /api/v1/control/domain-avoid` and removed with
-`DELETE /api/v1/control/domain-avoid/{pattern}`. Exact domains include their
+control API. Exact domains include their
 subdomains. A public-suffix family such as `blogspot.*` also matches regional
 forms including `blogspot.co.uk` and `blogspot.no`. Avoided origins remain in
 private discovery evidence but are not promoted or probed automatically.

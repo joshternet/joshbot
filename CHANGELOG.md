@@ -42,9 +42,6 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   in place. A test that changes tables, indexes, triggers, or constraints gets
   that same schema rebuilt before it is reused. The package no longer creates
   and drops a spare schema for every test.
-- The Barf quality gate drops idle `joshbot_quality_*` databases and roles
-  left by earlier runs before it creates the database for the current run.
-  A database with a connected client is left in place.
 
 ## [1.1.0] - 2026-09-21
 

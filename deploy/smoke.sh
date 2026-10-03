@@ -79,7 +79,6 @@ export JOSHBOT_OPERATOR_PASSWORD_FILE="$smoke_root/secrets/joshbot_operator_pass
 export JOSHBOT_BACKUP_PASSWORD_FILE="$smoke_root/secrets/joshbot_backup_password"
 export JOSHBOT_REPORT_TOKEN_FILE="$smoke_root/secrets/joshbot_report_token"
 export JOSHBOT_OPERATOR_TOKEN_FILE="$smoke_root/secrets/joshbot_operator_token"
-export JOSHBOT_GITHUB_TOKEN_FILE="$smoke_root/secrets/joshbot_github_token"
 export JOSHBOT_WEB_BOT_AUTH_MODE=required
 export JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE="$smoke_root/secrets/joshbot_web_bot_auth_active_private_key"
 
@@ -465,7 +464,6 @@ create_secret "$JOSHBOT_OPERATOR_PASSWORD_FILE"
 create_secret "$JOSHBOT_BACKUP_PASSWORD_FILE"
 create_secret "$JOSHBOT_REPORT_TOKEN_FILE"
 create_secret "$JOSHBOT_OPERATOR_TOKEN_FILE"
-create_secret "$JOSHBOT_GITHUB_TOKEN_FILE"
 create_secret "$restore_password_file"
 export JOSHBOT_GITHUB_TOKEN_FILE="$smoke_root/secrets/joshbot_github_token"
 create_secret "$JOSHBOT_GITHUB_TOKEN_FILE"

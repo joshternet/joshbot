@@ -317,13 +317,7 @@ The publisher:
 - detects concurrent publication conflicts;
 - avoids a commit when the tree is unchanged.
 
-The running `registry` service checks for an update every
-`JOSHBOT_REGISTRY_PUBLISH_INTERVAL`, 15 minutes by default. It exports the
-current registry and publishes that snapshot. A changed tree updates the
-configured branch. An unchanged tree does not create a commit. A failed
-publish is retried until it succeeds.
-
-The one-shot publisher receives no PostgreSQL configuration.
+The publisher receives no PostgreSQL configuration.
 
 GitHub publication is intentionally outside the crawler Web Bot Auth boundary.
 It is not web discovery or verification traffic. It talks only to the GitHub
