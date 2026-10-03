@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,7 +26,6 @@ var (
 	storeTemplateOnce       sync.Once
 	storeTemplateErr        error
 	storeMigrationTemplate  = "store_migration_template"
-	storeSchemaSequence     uint64
 	createdSchemasMu        sync.Mutex
 	createdSchemas          []string
 	reusableSchemas         chan string
@@ -252,56 +250,6 @@ func newIsolatedStoreTestPool(
 	return openReusableSchema(t, maxConnections)
 }
 
-func prepareIsolatedSchema(t *testing.T) (*pgxpool.Pool, string) {
-	t.Helper()
-
-	databaseURL := os.Getenv(
-		"JOSHBOT_TEST_DATABASE_URL",
-	)
-	if databaseURL == "" {
-		if os.Getenv(
-			"JOSHBOT_REQUIRE_DATABASE_TESTS",
-		) == "1" {
-			t.Fatal(
-				"JOSHBOT_TEST_DATABASE_URL is required",
-			)
-		}
-
-		t.Skip(
-			"JOSHBOT_TEST_DATABASE_URL is not configured",
-		)
-	}
-
-	adminPool := sharedStoreAdminPool(t, databaseURL)
-	ensureStoreMigrationTemplate(t, adminPool)
-	return adminPool, prepareSchemaName(t, adminPool)
-}
-
-func prepareSchemaName(
-	t *testing.T,
-	adminPool *pgxpool.Pool,
-) string {
-	t.Helper()
-
-	schema := fmt.Sprintf(
-		"store_test_%d_%d",
-		os.Getpid(),
-		atomic.AddUint64(&storeSchemaSequence, 1),
-	)
-	if _, err := adminPool.Exec(
-		context.Background(),
-		"SELECT store_migration_template.clone_to($1)",
-		schema,
-	); err != nil {
-		t.Fatalf("clone store migration schema: %v", err)
-	}
-
-	createdSchemasMu.Lock()
-	createdSchemas = append(createdSchemas, schema)
-	createdSchemasMu.Unlock()
-	return schema
-}
-
 func connectIsolatedSchema(
 	t *testing.T,
 	adminPool *pgxpool.Pool,
@@ -354,16 +302,6 @@ func dropStoreSchemas(names []string) {
 	}
 	statement.WriteString(" CASCADE")
 	_, _ = storeAdminPool.Exec(context.Background(), statement.String())
-}
-
-func ensureStoreMigrationTemplate(
-	t *testing.T,
-	adminPool *pgxpool.Pool,
-) {
-	t.Helper()
-	if err := installStoreTemplate(adminPool); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func installStoreTemplate(adminPool *pgxpool.Pool) error {
