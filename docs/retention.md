@@ -99,6 +99,10 @@ discovery kind with its first and last discovery times.
 
 `discovery_source_state` is current durable crawler knowledge and is retained.
 
+`discovery_source_schedule` is active crawl intent. A missing row means that
+origin is not scheduled. Removing it does not delete candidates, edges, or
+`discovery_source_state`.
+
 A source becoming cold, blocked, unscheduled, or otherwise absent from recent
 crawl activity does not delete its discovery provenance.
 

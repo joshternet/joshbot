@@ -71,6 +71,8 @@ func TestRunHelp(t *testing.T) {
 				"control",
 				"export",
 				"publish",
+				"export-registry",
+				"publish-registry",
 				"help",
 			} {
 				if !strings.Contains(

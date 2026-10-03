@@ -81,8 +81,10 @@ The Compose deployment includes:
 - `control`: private authenticated mutation API, enabled with the `control`
   profile;
 - `tools`: database-backed operator commands and exports;
-- `registry`: every 15 minutes, publishes registry updates to the configured
-  GitHub branch and retries until a failed update succeeds;
+- `registry-export`: writes a public registry snapshot on
+  `JOSHBOT_REGISTRY_PUBLISH_INTERVAL`, 15 minutes by default;
+- `registry-publish`: publishes each new snapshot and does not commit when
+  the registry tree is unchanged;
 - `publisher`: one-shot GitHub registry publication;
 - `backup`: logical PostgreSQL backups;
 - `restore`: controlled logical restoration.
@@ -102,6 +104,10 @@ Compose file is upgraded.
 - `control` receives the internal database network and its private control
   network. It receives no general egress network.
 - `tools` receives the database network and writable export storage.
+- `registry-export` receives the database network and writable export storage.
+  It does not receive the GitHub token or egress.
+- `registry-publish` receives egress, a read-only export mount, and the
+  GitHub token. It does not receive database access.
 - The `tools` service does not receive the Web Bot Auth private key. Use the
   `worker` or `discovery` services for crawler commands that require outbound
   Web Bot Auth signing.
@@ -1213,7 +1219,9 @@ GitHub token or egress.
 
 ## Publish the registry
 
-`deploy/publish.sh` performs one attempt:
+`deploy/publish.sh` performs one explicit attempt. The running deployment
+does not depend on that command. `registry-export` and `registry-publish`
+repeat the same split every `JOSHBOT_REGISTRY_PUBLISH_INTERVAL`.
 
 1. `tools` exports a fresh deterministic snapshot.
 2. `publisher` reads and publishes the snapshot.
@@ -1514,7 +1522,8 @@ docker compose \
   --no-deps \
   worker \
   discovery \
-  registry
+  registry-export \
+  registry-publish
 ```
 
 If reporting is enabled:
@@ -1541,7 +1550,9 @@ docker compose \
   control
 ```
 
-The publisher remains a one-shot operation.
+The publisher remains available for one explicit publication. The registry
+also refreshes itself: `registry-export` and `registry-publish` stay running
+and repeat every `JOSHBOT_REGISTRY_PUBLISH_INTERVAL`.
 
 ## Local validation
 

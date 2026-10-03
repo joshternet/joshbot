@@ -467,6 +467,12 @@ create_secret "$JOSHBOT_REPORT_TOKEN_FILE"
 create_secret "$JOSHBOT_OPERATOR_TOKEN_FILE"
 create_secret "$JOSHBOT_GITHUB_TOKEN_FILE"
 create_secret "$restore_password_file"
+export JOSHBOT_GITHUB_TOKEN_FILE="$smoke_root/secrets/joshbot_github_token"
+create_secret "$JOSHBOT_GITHUB_TOKEN_FILE"
+unset JOSHBOT_PUBLISH_GITHUB_OWNER
+unset JOSHBOT_PUBLISH_GITHUB_REPOSITORY
+export JOSHBOT_PUBLISH_GITHUB_BRANCH=main
+export JOSHBOT_REGISTRY_PUBLISH_INTERVAL=15m
 
 openssl genpkey \
   -algorithm Ed25519 \
@@ -552,13 +558,6 @@ discovery_container="$(
     discovery
 )"
 
-registry_container="$(
-  compose ps \
-    --all \
-    --quiet \
-    registry
-)"
-
 postgres_container="$(
   compose ps \
     --all \
@@ -577,10 +576,6 @@ assert_nonempty \
 assert_nonempty \
   "$discovery_container" \
   "discovery container was not created"
-
-assert_nonempty \
-  "$registry_container" \
-  "registry container was not created"
 
 assert_nonempty \
   "$postgres_container" \
@@ -610,16 +605,6 @@ assert_equal \
   "$(docker inspect "$discovery_container" --format '{{.State.Health.Status}}')" \
   "healthy" \
   "discovery health"
-
-assert_equal \
-  "$(docker inspect "$registry_container" --format '{{.State.Health.Status}}')" \
-  "healthy" \
-  "registry health"
-
-assert_equal \
-  "$(docker inspect "$registry_container" --format '{{.RestartCount}}')" \
-  "0" \
-  "registry restart count"
 
 discovery_environment="$(
   docker inspect \
@@ -668,6 +653,236 @@ fi
 
 pass "discovery received the explicit smoke crawl budget without publication credentials"
 
+registry_export_container="$(
+  compose ps \
+    --all \
+    --quiet \
+    registry-export
+)"
+
+registry_publish_container="$(
+  compose ps \
+    --all \
+    --quiet \
+    registry-publish
+)"
+
+assert_nonempty \
+  "$registry_export_container" \
+  "registry export container was not created"
+
+assert_nonempty \
+  "$registry_publish_container" \
+  "registry publish container was not created"
+
+assert_equal \
+  "$(docker inspect "$registry_export_container" --format '{{.State.Status}}')" \
+  "running" \
+  "registry export container state"
+
+assert_equal \
+  "$(docker inspect "$registry_export_container" --format '{{.State.Health.Status}}')" \
+  "healthy" \
+  "registry export health"
+
+assert_equal \
+  "$(docker inspect "$registry_export_container" --format '{{.RestartCount}}')" \
+  "0" \
+  "registry export restart count"
+
+assert_equal \
+  "$(docker inspect "$registry_publish_container" --format '{{.State.Status}}')" \
+  "running" \
+  "registry publish container state"
+
+assert_equal \
+  "$(docker inspect "$registry_publish_container" --format '{{.RestartCount}}')" \
+  "0" \
+  "registry publish restart count"
+
+assert_equal \
+  "$(docker inspect "$registry_export_container" --format '{{json .Config.Cmd}}')" \
+  '["export-registry"]' \
+  "registry export command"
+
+assert_equal \
+  "$(docker inspect "$registry_publish_container" --format '{{json .Config.Cmd}}')" \
+  '["publish-registry"]' \
+  "registry publish command"
+
+assert_hardened_container \
+  "$registry_export_container" \
+  '65532:65532' \
+  'registry export container'
+
+assert_hardened_container \
+  "$registry_publish_container" \
+  '65532:65532' \
+  'registry publish container'
+
+registry_database_network="${COMPOSE_PROJECT_NAME}_database"
+registry_egress_network="${COMPOSE_PROJECT_NAME}_egress"
+
+assert_equal \
+  "$(inspect_network_names "$registry_export_container")" \
+  "$registry_database_network" \
+  "registry export network membership"
+
+assert_equal \
+  "$(inspect_network_names "$registry_publish_container")" \
+  "$registry_egress_network" \
+  "registry publish network membership"
+
+assert_equal \
+  "$(
+    docker inspect \
+      "$registry_export_container" \
+      --format '{{range .Mounts}}{{if eq .Destination "/exports"}}{{println .RW}}{{end}}{{end}}' |
+      sed '/^$/d'
+  )" \
+  "true" \
+  "registry export mount is writable"
+
+assert_equal \
+  "$(
+    docker inspect \
+      "$registry_publish_container" \
+      --format '{{range .Mounts}}{{if eq .Destination "/exports"}}{{println .RW}}{{end}}{{end}}' |
+      sed '/^$/d'
+  )" \
+  "false" \
+  "registry publish mount is read-only"
+
+expected_registry_export_mounts="$(
+  printf '%s\n' \
+    '/exports' \
+    '/run/secrets/joshbot_app_password' |
+    sort
+)"
+
+expected_registry_publish_mounts="$(
+  printf '%s\n' \
+    '/exports' \
+    '/run/secrets/joshbot_github_token' |
+    sort
+)"
+
+assert_equal \
+  "$(inspect_mount_destinations "$registry_export_container")" \
+  "$expected_registry_export_mounts" \
+  "registry export mount boundary"
+
+assert_equal \
+  "$(inspect_mount_destinations "$registry_publish_container")" \
+  "$expected_registry_publish_mounts" \
+  "registry publish mount boundary"
+
+registry_export_environment="$(
+  docker inspect \
+    "$registry_export_container" \
+    --format '{{range .Config.Env}}{{println .}}{{end}}'
+)"
+
+registry_publish_environment="$(
+  docker inspect \
+    "$registry_publish_container" \
+    --format '{{range .Config.Env}}{{println .}}{{end}}'
+)"
+
+for expected_setting in \
+  'JOSHBOT_REGISTRY_PUBLISH_INTERVAL=15m' \
+  'JOSHBOT_REGISTRY_EXPORT_ROOT=/exports' \
+  'JOSHBOT_DATABASE_URL=postgres://joshbot_app@postgres:5432/joshbot?sslmode=disable' \
+  'JOSHBOT_DATABASE_PASSWORD_FILE=/run/secrets/joshbot_app_password'; do
+  if ! grep -Fxq \
+    "$expected_setting" \
+    <<<"$registry_export_environment"; then
+    fail "registry export environment is missing $expected_setting"
+  fi
+done
+
+if grep -Eq \
+  '^JOSHBOT_(GITHUB_TOKEN_FILE|PUBLISH_)' \
+  <<<"$registry_export_environment"; then
+  fail "registry export container received publication credentials"
+fi
+
+for expected_setting in \
+  'JOSHBOT_REGISTRY_PUBLISH_INTERVAL=15m' \
+  'JOSHBOT_REGISTRY_EXPORT_ROOT=/exports' \
+  'JOSHBOT_GITHUB_TOKEN_FILE=/run/secrets/joshbot_github_token' \
+  'JOSHBOT_PUBLISH_GITHUB_BRANCH=main'; do
+  if ! grep -Fxq \
+    "$expected_setting" \
+    <<<"$registry_publish_environment"; then
+    fail "registry publish environment is missing $expected_setting"
+  fi
+done
+
+if grep -Eq \
+  '^JOSHBOT_PUBLISH_GITHUB_(OWNER|REPOSITORY)=.+' \
+  <<<"$registry_publish_environment"; then
+  fail "registry publish container received a GitHub repository target"
+fi
+
+if grep -Eq \
+  '^JOSHBOT_DATABASE_' \
+  <<<"$registry_publish_environment"; then
+  fail "registry publish container received database configuration"
+fi
+
+automatic_snapshot_ready=0
+for _ in $(seq 1 30); do
+  if [[ -s "$JOSHBOT_EXPORT_DIR/registry-current" ]]; then
+    automatic_snapshot_ready=1
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$automatic_snapshot_ready" -ne 1 ]]; then
+  docker logs "$registry_export_container" >&2 || true
+  fail "automatic registry snapshot was not written"
+fi
+
+automatic_snapshot_name="$(
+  tr -d '\n' <"$JOSHBOT_EXPORT_DIR/registry-current"
+)"
+
+case "$automatic_snapshot_name" in
+  .joshbot-automatic-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z-*)
+    ;;
+  *)
+    fail "automatic registry snapshot name is not safe: $automatic_snapshot_name"
+    ;;
+esac
+
+if [[ ! -s "$JOSHBOT_EXPORT_DIR/$automatic_snapshot_name/registry.json" ]]; then
+  fail "automatic registry snapshot is missing registry.json"
+fi
+
+publish_refused=0
+for _ in $(seq 1 20); do
+  if docker logs "$registry_publish_container" 2>&1 |
+    grep -q 'publication configuration is invalid'; then
+    publish_refused=1
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$publish_refused" -ne 1 ]]; then
+  docker logs "$registry_publish_container" >&2 || true
+  fail "registry publisher did not refuse the unconfigured GitHub target"
+fi
+
+if docker logs "$registry_publish_container" 2>&1 |
+  grep -q 'msg="registry published"'; then
+  fail "registry publisher created a commit during smoke"
+fi
+
+pass "registry export wrote a snapshot and the publisher refused an unconfigured target"
+
 compose \
   run \
   --rm \
@@ -678,9 +893,9 @@ compose \
 
 pass "one-shot discovery succeeded with no verified source and made no public request"
 
-compose stop worker discovery
+compose stop registry-export registry-publish worker discovery
 
-pass "worker and discovery were stopped before seeding; smoke test performs no public crawl"
+pass "registry, worker, and discovery were stopped before seeding; smoke test performs no public crawl or publication"
 
 compose \
   --profile tools \
@@ -749,13 +964,19 @@ seed_side_effect_state="$(
           SELECT count(*)::text
           FROM verification_queue
           WHERE origin = 'https://directory.example'
+        )
+        || '|'
+        || (
+          SELECT count(*)::text
+          FROM discovery_source_schedule
+          WHERE source_origin = 'https://directory.example'
         );
     "
 )"
 
 assert_equal \
   "$seed_side_effect_state" \
-  '1|0|0' \
+  '1|0|0|1' \
   "curated seed private state"
 
 pass "seed CLI normalized an idempotent private seed without verification or queue side effects"
@@ -1080,6 +1301,20 @@ private_discovery_state="$(
         || discovery_edges.kind
         || '|'
         || verification_queue.mode
+        || '|'
+        || (
+          SELECT count(*)::text
+          FROM discovery_source_schedule
+          WHERE source_origin =
+            discovery_source_state.source_origin
+        )
+        || '|'
+        || (
+          SELECT count(*)::text
+          FROM discovery_source_schedule
+          WHERE source_origin =
+            discovery_candidates.origin
+        )
       FROM discovery_source_state
       JOIN discovery_edges
         ON discovery_edges.source_origin =
@@ -1095,7 +1330,7 @@ private_discovery_state="$(
 
 assert_equal \
   "$private_discovery_state" \
-  'https://directory.example|true|2026-01-03T03:04:05Z|https://candidate.example|link|probe' \
+  'https://directory.example|true|2026-01-03T03:04:05Z|https://candidate.example|link|probe|1|0' \
   "private discovery state"
 
 compose \
@@ -1343,11 +1578,6 @@ assert_hardened_container \
   'discovery container'
 
 assert_hardened_container \
-  "$registry_container" \
-  '65532:65532' \
-  'registry container'
-
-assert_hardened_container \
   "$migrate_container" \
   '65532:65532' \
   'migration container'
@@ -1419,11 +1649,6 @@ assert_equal \
   "discovery network membership"
 
 assert_equal \
-  "$(inspect_network_names "$registry_container")" \
-  "$expected_discovery_networks" \
-  "registry network membership"
-
-assert_equal \
   "$(inspect_network_names "$migrate_container")" \
   "$expected_database_network" \
   "migration network membership"
@@ -1483,19 +1708,6 @@ assert_equal \
   "$(inspect_mount_destinations "$discovery_container")" \
   "$expected_crawler_mounts" \
   "discovery mount boundary"
-
-expected_registry_mounts="$(
-  printf '%s\n' \
-    '/exports' \
-    '/run/secrets/joshbot_app_password' \
-    '/run/secrets/joshbot_github_token' |
-    sort
-)"
-
-assert_equal \
-  "$(inspect_mount_destinations "$registry_container")" \
-  "$expected_registry_mounts" \
-  "registry mount boundary"
 
 expected_migrate_mounts='/run/secrets/joshbot_migrator_password'
 
@@ -1903,6 +2115,20 @@ restored_discovery_state="$(
         || discovery_candidates.origin
         || '|'
         || discovery_edges.kind
+        || '|'
+        || (
+          SELECT count(*)::text
+          FROM discovery_source_schedule
+          WHERE source_origin =
+            discovery_source_state.source_origin
+        )
+        || '|'
+        || (
+          SELECT count(*)::text
+          FROM discovery_source_schedule
+          WHERE source_origin =
+            discovery_candidates.origin
+        )
       FROM discovery_source_state
       JOIN discovery_edges
         ON discovery_edges.source_origin =
@@ -1915,7 +2141,7 @@ restored_discovery_state="$(
 
 assert_equal \
   "$restored_discovery_state" \
-  'https://directory.example|true|2026-01-03T03:04:05Z|https://candidate.example|link' \
+  'https://directory.example|true|2026-01-03T03:04:05Z|https://candidate.example|link|1|0' \
   "restored discovery state"
 
 restored_migration_count="$(

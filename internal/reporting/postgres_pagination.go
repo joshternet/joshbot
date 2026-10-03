@@ -27,40 +27,68 @@ func (reader *PostgresReader) SourcesPage(
 	rows, err := reader.pool.Query(
 		ctx,
 		`
-			WITH classified AS (
+			WITH source_universe AS (
+				SELECT source_origin
+				FROM discovery_source_state
+
+				UNION
+
+				SELECT source_origin
+				FROM discovery_source_schedule
+			),
+			classified AS (
 				SELECT
-					state.source_origin,
-					state.seeded,
-					state.automatically_discovered,
-					state.crawl_blocked,
+					source.source_origin,
+					COALESCE(
+						state.seeded,
+						false
+					) AS seeded,
+					COALESCE(
+						state.automatically_discovered,
+						false
+					) AS automatically_discovered,
+					COALESCE(
+						state.crawl_blocked,
+						false
+					) AS crawl_blocked,
 					COALESCE(
 						effective.outcome = 'valid',
 						false
 					) AS verified,
-					NOT state.crawl_blocked
-						AND (
-							state.seeded
-							OR state.automatically_discovered
-							OR COALESCE(
-								effective.outcome = 'valid',
-								false
-							)
-						) AS crawl_eligible,
+					NOT COALESCE(
+						state.crawl_blocked,
+						false
+					)
+						AND schedule.source_origin IS NOT NULL
+						AS crawl_eligible,
 					candidate.first_discovered_at,
 					candidate.last_discovered_at,
-					state.lease_generation,
-					COALESCE(state.lease_owner, '') AS lease_owner,
+					COALESCE(
+						state.lease_generation,
+						0
+					) AS lease_generation,
+					COALESCE(
+						state.lease_owner,
+						''
+					) AS lease_owner,
 					state.lease_expires_at,
 					state.last_claimed_at
-				FROM discovery_source_state AS state
+				FROM source_universe AS source
+				LEFT JOIN discovery_source_state AS state
+					ON state.source_origin =
+						source.source_origin
+				LEFT JOIN discovery_source_schedule AS schedule
+					ON schedule.source_origin =
+						source.source_origin
 				LEFT JOIN discovery_candidates AS candidate
-					ON candidate.origin = state.source_origin
+					ON candidate.origin =
+						source.source_origin
 				LEFT JOIN LATERAL (
 					SELECT observation.outcome
 					FROM verification_observations
 						AS observation
 					WHERE observation.origin =
-							state.source_origin
+							source.source_origin
 						AND observation.outcome IN (
 							'valid',
 							'absent',

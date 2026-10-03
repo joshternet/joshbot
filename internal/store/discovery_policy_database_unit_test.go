@@ -51,15 +51,35 @@ type discoveryPolicyUnitTx struct {
 	rowResults []discoveryUnitRow
 	rowIndex   int
 
+	discoveryScheduleLockErr error
+
 	commitErr   error
 	rollbackErr error
 }
 
 func (tx *discoveryPolicyUnitTx) Exec(
-	context.Context,
-	string,
-	...any,
+	_ context.Context,
+	query string,
+	arguments ...any,
 ) (pgconn.CommandTag, error) {
+	if strings.Contains(
+		query,
+		"pg_advisory_xact_lock",
+	) &&
+		len(arguments) == 1 {
+		key, ok := arguments[0].(int64)
+		if ok && key < 0 {
+			if tx.discoveryScheduleLockErr != nil {
+				return pgconn.CommandTag{},
+					tx.discoveryScheduleLockErr
+			}
+
+			return pgconn.NewCommandTag(
+				"SELECT 1",
+			), nil
+		}
+	}
+
 	if tx.execIndex >= len(tx.execResults) {
 		return pgconn.CommandTag{},
 			errUnexpectedDiscoveryUnitDatabaseCall
@@ -113,6 +133,61 @@ func (tx *discoveryPolicyUnitTx) Rollback(
 	context.Context,
 ) error {
 	return tx.rollbackErr
+}
+
+func TestDiscoveryScheduleOriginLockWithoutDatabase(
+	t *testing.T,
+) {
+	ctx := context.Background()
+
+	t.Run(
+		"success",
+		func(t *testing.T) {
+			tx := &discoveryPolicyUnitTx{}
+
+			err := lockDiscoveryScheduleOrigin(
+				ctx,
+				tx,
+				"https://example.com",
+			)
+			if err != nil {
+				t.Fatalf(
+					"lockDiscoveryScheduleOrigin() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"database failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test discovery schedule lock failure",
+			)
+
+			tx := &discoveryPolicyUnitTx{
+				discoveryScheduleLockErr: testErr,
+			}
+
+			err := lockDiscoveryScheduleOrigin(
+				ctx,
+				tx,
+				"https://example.com",
+			)
+
+			if !errors.Is(err, testErr) ||
+				!strings.Contains(
+					err.Error(),
+					"store: lock discovery schedule origin",
+				) {
+				t.Fatalf(
+					"lockDiscoveryScheduleOrigin() error = %v",
+					err,
+				)
+			}
+		},
+	)
 }
 
 func TestSetCrawlBlockedDatabasePathsWithoutDatabase(

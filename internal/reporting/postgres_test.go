@@ -1061,6 +1061,28 @@ func seedReportingFixture(
 	_, err = pool.Exec(
 		ctx,
 		`
+			INSERT INTO discovery_source_schedule (
+				source_origin
+			)
+			VALUES
+				($1),
+				($2),
+				($3)
+		`,
+		seeded,
+		blocked,
+		automatic,
+	)
+	if err != nil {
+		t.Fatalf(
+			"insert discovery source schedule: %v",
+			err,
+		)
+	}
+
+	_, err = pool.Exec(
+		ctx,
+		`
 			INSERT INTO verification_queue (
 				origin,
 				available_at,
@@ -1702,6 +1724,235 @@ func TestPostgresReaderMetricsPreservesRowStreamFailure(
 		t.Errorf(
 			"Metrics() on row failure = %#v, want zero metrics",
 			metrics,
+		)
+	}
+}
+
+func TestPostgresReaderReportsKnownUnscheduledSourceIneligible(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newReportingTestPool(t)
+
+	const sourceOrigin = "https://known-unscheduled.example"
+
+	if _, err := pool.Exec(
+		ctx,
+		`
+			INSERT INTO discovery_source_state (
+				source_origin,
+				automatically_discovered
+			)
+			VALUES ($1, true)
+		`,
+		sourceOrigin,
+	); err != nil {
+		t.Fatalf(
+			"insert durable source state: %v",
+			err,
+		)
+	}
+
+	reader, err := NewPostgresReader(
+		pool,
+		PostgresConfig{
+			AutomaticCrawlEnabled: true,
+			MaxPendingProbes:      1000,
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"NewPostgresReader() error = %v",
+			err,
+		)
+	}
+
+	status, err := reader.Status(ctx)
+	if err != nil {
+		t.Fatalf(
+			"Status() error = %v",
+			err,
+		)
+	}
+
+	if status.Sources.Total != 1 ||
+		status.Sources.Automatic != 1 ||
+		status.Sources.CrawlEligible != 0 {
+		t.Fatalf(
+			"source summary = %#v, want total=1 automatic=1 crawl_eligible=0",
+			status.Sources,
+		)
+	}
+
+	sources, err := reader.Sources(
+		ctx,
+		10,
+	)
+	if err != nil {
+		t.Fatalf(
+			"Sources() error = %v",
+			err,
+		)
+	}
+
+	if len(sources) != 1 {
+		t.Fatalf(
+			"Sources() length = %d, want 1",
+			len(sources),
+		)
+	}
+
+	source := sources[0]
+	if source.Origin != sourceOrigin ||
+		!source.AutomaticallyDiscovered ||
+		source.CrawlEligible {
+		t.Fatalf(
+			"source = %#v, want durable automatic source without active scheduling",
+			source,
+		)
+	}
+}
+
+func TestPostgresReaderReportsScheduledSourceWithoutState(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newReportingTestPool(t)
+
+	const sourceOrigin = "https://scheduled-without-state.example"
+
+	if _, err := pool.Exec(
+		ctx,
+		`
+			INSERT INTO discovery_source_schedule (
+				source_origin
+			)
+			VALUES ($1)
+		`,
+		sourceOrigin,
+	); err != nil {
+		t.Fatalf(
+			"insert scheduled source: %v",
+			err,
+		)
+	}
+
+	reader, err := NewPostgresReader(
+		pool,
+		PostgresConfig{
+			AutomaticCrawlEnabled: true,
+			MaxPendingProbes:      1000,
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"NewPostgresReader() error = %v",
+			err,
+		)
+	}
+
+	status, err := reader.Status(ctx)
+	if err != nil {
+		t.Fatalf(
+			"Status() error = %v",
+			err,
+		)
+	}
+
+	if status.Sources.Total != 1 ||
+		status.Sources.Seeded != 0 ||
+		status.Sources.Automatic != 0 ||
+		status.Sources.Verified != 0 ||
+		status.Sources.Blocked != 0 ||
+		status.Sources.CrawlEligible != 1 {
+		t.Fatalf(
+			"source summary = %#v, want one schedule-only eligible source",
+			status.Sources,
+		)
+	}
+
+	sources, err := reader.Sources(
+		ctx,
+		10,
+	)
+	if err != nil {
+		t.Fatalf(
+			"Sources() error = %v",
+			err,
+		)
+	}
+
+	if len(sources) != 1 {
+		t.Fatalf(
+			"Sources() length = %d, want 1",
+			len(sources),
+		)
+	}
+
+	source := sources[0]
+	if source.Origin != sourceOrigin ||
+		source.Seeded ||
+		source.AutomaticallyDiscovered ||
+		source.Blocked ||
+		source.Verified ||
+		!source.CrawlEligible ||
+		source.LeaseGeneration != 0 {
+		t.Fatalf(
+			"source = %#v, want schedule-only eligible source",
+			source,
+		)
+	}
+
+	page, err := reader.SourcesPage(
+		ctx,
+		sourceQuery{
+			Limit: 10,
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"SourcesPage() error = %v",
+			err,
+		)
+	}
+
+	if len(page.Items) != 1 ||
+		page.Items[0].Origin != sourceOrigin ||
+		!page.Items[0].CrawlEligible {
+		t.Fatalf(
+			"SourcesPage() = %#v, want schedule-only eligible source",
+			page,
+		)
+	}
+
+	detail, found, err := reader.Source(
+		ctx,
+		sourceOrigin,
+		10,
+	)
+	if err != nil {
+		t.Fatalf(
+			"Source() error = %v",
+			err,
+		)
+	}
+
+	if !found {
+		t.Fatal(
+			"Source() found = false, want true",
+		)
+	}
+
+	if detail.Source.Origin != sourceOrigin ||
+		detail.Source.Seeded ||
+		detail.Source.AutomaticallyDiscovered ||
+		detail.Source.Blocked ||
+		detail.Source.Verified ||
+		!detail.Source.CrawlEligible ||
+		detail.Source.LeaseGeneration != 0 {
+		t.Fatalf(
+			"Source() detail = %#v, want schedule-only eligible source",
+			detail.Source,
 		)
 	}
 }

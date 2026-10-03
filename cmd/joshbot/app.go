@@ -35,6 +35,7 @@ Usage:
   joshbot control
   joshbot export --output <directory>
   joshbot publish --input <directory>
+  joshbot export-registry
   joshbot publish-registry
   joshbot conformance web-bot-auth --expect unregistered|verified
   joshbot help
@@ -51,7 +52,8 @@ Commands:
   control    Serve the private operator mutation API
   export     Write a deterministic public registry snapshot
   publish    Publish an existing registry snapshot to GitHub
-  publish-registry Publish registry updates every 15 minutes
+  export-registry  Refresh the registry snapshot on an interval
+  publish-registry Publish each new registry snapshot
   conformance Check the signature directory and Cloudflare Web Bot Auth
   help       Show this help
 `
@@ -82,6 +84,10 @@ type crawlSeedCommandOperations interface {
 
 type controlCommandOperations interface {
 	control(context.Context) error
+}
+
+type registryExportOperations interface {
+	exportRegistry(context.Context) error
 }
 
 type registryPublishOperations interface {
@@ -617,8 +623,38 @@ func runWithOperations(
 
 		return exitSuccess
 
+	case "export-registry":
+		exportOperations, available :=
+			operations.(registryExportOperations)
+		if !available {
+			return reportCommandFailure(
+				stderr,
+				command,
+				errOperationsUnavailable,
+			)
+		}
+
+		if len(commandArgs) != 0 {
+			return reportUsage(
+				stderr,
+				"export-registry does not accept arguments",
+			)
+		}
+
+		if err := exportOperations.exportRegistry(
+			ctx,
+		); err != nil {
+			return reportCommandFailure(
+				stderr,
+				command,
+				err,
+			)
+		}
+
+		return exitSuccess
+
 	case "publish-registry":
-		registryOperations, available :=
+		publishOperations, available :=
 			operations.(registryPublishOperations)
 		if !available {
 			return reportCommandFailure(
@@ -635,7 +671,9 @@ func runWithOperations(
 			)
 		}
 
-		if err := registryOperations.publishRegistry(ctx); err != nil {
+		if err := publishOperations.publishRegistry(
+			ctx,
+		); err != nil {
 			return reportCommandFailure(
 				stderr,
 				command,

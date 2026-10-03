@@ -9,7 +9,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/discovery"
+	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/retry"
 )
 
@@ -515,7 +517,7 @@ func TestCompleteAutomaticCandidatesHandlesPolicyExistingAndCapacityFailures(t *
 				DROP TRIGGER reject_existing_outcome ON crawl_run_automatic_admission_batches;
 				DROP FUNCTION reject_existing_outcome()
 			`,
-			want: "record existing automatic source",
+			want: "record existing discovery source",
 		},
 		{
 			name: "capacity outcome",
@@ -564,6 +566,43 @@ func TestCompleteAutomaticCandidatesHandlesPolicyExistingAndCapacityFailures(t *
 				DROP FUNCTION reject_promotion_budget_outcome()
 			`,
 			want: "record capacity-deferred admission",
+		},
+		{
+			name: "stale evidence outcome",
+			setup: func(t *testing.T, pool *pgxpool.Pool, candidate discovery.Candidate) {
+				t.Helper()
+				var discoveredAt time.Time
+				if err := pool.QueryRow(ctx, `
+					SELECT last_discovered_at
+					FROM discovery_candidates
+					WHERE origin = $1
+				`, candidate.Origin.String()).Scan(&discoveredAt); err != nil {
+					t.Fatal(err)
+				}
+				seedDiscoveryTestObservation(
+					t,
+					pool,
+					candidate.Origin,
+					discoveredAt.Add(time.Minute),
+					declaration.OutcomeAbsent,
+					declaration.IdentityUndeclared,
+				)
+				if _, err := pool.Exec(ctx, `
+					CREATE FUNCTION reject_stale_evidence_outcome() RETURNS trigger
+					LANGUAGE plpgsql AS $$
+					BEGIN RAISE EXCEPTION 'reject stale evidence outcome'; END $$;
+					CREATE TRIGGER reject_stale_evidence_outcome
+						BEFORE UPDATE ON crawl_run_automatic_admission_batches
+						FOR EACH ROW EXECUTE FUNCTION reject_stale_evidence_outcome()
+				`, pgx.QueryExecModeSimpleProtocol); err != nil {
+					t.Fatal(err)
+				}
+			},
+			cleanup: `
+				DROP TRIGGER reject_stale_evidence_outcome ON crawl_run_automatic_admission_batches;
+				DROP FUNCTION reject_stale_evidence_outcome()
+			`,
+			want: "record stale-evidence admission deferral",
 		},
 	}
 	for _, test := range tests {
@@ -746,6 +785,22 @@ func TestCompleteAutomaticCandidatesHandlesDatabaseStages(t *testing.T) {
 			cleanup: `
 				DROP TRIGGER reject_candidate_promotion ON discovery_source_state;
 				DROP FUNCTION reject_candidate_promotion()
+			`,
+			want: "promote automatic candidate",
+		},
+		{
+			name: "schedule promotion",
+			setup: `
+				CREATE FUNCTION reject_schedule_promotion() RETURNS trigger
+				LANGUAGE plpgsql AS $$
+				BEGIN RAISE EXCEPTION 'reject schedule promotion'; END $$;
+				CREATE TRIGGER reject_schedule_promotion
+					BEFORE INSERT ON discovery_source_schedule
+					FOR EACH ROW EXECUTE FUNCTION reject_schedule_promotion()
+			`,
+			cleanup: `
+				DROP TRIGGER reject_schedule_promotion ON discovery_source_schedule;
+				DROP FUNCTION reject_schedule_promotion()
 			`,
 			want: "promote automatic candidate",
 		},
@@ -940,6 +995,7 @@ func resetAutomaticFixtureData(t *testing.T, pool *pgxpool.Pool) {
 		TRUNCATE TABLE
 			origins,
 			discovery_candidates,
+			discovery_source_schedule,
 			discovery_source_state,
 			crawl_runs,
 			verification_queue
@@ -1009,5 +1065,211 @@ func rollbackTestTransaction(t *testing.T, transaction pgx.Tx) {
 	if err := transaction.Rollback(context.Background()); err != nil &&
 		!errors.Is(err, pgx.ErrTxClosed) {
 		t.Errorf("rollback test transaction: %v", err)
+	}
+}
+
+func TestCompleteAutomaticCandidatesReturnsScheduleLockTimeout(
+	t *testing.T,
+) {
+	ctx := context.Background()
+
+	pool := newSerialStoreTestPool(t)
+	_, runID, candidate :=
+		automaticCompletionFixtureInPool(t, pool)
+
+	lockTransaction, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rollbackTestTransaction(
+		t,
+		lockTransaction,
+	)
+
+	if err := lockDiscoveryScheduleOrigin(
+		ctx,
+		lockTransaction,
+		candidate.Origin.String(),
+	); err != nil {
+		t.Fatalf(
+			"lock discovery schedule origin: %v",
+			err,
+		)
+	}
+
+	operationPool := newStoreSiblingPool(
+		t,
+		pool,
+		"250ms",
+	)
+	defer operationPool.Close()
+
+	operationStore := newAutomaticAdmissionStore(
+		t,
+		operationPool,
+		1,
+		1,
+	)
+
+	err = operationStore.CompleteAutomaticCandidates(
+		ctx,
+		runID,
+		[]AutomaticCandidateResult{
+			{
+				Candidate: candidate,
+			},
+		},
+	)
+
+	if err == nil ||
+		!strings.Contains(
+			err.Error(),
+			"lock discovery schedule origin",
+		) {
+		t.Fatalf(
+			"schedule lock error = %v",
+			err,
+		)
+	}
+}
+
+func TestDiscoveryScheduleLockTimeoutReturnsBeforeWriting(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	source := mustStoreOrigin(
+		t,
+		"https://schedule-lock-source.example",
+	)
+	candidate := discovery.Candidate{
+		Origin: mustStoreOrigin(
+			t,
+			"https://schedule-lock-candidate.example",
+		),
+		Kind: discovery.KindLink,
+	}
+
+	tests := []struct {
+		name   string
+		origin origin.Origin
+		call   func(*DiscoveryStore) error
+		want   string
+	}{
+		{
+			name:   "add crawl seed",
+			origin: source,
+			call: func(store *DiscoveryStore) error {
+				return store.AddCrawlSeed(ctx, source)
+			},
+			want: "store: add crawl seed",
+		},
+		{
+			name:   "remove crawl seed",
+			origin: source,
+			call: func(store *DiscoveryStore) error {
+				return store.RemoveCrawlSeed(ctx, source)
+			},
+			want: "store: remove crawl seed",
+		},
+		{
+			name:   "record discovery",
+			origin: candidate.Origin,
+			call: func(store *DiscoveryStore) error {
+				_, err := store.RecordDiscovery(
+					ctx,
+					source,
+					[]discovery.Candidate{candidate},
+				)
+				return err
+			},
+			want: "store: record discovery",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pool := newSerialStoreTestPool(t)
+			lockTransaction, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rollbackTestTransaction(t, lockTransaction)
+			if err := lockDiscoveryScheduleOrigin(
+				ctx,
+				lockTransaction,
+				test.origin.String(),
+			); err != nil {
+				t.Fatal(err)
+			}
+
+			operationPool := newStoreSiblingPool(t, pool, "250ms")
+			store, err := NewDiscoveryStore(operationPool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = test.call(store)
+			if err == nil ||
+				!strings.Contains(err.Error(), test.want) ||
+				!strings.Contains(
+					err.Error(),
+					"lock discovery schedule origin",
+				) {
+				t.Fatalf("schedule lock error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCompleteVerificationReturnsScheduleLockTimeout(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	source := mustStoreOrigin(
+		t,
+		"https://verification-schedule-lock.example",
+	)
+	pool := newSerialStoreTestPool(t)
+	lockTransaction, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rollbackTestTransaction(t, lockTransaction)
+	if err := lockDiscoveryScheduleOrigin(
+		ctx,
+		lockTransaction,
+		source.String(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	operationPool := newStoreSiblingPool(t, pool, "250ms")
+	queue, err := NewQueue(operationPool, QueueConfig{
+		LeaseDuration:     10 * time.Minute,
+		MinOriginInterval: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claimedAt := queueTestTime()
+	err = queue.CompleteVerification(
+		ctx,
+		Lease{
+			Origin:     source,
+			WorkerID:   "worker-a",
+			Generation: 1,
+			ClaimedAt:  claimedAt,
+			ExpiresAt:  claimedAt.Add(time.Minute),
+		},
+		validCompletionResult(source),
+		time.Hour,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "store: complete verification") ||
+		!strings.Contains(
+			err.Error(),
+			"lock discovery schedule origin",
+		) {
+		t.Fatalf("schedule lock error = %v", err)
 	}
 }

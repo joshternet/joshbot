@@ -397,15 +397,26 @@ from bypassing the scheduling rules.
 
 ## Discovery model
 
-A crawl source is eligible when it is either:
+Discovery keeps durable source knowledge separate from active scheduled work.
+Known is not scheduled.
 
-- an independently verified Joshternet origin; or
-- an operator-curated seed; or
-- admitted by the optional automatic expansion policy.
+Durable state records what JoshBot has learned, including seed status,
+automatic-source classification, verification history, candidate evidence, and
+provenance. Active discovery scheduling is a separate set of origins that
+currently have crawl intent.
 
-Curated seeds remain private operational configuration. Adding a seed does not
-create a verification result or public registry entry. Removing seed status
-does not erase existing observations or candidate provenance.
+Active scheduling can be created by:
+
+- an independently verified Joshternet origin;
+- an operator-curated seed;
+- automatic-source promotion; or
+- meaningful fresh rediscovery of a previously known automatic source or former
+  participant.
+
+Curated seeds remain private operational configuration. Adding a seed creates
+discovery scheduling intent but does not create a verification result or public
+registry entry. Removing seed status does not erase existing observations,
+candidate provenance, or durable source history.
 
 External origins found during crawling become durable candidates and provenance
 edges. Crawling, link evidence, and probe scheduling do not establish
@@ -424,25 +435,34 @@ automatic-expansion-pause deferrals do not erase the candidate or provenance.
 
 The automatic-source classification remains private operational state, is
 deduplicated by canonical origin, and never changes participant semantics.
-Eligible automatic sources can discover further candidates across later crawl
-generations, but no crawl or discovery relationship implies Joshternet
-membership.
+Classification does not permanently require recurring discovery work.
 
-Automatic source claims use verification-queue backpressure. At the configured
-pending-probe high-water mark, automatic sources remain stored but are not
-claimed until workers drain the queue. Curated seeds and verified participants
-remain independently eligible. The high-water mark controls outstanding work;
-it does not drop candidates or limit recursive discovery over time.
+An authoritative non-valid verification result removes active discovery
+scheduling unless the origin remains an explicit seed or discovery evidence is
+strictly newer than that authoritative observation. Durable automatic
+classification, verification history, candidates, and provenance remain
+stored. Transient verification results do not replace the last authoritative
+scheduling decision. Fresh rediscovery of a known automatic source or former
+participant creates new scheduling intent.
+
+Scheduled sources that are neither curated seeds nor currently verified
+participants use verification-queue backpressure and automatic-expansion
+policy. At the configured pending-probe high-water mark, that work remains
+scheduled but is not claimed until workers drain the queue. Curated seeds and
+verified participants remain independently eligible. The high-water mark
+controls outstanding work; it does not discard history or impose a lifetime
+limit on discovery.
 
 Automatic expansion also has an independent durable operator pause. While this
-pause is active, automatic-only sources are excluded from new discovery claims
-and otherwise promotable candidates receive the durable `expansion_paused`
-admission outcome instead of becoming automatic sources. Curated seeds,
-independently verified sources, candidate evidence, provenance, and verification
-work continue. Because `expansion_paused` is nonterminal, a candidate may be
-allocated again by a later admission run after the operator resumes expansion.
-The pause is therefore distinct from both the discovery processor pause and
-queue-pressure backpressure.
+pause is active, scheduled sources that are neither curated seeds nor currently
+verified participants are excluded from new discovery claims, and otherwise
+promotable candidates receive the durable `expansion_paused` admission outcome
+instead of becoming automatic sources. Curated seeds, independently verified
+sources, candidate evidence, provenance, and verification work continue.
+Because `expansion_paused` is nonterminal, a candidate may be allocated again
+by a later admission run after the operator resumes expansion. The pause is
+therefore distinct from both the discovery processor pause and queue-pressure
+backpressure.
 
 Discovery source selection uses an expiring lease separate from completion
 state. Claiming advances `lease_generation` and sets `lease_expires_at` without
@@ -453,12 +473,17 @@ a crashed claimant cannot finish over a newer reclaim after expiry.
 
 ## Publication boundary
 
-Registry generation and publication are separate operations.
+Registry generation and publication are separate operations, and both
+repeat automatically.
 
-The database-connected tools container creates a snapshot in the export
-directory. It has no GitHub token or egress network.
+`registry-export` runs with the database-connected services. Every
+`JOSHBOT_REGISTRY_PUBLISH_INTERVAL`, 15 minutes unless configured otherwise,
+it writes a new snapshot under the export directory. It has no GitHub token
+and no egress network.
 
-The publisher container receives:
+`registry-publish` follows those snapshots. It publishes a snapshot when one
+appears. When the resulting Git tree matches the branch, it leaves the branch
+unchanged. It receives:
 
 - the GitHub token;
 - egress;
@@ -472,6 +497,8 @@ It does not receive:
 - PostgreSQL storage;
 - backup storage;
 - the Docker socket.
+
+`deploy/publish.sh` remains available for one explicit export and publish.
 
 The target branch is machine-managed and must contain the exact sentinel:
 
