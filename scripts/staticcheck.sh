@@ -2,7 +2,7 @@
 
 set -eu
 
-staticcheck_version=v0.8.1
+staticcheck_version=v0.8.2
 
 if [ "$#" -eq 0 ]; then
 	set -- ./...

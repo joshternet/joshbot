@@ -45,6 +45,7 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- staticcheck v0.8.2 understands Go 1.27.2 export data.
 - Go 1.27.2 and `golang.org/x/net` v0.60.0 close the govulncheck HTTP/2, HTTP/1, TLS, MIME, and Windows `os.Root` findings (GO-2026-6603 through GO-2026-6617).
 - Registry snapshot entropy uses full reads, publish failures back off
   exponentially (capped), and cleanup only removes valid automatic snapshot
