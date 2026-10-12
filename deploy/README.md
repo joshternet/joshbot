@@ -334,7 +334,9 @@ requests made by both the worker and discovery services. An applicable robots
 
 The durable domain avoid list is managed through the operator control API and
 starts with the hosted publishing and social-platform defaults, including
-`centerblog.net`. An environment value adds emergency rules to that list;
+`centerblog.net`. `wordpress.com` and `wordpress.org` are not on that list, so
+sites using the official Joshternet plugin stay eligible. An environment
+value adds emergency rules to that list;
 dashboard removal cannot override an environment rule. Use a family such as
 `blogspot.*` to cover regional public suffixes.
 

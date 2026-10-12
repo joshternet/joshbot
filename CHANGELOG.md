@@ -28,18 +28,24 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   access and no GitHub token.
 - `registry-publish` publishes each new snapshot. An unchanged registry
   does not create a commit. It has the GitHub token and no database access.
-- The embedded schema now contains twenty-seven migrations, `0001` through
-  `0027`, including durable candidate admission state, domain-avoid LIKE
-  hardening, and verification-queue `abandoned` events.
+- The embedded schema now contains twenty-eight migrations, `0001` through
+  `0028`, including durable candidate admission state, domain-avoid LIKE
+  hardening, verification-queue `abandoned` events, and removal of the
+  WordPress domain-avoid rules.
 
 ### Changed
 
+- `wordpress.com` and `wordpress.org` are no longer domain-avoid rules, and
+  existing blocks on those hosts are cleared. Sites that install the official
+  Joshternet WordPress plugin can be probed and promoted. Other avoid rules
+  stay in place.
 - Report bearer tokens now require the same strength rules as operator control
   tokens: at least 32 bytes, printable ASCII only, and at least eight distinct
   characters. Weak report tokens are rejected at process start.
 
 ### Fixed
 
+- Go 1.27.2 and `golang.org/x/net` v0.60.0 close the govulncheck HTTP/2, HTTP/1, TLS, MIME, and Windows `os.Root` findings (GO-2026-6603 through GO-2026-6617).
 - Registry snapshot entropy uses full reads, publish failures back off
   exponentially (capped), and cleanup only removes valid automatic snapshot
   names. Snapshot pointer files stay mode `0644` so host-side export readers

@@ -1,10 +1,10 @@
 module github.com/joshternet/joshbot
 
-go 1.27.0
+go 1.27.2
 
 require (
 	github.com/jackc/pgx/v5 v5.11.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 )
 
 require (

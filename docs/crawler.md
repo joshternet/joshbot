@@ -213,6 +213,9 @@ control API. Exact domains include their
 subdomains. A public-suffix family such as `blogspot.*` also matches regional
 forms including `blogspot.co.uk` and `blogspot.no`. Avoided origins remain in
 private discovery evidence but are not promoted or probed automatically.
+`wordpress.com` and `wordpress.org` are not on that list, so a site that
+installs the official Joshternet plugin stays eligible for discovery and
+verification.
 
 `JOSHBOT_CRAWL_MAX_DEPTH` may be zero, limiting the crawl to its root page.
 
