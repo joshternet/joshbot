@@ -57,11 +57,13 @@ func claimDiscoveryUnitStore(
 type discoveryLeaseCaptureTx struct {
 	*discoveryPolicyUnitTx
 
-	events       *[]string
-	claimQuery   string
-	claimArgs    []any
-	cleanupQuery string
-	cleanupArgs  []any
+	events             *[]string
+	claimQuery         string
+	claimArgs          []any
+	cleanupQuery       string
+	cleanupArgs        []any
+	orphanCleanupQuery string
+	orphanCleanupArgs  []any
 }
 
 func (tx *discoveryLeaseCaptureTx) Exec(
@@ -84,11 +86,22 @@ func (tx *discoveryLeaseCaptureTx) Exec(
 		query,
 		"UPDATE crawl_runs",
 	) {
-		tx.cleanupQuery = query
-		tx.cleanupArgs = append(
-			[]any(nil),
-			args...,
-		)
+		if strings.Contains(
+			query,
+			"stop_reason = 'abandoned'",
+		) {
+			tx.orphanCleanupQuery = query
+			tx.orphanCleanupArgs = append(
+				[]any(nil),
+				args...,
+			)
+		} else {
+			tx.cleanupQuery = query
+			tx.cleanupArgs = append(
+				[]any(nil),
+				args...,
+			)
+		}
 	}
 
 	return tx.discoveryPolicyUnitTx.Exec(
@@ -902,6 +915,86 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 	)
 
 	t.Run(
+		"orphan crawl run cleanup failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test orphan crawl cleanup failure",
+			)
+			expiresAt := now.Add(leaseDuration)
+
+			tx := &discoveryPolicyUnitTx{
+				execResults: []discoveryUnitExecResult{
+					{},
+					{},
+					{
+						err: testErr,
+					},
+				},
+				rowResults: []discoveryUnitRow{
+					{
+						values: []any{
+							false,
+							false,
+						},
+					},
+					{
+						values: []any{
+							"https://example.com",
+							int64(7),
+							now,
+							expiresAt,
+						},
+					},
+				},
+			}
+
+			store := claimDiscoveryUnitStore(
+				t,
+				discoveryPolicyDatabase(tx),
+				claimDiscoveryClock{
+					now: now,
+				},
+			)
+
+			lease, found, err :=
+				store.ClaimDiscoverySourceLease(
+					ctx,
+					testDiscoveryLeaseOwner,
+					interval,
+					leaseDuration,
+				)
+
+			if found {
+				t.Fatal(
+					"ClaimDiscoverySourceLease() found = true, want false",
+				)
+			}
+
+			if lease != (firstLeaseZero()) {
+				t.Fatalf(
+					"ClaimDiscoverySourceLease() lease = %#v, want zero",
+					lease,
+				)
+			}
+
+			if !errors.Is(err, testErr) ||
+				!strings.Contains(
+					err.Error(),
+					"store: cancel abandoned crawl runs",
+				) ||
+				!strings.Contains(
+					err.Error(),
+					"store: claim discovery source lease",
+				) {
+				t.Fatalf(
+					"ClaimDiscoverySourceLease() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
 		"success preserves attempt scheduling",
 		func(t *testing.T) {
 			location := time.FixedZone(
@@ -920,6 +1013,7 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 			)
 			baseTx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
+					{},
 					{},
 					{},
 				},
@@ -1039,9 +1133,12 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 			for _, fragment := range []string{
 				"WITH scheduled_candidate AS",
 				"FROM discovery_source_schedule AS schedule",
-				"FROM scheduled_candidate",
+				"FROM scheduled_candidate AS candidate",
 				"FOR UPDATE OF schedule SKIP LOCKED",
+				"locked_state AS",
+				"FOR UPDATE OF state",
 				"source_state.lease_expires_at IS NULL OR source_state.lease_expires_at <= $1",
+				"WHERE discovery_source_state. lease_expires_at IS NULL OR discovery_source_state. lease_expires_at <= $1",
 			} {
 				if !strings.Contains(
 					normalizedQuery,
@@ -1139,6 +1236,47 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				t.Fatalf(
 					"cleanup time argument = %#v, want %v",
 					tx.cleanupArgs[1],
+					now,
+				)
+			}
+
+			normalizedOrphanCleanupQuery := strings.Join(
+				strings.Fields(tx.orphanCleanupQuery),
+				" ",
+			)
+
+			if !strings.Contains(
+				normalizedOrphanCleanupQuery,
+				"UPDATE crawl_runs AS run SET finished_at = $1, outcome = 'canceled', stop_reason = 'abandoned'",
+			) {
+				t.Fatalf(
+					"claim does not abandon orphaned crawl runs: %s",
+					normalizedOrphanCleanupQuery,
+				)
+			}
+
+			if !strings.Contains(
+				normalizedOrphanCleanupQuery,
+				"AND NOT EXISTS ( SELECT 1 FROM discovery_source_state AS state WHERE state.source_origin = run.source_origin AND state.lease_expires_at IS NOT NULL AND state.lease_expires_at > $1 )",
+			) {
+				t.Fatalf(
+					"orphan crawl-run cleanup is not bounded to inactive leases: %s",
+					normalizedOrphanCleanupQuery,
+				)
+			}
+
+			if len(tx.orphanCleanupArgs) != 1 {
+				t.Fatalf(
+					"orphan cleanup argument count = %d, want 1",
+					len(tx.orphanCleanupArgs),
+				)
+			}
+
+			if got, ok := tx.orphanCleanupArgs[0].(time.Time); !ok ||
+				!got.Equal(now) {
+				t.Fatalf(
+					"orphan cleanup time argument = %#v, want %v",
+					tx.orphanCleanupArgs[0],
 					now,
 				)
 			}

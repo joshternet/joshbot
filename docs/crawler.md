@@ -406,7 +406,10 @@ JoshBot does not retain:
 Completed crawl telemetry uses its existing configurable retention policy,
 which defaults to 30 days. Eligible completed telemetry is removed when the
 discovery service performs startup maintenance according to
-`JOSHBOT_CRAWL_TELEMETRY_RETENTION`.
+`JOSHBOT_CRAWL_TELEMETRY_RETENTION`. Unfinished crawl runs whose source lease
+is no longer active are closed as `canceled` (`abandoned` when the lease is
+gone, `lease_reclaimed` when the same origin is claimed again) before
+retention can delete them.
 
 Verification observations and verification queue-event history use a fixed
 30-day operational-history threshold. Records older than that threshold become

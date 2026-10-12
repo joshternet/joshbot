@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 )
@@ -503,6 +504,94 @@ func TestCheckerUsesIndependentDestinationOriginSchedule(
 			waiter.durations,
 			want,
 		)
+	}
+}
+
+func TestOriginRequestSchedulerReleasesLockWhileWaiting(
+	t *testing.T,
+) {
+	start := time.Date(
+		2026,
+		time.September,
+		18,
+		0,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+	clock := &requestDelayTestClock{current: start}
+	enteredWait := make(chan struct{})
+	releaseWait := make(chan struct{})
+	waiter := &requestDelayGateWaiter{
+		clock:   clock,
+		entered: enteredWait,
+		release: releaseWait,
+	}
+	scheduler := newOriginRequestScheduler(
+		clock.Now,
+		waiter,
+		time.Second,
+	)
+
+	first := requestDelayTarget(t, "https://example.com/first")
+	second := requestDelayTarget(t, "https://other.example/page")
+
+	if err := scheduler.wait(
+		context.Background(),
+		first,
+	); err != nil {
+		t.Fatalf("seed wait error = %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- scheduler.wait(context.Background(), first)
+	}()
+
+	select {
+	case <-enteredWait:
+	case <-time.After(2 * time.Second):
+		t.Fatal("wait did not release for delay")
+	}
+
+	// A different origin must proceed while the first origin waits.
+	if err := scheduler.wait(
+		context.Background(),
+		second,
+	); err != nil {
+		t.Fatalf(
+			"other-origin wait error = %v while first waits",
+			err,
+		)
+	}
+
+	close(releaseWait)
+	if err := <-errCh; err != nil {
+		t.Fatalf("first wait error = %v", err)
+	}
+}
+
+type requestDelayGateWaiter struct {
+	clock   *requestDelayTestClock
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (waiter *requestDelayGateWaiter) Wait(
+	ctx context.Context,
+	duration time.Duration,
+) error {
+	waiter.once.Do(func() {
+		close(waiter.entered)
+	})
+	select {
+	case <-waiter.release:
+		waiter.clock.Advance(duration)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

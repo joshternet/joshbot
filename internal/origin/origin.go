@@ -110,6 +110,17 @@ func Parse(rawURL string) (Origin, error) {
 			)
 		}
 
+		// Strip one trailing dot after IDNA so FQDN hosts canonicalize
+		// to the same origin as their non-FQDN form. Reject empty results
+		// and hosts that still end in '.' (multiple trailing dots), which
+		// would not round-trip through Parse(String()).
+		if strings.HasSuffix(asciiHost, ".") {
+			asciiHost = strings.TrimSuffix(asciiHost, ".")
+			if asciiHost == "" || strings.HasSuffix(asciiHost, ".") {
+				return Origin{}, errors.New("origin: invalid host")
+			}
+		}
+
 		canonicalHostname = asciiHost
 		serializationHost = asciiHost
 	}

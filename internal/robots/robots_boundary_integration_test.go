@@ -1141,6 +1141,257 @@ func TestRobotsBoundaryIntegrationSchedulerBoundaries(
 	}
 }
 
+type robotsBoundaryIntegrationGatedGetter struct {
+	gate     chan struct{}
+	response *http.Response
+	served   bool
+}
+
+func (getter *robotsBoundaryIntegrationGatedGetter) get(
+	_ context.Context,
+	_ *url.URL,
+) (*http.Response, error) {
+	if !getter.served {
+		getter.served = true
+		<-getter.gate
+	}
+	return getter.response, nil
+}
+
+func TestRobotsBoundaryIntegrationInflightPolicyWaiter(
+	t *testing.T,
+) {
+	start := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC)
+	clock := &robotsBoundaryIntegrationClock{current: start}
+	target := robotsBoundaryIntegrationTarget(t, "https://example.com/page")
+
+	t.Run("waiter receives result from first requester", func(t *testing.T) {
+		getter := &robotsBoundaryIntegrationGatedGetter{
+			gate: make(chan struct{}),
+			response: robotsBoundaryIntegrationResponse(
+				http.StatusNotFound, "",
+			),
+		}
+		checker := newChecker(getter, clock.Now)
+
+		done := make(chan error, 1)
+		go func() {
+			allowed, err := checker.Allowed(
+				context.Background(), target,
+			)
+			if err != nil {
+				done <- err
+				return
+			}
+			if !allowed {
+				done <- errors.New("want allowed=true")
+				return
+			}
+			done <- nil
+		}()
+
+		time.Sleep(20 * time.Millisecond)
+
+		done2 := make(chan error, 1)
+		go func() {
+			allowed, err := checker.Allowed(
+				context.Background(), target,
+			)
+			if err != nil {
+				done2 <- err
+				return
+			}
+			if !allowed {
+				done2 <- errors.New("want allowed=true from inflight")
+				return
+			}
+			done2 <- nil
+		}()
+
+		time.Sleep(20 * time.Millisecond)
+		close(getter.gate)
+
+		if err := <-done; err != nil {
+			t.Fatalf("first requester: %v", err)
+		}
+		if err := <-done2; err != nil {
+			t.Fatalf("inflight waiter: %v", err)
+		}
+	})
+
+	t.Run("waiter context cancelled", func(t *testing.T) {
+		started := make(chan struct{})
+		release := make(chan struct{})
+		checker := newChecker(
+			&blockingFirstHopGetter{
+				started: started,
+				release: release,
+			},
+			clock.Now,
+		)
+		initial := robotsBoundaryIntegrationOrigin(
+			t,
+			"https://example.com",
+		)
+
+		firstErr := make(chan error, 1)
+		go func() {
+			_, err := checker.policyFor(
+				context.Background(),
+				initial,
+			)
+			firstErr <- err
+		}()
+
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("policy fetch did not start")
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		canceledDone := make(chan error, 1)
+		entered := make(chan struct{})
+		go func() {
+			for {
+				checker.mu.Lock()
+				_, exists := checker.inflight[initial]
+				checker.mu.Unlock()
+				if exists {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			close(entered)
+			_, err := checker.policyFor(ctx, initial)
+			canceledDone <- err
+		}()
+
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("canceled waiter did not observe in-flight policy")
+		}
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+
+		select {
+		case err := <-canceledDone:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf(
+					"inflight Allowed(canceled) error = %v, want context.Canceled",
+					err,
+				)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("canceled waiter did not return")
+		}
+
+		close(release)
+		if err := <-firstErr; err != nil {
+			t.Fatalf("first requester: %v", err)
+		}
+	})
+}
+
+type robotsBoundaryIntegrationUnlimitedGetter struct{}
+
+func (robotsBoundaryIntegrationUnlimitedGetter) get(
+	_ context.Context, _ *url.URL,
+) (*http.Response, error) {
+	return robotsBoundaryIntegrationResponse(
+		http.StatusNotFound, "",
+	), nil
+}
+
+func TestRobotsBoundaryIntegrationCacheEvictsOverflow(t *testing.T) {
+	start := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC)
+	clock := &robotsBoundaryIntegrationClock{current: start}
+
+	original := maxCacheEntries
+	maxCacheEntries = 2
+	t.Cleanup(func() { maxCacheEntries = original })
+
+	origins := make([]origin.Origin, 3)
+	for i := range origins {
+		origins[i] = robotsBoundaryIntegrationOrigin(
+			t,
+			"https://site"+string(rune('a'+i))+".example",
+		)
+	}
+
+	checker := newChecker(
+		robotsBoundaryIntegrationUnlimitedGetter{}, clock.Now,
+	)
+
+	for i, source := range origins[:2] {
+		clock.current = start.Add(time.Duration(i) * time.Second)
+		target := robotsBoundaryIntegrationTarget(
+			t, source.String()+"/page",
+		)
+		allowed, err := checker.Allowed(
+			context.Background(), target,
+		)
+		if err != nil || !allowed {
+			t.Fatalf(
+				"Allowed(%q) = %t, %v",
+				source, allowed, err,
+			)
+		}
+	}
+
+	if len(checker.cache) != 2 {
+		t.Fatalf("cache size = %d, want 2", len(checker.cache))
+	}
+
+	clock.current = start.Add(10 * time.Second)
+	target := robotsBoundaryIntegrationTarget(
+		t, origins[2].String()+"/page",
+	)
+	allowed, err := checker.Allowed(
+		context.Background(), target,
+	)
+	if err != nil || !allowed {
+		t.Fatalf("Allowed(third) = %t, %v", allowed, err)
+	}
+
+	if len(checker.cache) != 2 {
+		t.Errorf("cache size after eviction = %d, want 2", len(checker.cache))
+	}
+
+	if _, exists := checker.cache[origins[0]]; exists {
+		t.Error(
+			"oldest origin should have been evicted",
+		)
+	}
+
+	if _, exists := checker.cache[origins[1]]; !exists {
+		t.Error(
+			"newer origin should still be cached",
+		)
+	}
+}
+
+func TestRobotsBoundaryIntegrationEvictOverflowEmptyCache(
+	t *testing.T,
+) {
+	start := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC)
+	clock := &robotsBoundaryIntegrationClock{current: start}
+
+	original := maxCacheEntries
+	maxCacheEntries = 0
+	t.Cleanup(func() { maxCacheEntries = original })
+
+	checker := newChecker(
+		&robotsBoundaryIntegrationGetter{},
+		clock.Now,
+	)
+
+	checker.mu.Lock()
+	checker.evictOverflowLocked(clock.Now())
+	checker.mu.Unlock()
+}
+
 func robotsBoundaryIntegrationResponse(
 	status int,
 	body string,

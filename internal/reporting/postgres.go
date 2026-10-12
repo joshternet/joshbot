@@ -10,6 +10,8 @@ import (
 	"github.com/joshternet/joshbot/internal/database"
 )
 
+const maxCrawlPageAttempts = 10000
+
 var (
 	errPostgresPoolUnavailable = errors.New(
 		"reporting: PostgreSQL pool is unavailable",
@@ -548,8 +550,10 @@ func (reader *PostgresReader) crawlPages(
 			FROM crawl_page_attempts
 			WHERE run_id = $1
 			ORDER BY sequence
+			LIMIT $2
 		`,
 		id,
+		maxCrawlPageAttempts,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(

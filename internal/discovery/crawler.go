@@ -281,6 +281,17 @@ func (c *MultiPageCrawler) Crawl(
 				!page.failureCategory.Transient() {
 				break
 			}
+			if attempt == retry.MaxAttemptsPerCycle {
+				break
+			}
+			if page.retryAfter > 0 {
+				if err := c.waiter.Wait(
+					ctx,
+					page.retryAfter,
+				); err != nil {
+					return result, err
+				}
+			}
 		}
 		page.attempt.Sequence = result.PagesAttempted
 		page.attempt.Depth = entry.depth
@@ -584,6 +595,12 @@ func (c *MultiPageCrawler) fetchPage(
 			})
 		}
 		if readErr != nil || closeErr != nil {
+			if ctx.Err() != nil {
+				attempt.Outcome = PageTimeout
+				return finish(crawledPage{
+					failureCategory: retry.CategoryTimeout,
+				})
+			}
 			attempt.Outcome = PageNetworkError
 			return finish(crawledPage{failureCategory: retry.CategoryTransport})
 		}
@@ -601,9 +618,23 @@ func (c *MultiPageCrawler) fetchPage(
 				),
 				body,
 			)
-		if status != StatusComplete {
+		switch status {
+		case StatusComplete:
+		case StatusTooLarge:
+			attempt.Outcome = PageTooLarge
+			return finish(crawledPage{
+				failureCategory: retry.CategoryOversizedContent,
+			})
+		case StatusUnavailable:
+			attempt.Outcome = PageNetworkError
+			return finish(crawledPage{
+				failureCategory: retry.CategoryTransport,
+			})
+		default:
 			attempt.Outcome = PageUnsupportedContent
-			return finish(crawledPage{failureCategory: retry.CategoryUnsupportedContent})
+			return finish(crawledPage{
+				failureCategory: retry.CategoryUnsupportedContent,
+			})
 		}
 
 		attempt.InternalLinkCount = len(links.Internal)

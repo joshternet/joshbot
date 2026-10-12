@@ -593,15 +593,25 @@ func TestDiscoveryRunnerIntegrationRunOnceFailureBoundaries(
 			wantErr:      crawlErr,
 		},
 		{
-			name: "partial success clears transient failure",
+			name: "partial parse with processor failure",
+			result: discovery.CrawlResult{
+				PagesAttempted: 2,
+				PagesParsed:    1,
+			},
+			wantCategory: retry.CategoryProcessor,
+			wantErr:      crawlErr,
+		},
+		{
+			name: "partial parse keeps typed failure",
 			result: discovery.CrawlResult{
 				PagesAttempted:  2,
 				PagesParsed:     1,
 				FailureCategory: retry.CategoryHTTP5xx,
 				RetryAfter:      time.Hour,
 			},
-			wantCategory: retry.CategoryNone,
-			wantErr:      crawlErr,
+			wantCategory:   retry.CategoryHTTP5xx,
+			wantRetryAfter: time.Hour,
+			wantErr:        crawlErr,
 		},
 		{
 			name: "failed crawl completion failure",

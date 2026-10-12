@@ -368,6 +368,44 @@ func TestQueueCompletionTimeWithoutDatabase(
 	)
 
 	t.Run(
+		"claim transaction clock",
+		func(t *testing.T) {
+			queue := &Queue{
+				pool: new(pgxpool.Pool),
+				clock: queueContractTransactionClock{
+					transactionNow: localTime,
+				},
+			}
+
+			got, err := queue.claimTime(
+				context.Background(),
+				nil,
+			)
+			if err != nil {
+				t.Fatalf(
+					"claimTime() error = %v",
+					err,
+				)
+			}
+
+			if !got.Equal(localTime.UTC()) {
+				t.Fatalf(
+					"claimTime() = %v, want %v",
+					got,
+					localTime.UTC(),
+				)
+			}
+
+			if got.Location() != time.UTC {
+				t.Fatalf(
+					"claimTime() location = %v, want UTC",
+					got.Location(),
+				)
+			}
+		},
+	)
+
+	t.Run(
 		"transaction clock",
 		func(t *testing.T) {
 			queue := &Queue{

@@ -256,27 +256,27 @@ func (q *Queue) Claim(
 		return Lease{}, false, errInvalidWorkerID
 	}
 
-	now, err := q.now(ctx)
-	if err != nil {
-		return Lease{}, false, err
-	}
-
-	expiresAt := now.Add(
-		q.config.LeaseDuration,
-	).UTC()
-	politeBefore := now.Add(
-		-q.config.MinOriginInterval,
-	).UTC()
-
 	var (
 		lease Lease
 		found bool
 	)
 
-	err = pgx.BeginFunc(
+	err := pgx.BeginFunc(
 		ctx,
 		q.pool,
 		func(tx pgx.Tx) error {
+			now, err := q.claimTime(ctx, tx)
+			if err != nil {
+				return err
+			}
+
+			expiresAt := now.Add(
+				q.config.LeaseDuration,
+			).UTC()
+			politeBefore := now.Add(
+				-q.config.MinOriginInterval,
+			).UTC()
+
 			var paused bool
 			if err := tx.QueryRow(
 				ctx,
@@ -1107,6 +1107,31 @@ func (q *Queue) now(ctx context.Context) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, fmt.Errorf(
 			"store: read queue clock: %w",
+			err,
+		)
+	}
+
+	return now.UTC(), nil
+}
+
+func (q *Queue) claimTime(
+	ctx context.Context,
+	tx pgx.Tx,
+) (time.Time, error) {
+	var (
+		now time.Time
+		err error
+	)
+
+	if clock, ok := q.clock.(transactionQueueClock); ok {
+		now, err = clock.NowTransaction(ctx, tx)
+	} else {
+		now, err = q.clock.Now(ctx, q.clockPool)
+	}
+
+	if err != nil {
+		return time.Time{}, fmt.Errorf(
+			"store: read queue claim clock: %w",
 			err,
 		)
 	}

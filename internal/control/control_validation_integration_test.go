@@ -711,3 +711,119 @@ func controlValidationIntegrationRequest(
 
 	return response.StatusCode, string(data)
 }
+
+func TestControlValidationIntegrationDecodeOptionalJSONStreamingBody(
+	t *testing.T,
+) {
+	commander := &controlValidationIntegrationCommander{}
+	handler, err := NewHandler(
+		commander,
+		controlValidationIntegrationToken,
+	)
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+
+	t.Run("empty body with unknown content length", func(t *testing.T) {
+		// Drive the handler directly. An HTTP client rewrites an empty
+		// body to Content-Length 0, which never reaches the streaming
+		// peek branch.
+		request := httptest.NewRequest(
+			http.MethodPost,
+			"/api/v1/control/processors/discovery/pause",
+			http.NoBody,
+		)
+		request.ContentLength = -1
+		request.Header.Set(
+			"Authorization",
+			"Bearer "+controlValidationIntegrationToken,
+		)
+		request.Header.Set("Content-Type", "application/json")
+
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf(
+				"status = %d, want %d",
+				recorder.Code,
+				http.StatusOK,
+			)
+		}
+	})
+
+	t.Run("JSON body with unknown content length", func(t *testing.T) {
+		request := httptest.NewRequest(
+			http.MethodPost,
+			"/api/v1/control/processors/discovery/resume",
+			strings.NewReader(`{"actor":"integration"}`),
+		)
+		request.ContentLength = -1
+		request.Header.Set(
+			"Authorization",
+			"Bearer "+controlValidationIntegrationToken,
+		)
+		request.Header.Set("Content-Type", "application/json")
+
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf(
+				"status = %d, want %d",
+				recorder.Code,
+				http.StatusOK,
+			)
+		}
+	})
+}
+
+func TestControlValidationIntegrationBoundedTruncatesInvalidUTF8Tail(
+	t *testing.T,
+) {
+	commander := &controlValidationIntegrationCommander{}
+	server := newControlValidationIntegrationServer(t, commander)
+	defer server.Close()
+
+	// Build a path longer than maxTargetBytes with a multi-byte rune
+	// that straddles the truncation boundary. "é" is 0xC3 0xA9 (two
+	// bytes); placing its first byte at position maxTargetBytes-1 means
+	// value[:maxTargetBytes] retains only the lead byte 0xC3, an invalid
+	// rune that the bounded function must strip.
+	pathPrefix := "/api/v1/control/"
+	filler := strings.Repeat("a", maxTargetBytes-len(pathPrefix)-1)
+	longPath := pathPrefix + filler + "é" + "z"
+
+	if len(longPath) <= maxTargetBytes {
+		t.Fatalf("path length = %d, want > %d", len(longPath), maxTargetBytes)
+	}
+
+	status, _ := controlValidationIntegrationRequest(
+		t,
+		server.Client(),
+		server.URL+longPath,
+		http.MethodPost,
+		"application/json",
+		`{}`,
+		nil,
+	)
+
+	if status != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", status, http.StatusNotFound)
+	}
+
+	if len(commander.rejected) != 1 {
+		t.Fatalf("rejected audits = %d, want 1", len(commander.rejected))
+	}
+
+	target := commander.rejected[0].Target
+	if len(target) > maxTargetBytes {
+		t.Errorf("target length = %d, exceeds %d", len(target), maxTargetBytes)
+	}
+
+	wantTarget := pathPrefix + filler
+	if target != wantTarget {
+		t.Errorf(
+			"target length = %d, want %d (partial rune stripped)",
+			len(target), len(wantTarget),
+		)
+	}
+}

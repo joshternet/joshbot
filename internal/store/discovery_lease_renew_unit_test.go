@@ -8,14 +8,39 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/joshternet/joshbot/internal/discovery"
 )
 
 type discoveryLeaseRenewCaptureTx struct {
 	*discoveryPolicyUnitTx
 
+	events     *[]string
 	renewQuery string
 	renewArgs  []any
+}
+
+func (tx *discoveryLeaseRenewCaptureTx) Exec(
+	ctx context.Context,
+	query string,
+	args ...any,
+) (pgconn.CommandTag, error) {
+	if tx.events != nil &&
+		strings.Contains(
+			query,
+			"pg_advisory_xact_lock",
+		) {
+		*tx.events = append(
+			*tx.events,
+			"lock",
+		)
+	}
+
+	return tx.discoveryPolicyUnitTx.Exec(
+		ctx,
+		query,
+		args...,
+	)
 }
 
 func (tx *discoveryLeaseRenewCaptureTx) QueryRow(
@@ -228,13 +253,67 @@ func TestRenewDiscoverySourceLeaseWithoutDatabase(
 	)
 
 	t.Run(
+		"advisory lock failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test discovery lease renewal lock failure",
+			)
+
+			tx := &discoveryPolicyUnitTx{
+				execResults: []discoveryUnitExecResult{
+					{
+						err: testErr,
+					},
+				},
+			}
+
+			store := claimDiscoveryUnitStore(
+				t,
+				discoveryPolicyDatabase(tx),
+				claimDiscoveryClock{
+					now: now,
+				},
+			)
+
+			renewed, err :=
+				store.RenewDiscoverySourceLease(
+					ctx,
+					lease,
+					leaseDuration,
+				)
+
+			if renewed != (discovery.CrawlSourceLease{}) {
+				t.Fatalf(
+					"RenewDiscoverySourceLease() lease = %#v, want zero",
+					renewed,
+				)
+			}
+
+			if !errors.Is(err, testErr) ||
+				!strings.Contains(
+					err.Error(),
+					"store: lock discovery claim",
+				) {
+				t.Fatalf(
+					"RenewDiscoverySourceLease() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
 		"clock failure",
 		func(t *testing.T) {
 			testErr := errors.New(
 				"test discovery lease renewal clock failure",
 			)
 
-			tx := &discoveryPolicyUnitTx{}
+			tx := &discoveryPolicyUnitTx{
+				execResults: []discoveryUnitExecResult{
+					{},
+				},
+			}
 
 			store := claimDiscoveryUnitStore(
 				t,
@@ -275,6 +354,9 @@ func TestRenewDiscoverySourceLeaseWithoutDatabase(
 		"lease lost",
 		func(t *testing.T) {
 			tx := &discoveryPolicyUnitTx{
+				execResults: []discoveryUnitExecResult{
+					{},
+				},
 				rowResults: []discoveryUnitRow{
 					{
 						err: pgx.ErrNoRows,
@@ -325,6 +407,9 @@ func TestRenewDiscoverySourceLeaseWithoutDatabase(
 			)
 
 			tx := &discoveryPolicyUnitTx{
+				execResults: []discoveryUnitExecResult{
+					{},
+				},
 				rowResults: []discoveryUnitRow{
 					{
 						err: testErr,
@@ -385,7 +470,11 @@ func TestRenewDiscoverySourceLeaseWithoutDatabase(
 				10 * time.Minute,
 			).In(location)
 
+			events := make([]string, 0, 1)
 			baseTx := &discoveryPolicyUnitTx{
+				execResults: []discoveryUnitExecResult{
+					{},
+				},
 				rowResults: []discoveryUnitRow{
 					{
 						values: []any{
@@ -399,6 +488,7 @@ func TestRenewDiscoverySourceLeaseWithoutDatabase(
 			tx := &discoveryLeaseRenewCaptureTx{
 				discoveryPolicyUnitTx: baseTx,
 			}
+			tx.events = &events
 
 			store := claimDiscoveryUnitStore(
 				t,
@@ -433,6 +523,13 @@ func TestRenewDiscoverySourceLeaseWithoutDatabase(
 					"RenewDiscoverySourceLease() lease = %#v, want %#v",
 					renewed,
 					want,
+				)
+			}
+
+			if len(events) == 0 || events[0] != "lock" {
+				t.Fatalf(
+					"renew events = %#v, want lock first",
+					events,
 				)
 			}
 

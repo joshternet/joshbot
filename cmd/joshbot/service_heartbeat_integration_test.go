@@ -320,6 +320,37 @@ func TestServiceHeartbeatIntegrationReportsPersistenceFailureOncePerOutage(
 	}
 }
 
+func TestServiceHeartbeatIntegrationTruncateUTF8Bytes(
+	t *testing.T,
+) {
+	t.Run("maxBytes zero returns empty", func(t *testing.T) {
+		if got := truncateUTF8Bytes("hello", 0); got != "" {
+			t.Errorf("truncateUTF8Bytes(%q, 0) = %q, want empty", "hello", got)
+		}
+	})
+
+	t.Run("rune boundary walk", func(t *testing.T) {
+		// "café" = c(0x63) a(0x61) f(0x66) é(0xC3 0xA9) = 5 bytes.
+		// Truncation at byte 4 lands inside the 2-byte é sequence;
+		// the walk backs up to byte 3.
+		if got := truncateUTF8Bytes("café", 4); got != "caf" {
+			t.Errorf(
+				"truncateUTF8Bytes(%q, 4) = %q, want %q",
+				"café", got, "caf",
+			)
+		}
+	})
+
+	t.Run("exact fit unchanged", func(t *testing.T) {
+		if got := truncateUTF8Bytes("café", 5); got != "café" {
+			t.Errorf(
+				"truncateUTF8Bytes(%q, 5) = %q, want %q",
+				"café", got, "café",
+			)
+		}
+	})
+}
+
 func TestServiceHeartbeatIntegrationSlogReporter(
 	t *testing.T,
 ) {

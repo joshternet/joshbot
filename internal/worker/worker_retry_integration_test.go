@@ -193,11 +193,10 @@ func TestWorkerRetryIntegrationPersistsTransientBackoffAfterCycleExhaustion(
 			case declaration.WellKnownPath:
 				declarationAttempts.Add(1)
 
-				writer.Header().Set(
-					"Retry-After",
-					"3600",
-				)
-
+				// Durable completion still schedules from the
+				// shared retry policy when Retry-After is absent.
+				// In-cycle waits honor Retry-After when present,
+				// so keep this response without a long delay.
 				writer.WriteHeader(
 					http.StatusServiceUnavailable,
 				)

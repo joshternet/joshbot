@@ -109,7 +109,9 @@ func TestQueueClaimWithoutDatabase(t *testing.T) {
 			)
 
 			queue := queueSimpleDatabaseStore(
-				&discoveryUnitDatabase{},
+				discoveryPolicyDatabase(
+					&discoveryPolicyUnitTx{},
+				),
 				queueUnitClock{
 					err: testErr,
 				},
@@ -139,7 +141,57 @@ func TestQueueClaimWithoutDatabase(t *testing.T) {
 			) ||
 				!strings.Contains(
 					err.Error(),
-					"store: read queue clock",
+					"store: read queue claim clock",
+				) {
+				t.Fatalf(
+					"Claim() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"transaction clock failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test queue claim transaction clock failure",
+			)
+
+			queue := queueSimpleDatabaseStore(
+				discoveryPolicyDatabase(
+					&discoveryPolicyUnitTx{},
+				),
+				queueContractTransactionClock{
+					transactionErr: testErr,
+				},
+			)
+
+			lease, found, err := queue.Claim(
+				ctx,
+				workerID,
+			)
+
+			if lease != (Lease{}) {
+				t.Fatalf(
+					"Claim() lease = %#v, want zero",
+					lease,
+				)
+			}
+
+			if found {
+				t.Fatal(
+					"Claim() found = true, want false",
+				)
+			}
+
+			if !errors.Is(
+				err,
+				testErr,
+			) ||
+				!strings.Contains(
+					err.Error(),
+					"store: read queue claim clock",
 				) {
 				t.Fatalf(
 					"Claim() error = %v",

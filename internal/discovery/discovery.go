@@ -27,6 +27,9 @@ var (
 	errInvalidContext    = errors.New("discovery: invalid context")
 	errInvalidSource     = errors.New("discovery: invalid source")
 	errInvalidPageURL    = errors.New("discovery: invalid page URL")
+
+	// parseHTMLDocument is html.Parse; tests replace it to force parse failures.
+	parseHTMLDocument = html.Parse
 )
 
 // Kind describes how a candidate was discovered.
@@ -152,9 +155,13 @@ func extractPageLinks(
 		return PageLinks{}, StatusTooLarge, nil
 	}
 
-	document, _ := html.Parse(
+	document, parseErr := parseHTMLDocument(
 		bytes.NewReader(decoded),
 	)
+	if parseErr != nil {
+		return PageLinks{}, StatusUnavailable, nil
+	}
+
 	baseURL := documentBaseURL(
 		document,
 		pageURL,

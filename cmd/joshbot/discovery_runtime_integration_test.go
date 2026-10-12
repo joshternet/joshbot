@@ -2,86 +2,77 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joshternet/joshbot/internal/discovery"
+	"github.com/joshternet/joshbot/internal/origin"
 )
 
-func TestDiscoveryRuntimeIntegrationServiceInstanceFallback(
+func TestDiscoveryRuntimeIntegrationGeneratesServiceInstance(
 	t *testing.T,
 ) {
-	tests := []struct {
-		name     string
-		hostname string
-		want     string
-	}{
-		{
-			name: "default without hostname",
-			want: defaultDiscoveryInstanceID,
-		},
-		{
-			name:     "hostname",
-			hostname: " ephemeral-host ",
-			want:     "ephemeral-host",
-		},
+	operations, _ := newTestRuntimeOperations(t)
+
+	baseGetenv := withCrawlRuntimeEnvironment(
+		operations.getenv,
+	)
+
+	operations.getenv = func(name string) string {
+		switch name {
+		case serviceInstanceIDEnvironment:
+			return ""
+		default:
+			return baseGetenv(name)
+		}
+	}
+	operations.random = strings.NewReader(
+		strings.Repeat("a", generatedServiceInstanceIDBytes),
+	)
+
+	storage := &fakeHeartbeatStore{}
+
+	operations.newHeartbeatStore = func(
+		*pgxpool.Pool,
+	) (heartbeatStore, error) {
+		return storage, nil
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			operations, _ := newTestRuntimeOperations(t)
+	if err := operations.discover(
+		context.Background(),
+		true,
+	); err != nil {
+		t.Fatalf(
+			"discover() error = %v",
+			err,
+		)
+	}
 
-			baseGetenv := withCrawlRuntimeEnvironment(
-				operations.getenv,
-			)
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
 
-			operations.getenv = func(name string) string {
-				switch name {
-				case serviceInstanceIDEnvironment:
-					return ""
-				case hostnameEnvironment:
-					return test.hostname
-				default:
-					return baseGetenv(name)
-				}
-			}
+	if len(storage.writes) == 0 {
+		t.Fatal(
+			"discovery heartbeat was not persisted",
+		)
+	}
 
-			storage := &fakeHeartbeatStore{}
-
-			operations.newHeartbeatStore = func(
-				*pgxpool.Pool,
-			) (heartbeatStore, error) {
-				return storage, nil
-			}
-
-			if err := operations.discover(
-				context.Background(),
-				true,
-			); err != nil {
-				t.Fatalf(
-					"discover() error = %v",
-					err,
-				)
-			}
-
-			storage.mu.Lock()
-			defer storage.mu.Unlock()
-
-			if len(storage.writes) == 0 {
-				t.Fatal(
-					"discovery heartbeat was not persisted",
-				)
-			}
-
-			if got := storage.writes[0].InstanceID; got != test.want {
-				t.Errorf(
-					"heartbeat instance = %q, want %q",
-					got,
-					test.want,
-				)
-			}
-		})
+	want := "service-" + hex.EncodeToString(
+		[]byte(strings.Repeat(
+			"a",
+			generatedServiceInstanceIDBytes,
+		)),
+	)
+	if got := storage.writes[0].InstanceID; got != want {
+		t.Errorf(
+			"heartbeat instance = %q, want %q",
+			got,
+			want,
+		)
 	}
 }
 
@@ -305,6 +296,48 @@ func TestDiscoveryRuntimeIntegrationOrchestrationFailures(
 			)
 		}
 	})
+}
+
+func TestDiscoveryRuntimeIntegrationAdmissionDNSSleepError(
+	t *testing.T,
+) {
+	original := sleepAdmissionDNSRetry
+	t.Cleanup(func() { sleepAdmissionDNSRetry = original })
+
+	sleepErr := errors.New("integration DNS retry sleep error")
+	sleepAdmissionDNSRetry = func(context.Context, time.Duration) error {
+		return sleepErr
+	}
+
+	candidate := discovery.Candidate{
+		Origin: mustDiscoveryRuntimeOrigin(t, "https://temporary.example"),
+		Kind:   discovery.KindLink,
+	}
+	sink := runtimeCandidateSink{
+		store: &fakeAutomaticAdmissionStore{
+			pending: []discovery.Candidate{candidate},
+		},
+		resolver: &failingAdmissionResolver{
+			err: errors.New("temporary DNS failure"),
+		},
+	}
+
+	err := sink.FinalizeCandidates(context.Background(), 1)
+	if !errors.Is(err, sleepErr) {
+		t.Fatalf(
+			"FinalizeCandidates() error = %v, want %v",
+			err, sleepErr,
+		)
+	}
+}
+
+func mustDiscoveryRuntimeOrigin(t *testing.T, raw string) origin.Origin {
+	t.Helper()
+	parsed, err := origin.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }
 
 func TestDiscoveryRuntimeIntegrationFailedHeartbeatState(

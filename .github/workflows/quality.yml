@@ -202,6 +202,45 @@ jobs:
               -fuzztime=10s
           } 2>&1 | tee "$REPORT_DIR/discovery-fuzz.txt"
 
+      - name: Fuzz origin parse round trip
+        id: origin_fuzz
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            go test \
+              ./internal/origin \
+              -run '^$' \
+              -fuzz '^FuzzParseRoundTrip$' \
+              -fuzztime=10s
+          } 2>&1 | tee "$REPORT_DIR/origin-fuzz.txt"
+
+      - name: Fuzz declaration parse
+        id: declaration_fuzz
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            go test \
+              ./internal/declaration \
+              -run '^$' \
+              -fuzz '^FuzzParseDeclaration$' \
+              -fuzztime=10s
+          } 2>&1 | tee "$REPORT_DIR/declaration-fuzz.txt"
+
+      - name: Fuzz robots parse and evaluate
+        id: robots_fuzz
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            go test \
+              ./internal/robots \
+              -run '^$' \
+              -fuzz '^FuzzParseAndEvaluate$' \
+              -fuzztime=10s
+          } 2>&1 | tee "$REPORT_DIR/robots-fuzz.txt"
+
       - name: Run deterministic race tests with coverage
         id: race
         shell: bash
@@ -278,6 +317,9 @@ jobs:
           | RFC-JOSH-0002 conformance | \`${{ steps.conformance.outcome }}\` |
           | Test JSON | \`${{ steps.test_json.outcome }}\` |
           | Discovery fuzzing | \`${{ steps.discovery_fuzz.outcome }}\` |
+          | Origin fuzzing | \`${{ steps.origin_fuzz.outcome }}\` |
+          | Declaration fuzzing | \`${{ steps.declaration_fuzz.outcome }}\` |
+          | Robots fuzzing | \`${{ steps.robots_fuzz.outcome }}\` |
           | Race and repeatability | \`${{ steps.race.outcome }}\` |
           | Coverage | \`${{ steps.coverage.outcome }}\` |
           | Coverage total | \`${coverage}\` |

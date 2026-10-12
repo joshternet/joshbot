@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/store"
@@ -114,6 +116,26 @@ func TestServiceHeartbeatHandlesUnavailablePersistence(t *testing.T) {
 	}
 }
 
+func TestTruncateUTF8Bytes(t *testing.T) {
+	if got := truncateUTF8Bytes("abc", 0); got != "" {
+		t.Errorf("truncateUTF8Bytes(maxBytes=0) = %q, want empty", got)
+	}
+	if got := truncateUTF8Bytes("abc", -1); got != "" {
+		t.Errorf("truncateUTF8Bytes(maxBytes=-1) = %q, want empty", got)
+	}
+	if got := truncateUTF8Bytes("abc", 10); got != "abc" {
+		t.Errorf("truncateUTF8Bytes(short) = %q, want abc", got)
+	}
+
+	// "á" is two UTF-8 bytes; cutting at one byte must drop the partial rune.
+	if got := truncateUTF8Bytes("áx", 1); got != "" {
+		t.Errorf("truncateUTF8Bytes(mid-rune) = %q, want empty", got)
+	}
+	if got := truncateUTF8Bytes("aá", 2); got != "a" {
+		t.Errorf("truncateUTF8Bytes(mid-rune) = %q, want a", got)
+	}
+}
+
 func TestServiceHeartbeatPublishesBoundedLifecycleState(t *testing.T) {
 	storage := &fakeHeartbeatStore{}
 	heartbeat, err := startServiceHeartbeatWithInterval(
@@ -126,7 +148,8 @@ func TestServiceHeartbeatPublishesBoundedLifecycleState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	heartbeat.Observe("running", current, string(make([]byte, 300)))
+	multibyte := strings.Repeat("á", 200)
+	heartbeat.Observe("running", current, multibyte)
 	if err := heartbeat.write(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
@@ -138,9 +161,11 @@ func TestServiceHeartbeatPublishesBoundedLifecycleState(t *testing.T) {
 	defer storage.mu.Unlock()
 	running := storage.writes[len(storage.writes)-2]
 	stopped := storage.writes[len(storage.writes)-1]
+	wantMessage := multibyte[:maxServiceHeartbeatMessageBytes]
 	if running.State != "running" ||
 		running.CurrentOrigin.String() != "https://example.com" ||
-		len(running.Message) != 256 {
+		running.Message != wantMessage ||
+		!utf8.ValidString(running.Message) {
 		t.Errorf("running heartbeat = %#v", running)
 	}
 	if stopped.State != "stopping" || stopped.CurrentOrigin.String() != "" ||

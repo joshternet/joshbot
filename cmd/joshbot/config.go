@@ -26,7 +26,6 @@ const (
 	recheckIntervalEnvironment      = "JOSHBOT_RECHECK_INTERVAL"
 	workerIDEnvironment             = "JOSHBOT_WORKER_ID"
 	serviceInstanceIDEnvironment    = "JOSHBOT_SERVICE_INSTANCE_ID"
-	hostnameEnvironment             = "HOSTNAME"
 
 	defaultLeaseDuration        = 5 * time.Minute
 	defaultMinOriginInterval    = time.Minute
@@ -36,10 +35,10 @@ const (
 	defaultCompletionGrace      = 30 * time.Second
 	defaultRecheckInterval      = 24 * time.Hour
 
-	generatedWorkerIDBytes     = 16
-	maxRuntimeWorkerIDLength   = 128
-	maxServiceInstanceIDLength = 128
-	defaultDiscoveryInstanceID = "discovery"
+	generatedWorkerIDBytes          = 16
+	generatedServiceInstanceIDBytes = 8
+	maxRuntimeWorkerIDLength        = 128
+	maxServiceInstanceIDLength      = 128
 )
 
 var (
@@ -48,6 +47,9 @@ var (
 	)
 	errWorkerIDGeneration = errors.New(
 		"worker ID generation failed",
+	)
+	errServiceInstanceIDGeneration = errors.New(
+		"service instance ID generation failed",
 	)
 )
 
@@ -235,18 +237,18 @@ func validRuntimeWorkerID(workerID string) bool {
 }
 
 // loadServiceInstanceID resolves the logical heartbeat slot for one process.
-// A configured JOSHBOT_SERVICE_INSTANCE_ID wins. Otherwise fallback is used.
-// The result is trimmed, valid UTF-8, and at most 128 bytes, matching the
-// crawl_service_heartbeats instance_id limit.
+// A configured JOSHBOT_SERVICE_INSTANCE_ID wins. Otherwise a unique
+// service-<16hex> id is generated. The result is trimmed, valid UTF-8, and at
+// most 128 bytes, matching the crawl_service_heartbeats instance_id limit.
 func loadServiceInstanceID(
 	getenv environmentGetter,
-	fallback string,
+	random io.Reader,
 ) (string, error) {
 	candidate := strings.TrimSpace(
 		getenv(serviceInstanceIDEnvironment),
 	)
 	if candidate == "" {
-		candidate = strings.TrimSpace(fallback)
+		return generateServiceInstanceID(random)
 	}
 	if !validServiceInstanceID(candidate) {
 		return "", fmt.Errorf(
@@ -259,17 +261,26 @@ func loadServiceInstanceID(
 	return candidate, nil
 }
 
-func discoveryServiceInstanceFallback(
-	getenv environmentGetter,
-) string {
-	hostname := strings.TrimSpace(
-		getenv(hostnameEnvironment),
-	)
-	if hostname == "" {
-		return defaultDiscoveryInstanceID
+func generateServiceInstanceID(
+	random io.Reader,
+) (string, error) {
+	if random == nil {
+		return "", errServiceInstanceIDGeneration
 	}
 
-	return hostname
+	randomBytes := make(
+		[]byte,
+		generatedServiceInstanceIDBytes,
+	)
+	if _, err := io.ReadFull(
+		random,
+		randomBytes,
+	); err != nil {
+		return "", errServiceInstanceIDGeneration
+	}
+
+	return "service-" +
+		hex.EncodeToString(randomBytes), nil
 }
 
 func validServiceInstanceID(instanceID string) bool {

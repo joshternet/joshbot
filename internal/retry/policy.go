@@ -102,6 +102,8 @@ func HTTPStatusCategory(status int) (Category, bool) {
 		return CategoryHTTP5xx, true
 	case status == http.StatusNotFound || status == http.StatusGone:
 		return CategoryDeclarationAbsent, false
+	case status >= 400 && status <= 499:
+		return CategoryHTTP4xx, false
 	default:
 		return CategoryDeclarationUnavailable, false
 	}
@@ -116,7 +118,11 @@ func ParseRetryAfter(value string, now time.Time) time.Duration {
 		if seconds <= 0 {
 			return 0
 		}
-		return capDuration(time.Duration(seconds) * time.Second)
+		maxSeconds := int64(MaxDelay / time.Second)
+		if seconds > maxSeconds {
+			return MaxDelay
+		}
+		return time.Duration(seconds) * time.Second
 	}
 	when, err := http.ParseTime(value)
 	if err != nil || !when.After(now) {

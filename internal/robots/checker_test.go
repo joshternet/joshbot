@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/joshternet/joshbot/internal/origin"
 )
 
 func newChecker(
@@ -207,6 +209,244 @@ func TestCheckerDoesNotCacheFailureOrReviveStalePolicy(
 			got,
 		)
 	}
+}
+
+func TestCheckerDoesNotHoldMutexAcrossPolicyFetch(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	blocking := &blockingFirstHopGetter{
+		started: started,
+		release: release,
+	}
+	checker := newChecker(blocking, time.Now)
+	target := mustTarget(t, "https://example.com/public")
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := checker.Allowed(context.Background(), target)
+		errCh <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("policy fetch did not start")
+	}
+
+	// While the first origin fetch is blocked, another origin must still
+	// complete (global mutex is not held across the network call).
+	other := mustTarget(t, "https://other.example/public")
+	otherDone := make(chan error, 1)
+	go func() {
+		_, err := checker.Allowed(context.Background(), other)
+		otherDone <- err
+	}()
+
+	select {
+	case err := <-otherDone:
+		if err != nil {
+			t.Fatalf(
+				"concurrent Allowed error = %v",
+				err,
+			)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent Allowed blocked while first fetch in flight")
+	}
+
+	close(release)
+	if err := <-errCh; err != nil {
+		t.Fatalf("Allowed() error = %v", err)
+	}
+}
+
+func TestCheckerWaitsForInflightPolicyAndHonorsCancellation(
+	t *testing.T,
+) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	blocking := &blockingFirstHopGetter{
+		started: started,
+		release: release,
+	}
+	checker := newChecker(blocking, time.Now)
+	target := mustTarget(t, "https://example.com/public")
+	initial, err := origin.Parse(target.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := checker.policyFor(context.Background(), initial)
+		firstErr <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("policy fetch did not start")
+	}
+
+	sharedDone := make(chan error, 1)
+	go func() {
+		_, err := checker.policyFor(context.Background(), initial)
+		sharedDone <- err
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	canceledDone := make(chan error, 1)
+	entered := make(chan struct{})
+	go func() {
+		// Probe until this caller observes the in-flight entry, then wait
+		// on it so cancellation hits the select path rather than startup.
+		for {
+			checker.mu.Lock()
+			_, exists := checker.inflight[initial]
+			checker.mu.Unlock()
+			if exists {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		close(entered)
+		_, err := checker.policyFor(ctx, initial)
+		canceledDone <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled waiter did not observe in-flight policy")
+	}
+	// Yield so policyFor can reach the select on pending.done.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-canceledDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf(
+				"canceled waiter error = %v, want canceled",
+				err,
+			)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled waiter did not return")
+	}
+
+	close(release)
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first policyFor() error = %v", err)
+	}
+	if err := <-sharedDone; err != nil {
+		t.Fatalf("shared policyFor() error = %v", err)
+	}
+}
+
+func TestCheckerEvictOverflowReturnsWhenCacheEmpty(t *testing.T) {
+	original := maxCacheEntries
+	maxCacheEntries = 0
+	t.Cleanup(func() {
+		maxCacheEntries = original
+	})
+
+	checker := newChecker(staticRobotsHopGetter{}, time.Now)
+	checker.evictOverflowLocked(time.Now())
+	if len(checker.cache) != 0 {
+		t.Fatalf("cache size = %d, want 0", len(checker.cache))
+	}
+}
+
+func TestCheckerEvictsCacheWhenFull(t *testing.T) {
+	clock := &checkerClock{
+		current: time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC),
+	}
+	checker := newChecker(
+		staticRobotsHopGetter{},
+		clock.Now,
+	)
+
+	for i := 0; i < maxCacheEntries+1; i++ {
+		target := mustTarget(
+			t,
+			"https://origin-"+itoa(i)+".example/page",
+		)
+		if _, err := checker.Allowed(
+			context.Background(),
+			target,
+		); err != nil {
+			t.Fatalf(
+				"Allowed() error = %v for origin %d",
+				err,
+				i,
+			)
+		}
+	}
+
+	checker.mu.Lock()
+	defer checker.mu.Unlock()
+	if len(checker.cache) > maxCacheEntries {
+		t.Fatalf(
+			"cache size = %d, want <= %d",
+			len(checker.cache),
+			maxCacheEntries,
+		)
+	}
+}
+
+func itoa(value int) string {
+	if value == 0 {
+		return "0"
+	}
+	digits := make([]byte, 0, 8)
+	for value > 0 {
+		digits = append(
+			[]byte{byte('0' + value%10)},
+			digits...,
+		)
+		value /= 10
+	}
+	return string(digits)
+}
+
+type staticRobotsHopGetter struct{}
+
+func (staticRobotsHopGetter) get(
+	context.Context,
+	*url.URL,
+) (*http.Response, error) {
+	return robotsResponse(http.StatusNotFound, ""), nil
+}
+
+type blockingFirstHopGetter struct {
+	started chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	blocked bool
+}
+
+func (getter *blockingFirstHopGetter) get(
+	ctx context.Context,
+	_ *url.URL,
+) (*http.Response, error) {
+	getter.mu.Lock()
+	shouldBlock := !getter.blocked
+	if shouldBlock {
+		getter.blocked = true
+	}
+	getter.mu.Unlock()
+
+	if shouldBlock {
+		close(getter.started)
+		select {
+		case <-getter.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	return robotsResponse(http.StatusNotFound, ""), nil
 }
 
 func TestCheckerCoalescesConcurrentCacheMisses(t *testing.T) {

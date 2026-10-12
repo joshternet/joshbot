@@ -263,10 +263,10 @@ func (runner *CrawlRunner) runOnceWithLease(
 		category := result.FailureCategory
 		retryAfter := result.RetryAfter
 
-		if result.PagesParsed > 0 {
-			category = retry.CategoryNone
-			retryAfter = 0
-		} else if category == retry.CategoryNone {
+		// PagesParsed > 0 must not clear finalize/store/processor
+		// failures to CategoryNone. Intentional partial-success
+		// crawls return nil error with CategoryNone already set.
+		if category == retry.CategoryNone {
 			category = retry.CategoryProcessor
 		}
 
@@ -523,6 +523,10 @@ func (runner *CrawlRunner) validate(
 ) error {
 	if runner == nil {
 		return errCrawlRunnerUnavailable
+	}
+
+	if ctx == nil {
+		return errInvalidContext
 	}
 
 	if err := ctx.Err(); err != nil {

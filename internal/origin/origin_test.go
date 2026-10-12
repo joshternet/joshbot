@@ -76,6 +76,11 @@ func TestParseNormalizesWebOrigin(t *testing.T) {
 			input: "https://bücher.example/path",
 			want:  "https://xn--bcher-kva.example",
 		},
+		{
+			name:  "trailing dot on domain host is stripped",
+			input: "https://example.com./path",
+			want:  "https://example.com",
+		},
 	}
 
 	for _, test := range tests {
@@ -280,6 +285,22 @@ func TestParseRejectsInvalidOrigin(t *testing.T) {
 			name:  "nonstandard IPv4",
 			input: "https://127.1/path",
 		},
+		{
+			name:  "host is only a trailing dot",
+			input: "https://./",
+		},
+		{
+			name:  "host is only dots",
+			input: "http://..",
+		},
+		{
+			name:  "host has multiple trailing dots",
+			input: "http://a..",
+		},
+		{
+			name:  "host is three dots",
+			input: "http://...",
+		},
 	}
 
 	for _, test := range tests {
@@ -349,6 +370,11 @@ func FuzzParseRoundTrip(f *testing.F) {
 		"https://xn--example-.com/",
 		"https://127.1/path",
 		"https://josh:do-not-leak-this@example.com/",
+		"http://.",
+		"http://..",
+		"http://...",
+		"http://a..",
+		"https://./",
 	}
 
 	for _, seed := range seeds {

@@ -13,6 +13,7 @@ import (
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/retry"
 	"github.com/joshternet/joshbot/internal/robots"
+	"golang.org/x/net/html"
 )
 
 type crawlerFailureIntegrationGetterFunc func(context.Context, *url.URL) (*http.Response, error)
@@ -328,6 +329,49 @@ func TestCrawlerFailureIntegrationReadAndCloseFailures(t *testing.T) {
 	}
 }
 
+func TestCrawlerFailureIntegrationCanceledBodyReadIsTimeout(t *testing.T) {
+	source := crawlerFailureIntegrationOrigin(t, "https://source.example")
+	ctx, cancel := context.WithCancel(context.Background())
+	body := &crawlerFailureIntegrationBody{
+		reader: strings.NewReader("unused"),
+		readErr: errors.New(
+			"integration canceled read failure",
+		),
+	}
+	crawler := crawlerFailureIntegrationCrawler(
+		t,
+		crawlerFailureIntegrationGetterFunc(func(
+			context.Context,
+			*url.URL,
+		) (*http.Response, error) {
+			cancel()
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"text/html"},
+				},
+				Body: body,
+			}, nil
+		}),
+		crawlerFailureIntegrationConfig(),
+	)
+
+	page := crawlerFailureIntegrationFetch(
+		t,
+		crawler,
+		ctx,
+		source,
+	)
+	if page.failureCategory != retry.CategoryTimeout ||
+		page.attempt.Outcome != PageTimeout {
+		t.Fatalf(
+			"fetchPage() = category %q outcome %q, want timeout",
+			page.failureCategory,
+			page.attempt.Outcome,
+		)
+	}
+}
+
 func TestCrawlerFailureIntegrationRedirectBoundaries(t *testing.T) {
 	source := crawlerFailureIntegrationOrigin(t, "https://source.example")
 
@@ -412,6 +456,150 @@ func TestCrawlerFailureIntegrationRedirectBoundaries(t *testing.T) {
 			t.Errorf("fetchPage() = %#v, calls=%d", page, calls)
 		}
 	})
+}
+
+func TestCrawlerFailureIntegrationRetryAfterWaitAndError(
+	t *testing.T,
+) {
+	source := crawlerFailureIntegrationOrigin(t, "https://source.example")
+
+	t.Run("retryAfter wait succeeds then breaks", func(t *testing.T) {
+		calls := 0
+		getter := crawlerFailureIntegrationGetterFunc(
+			func(context.Context, *url.URL) (*http.Response, error) {
+				calls++
+				response := crawlerFailureIntegrationResponse(
+					http.StatusTooManyRequests, "text/html", "slow down",
+				)
+				response.Header.Set("Retry-After", "1")
+				return response, nil
+			},
+		)
+
+		config := crawlerFailureIntegrationConfig()
+		crawler, err := NewMultiPageCrawler(
+			getter, &crawlerFailureIntegrationSink{}, config,
+		)
+		if err != nil {
+			t.Fatalf("NewMultiPageCrawler() error = %v", err)
+		}
+
+		result, err := crawler.Crawl(context.Background(), source)
+		if err != nil {
+			t.Fatalf("Crawl() error = %v", err)
+		}
+
+		if calls != retry.MaxAttemptsPerCycle {
+			t.Errorf("fetch calls = %d, want %d", calls, retry.MaxAttemptsPerCycle)
+		}
+		if result.FailureCategory != retry.CategoryHTTP429 {
+			t.Errorf("FailureCategory = %q, want %q", result.FailureCategory, retry.CategoryHTTP429)
+		}
+	})
+
+	t.Run("retryAfter wait error", func(t *testing.T) {
+		waitErr := errors.New("integration retry wait failure")
+		getter := crawlerFailureIntegrationGetterFunc(
+			func(context.Context, *url.URL) (*http.Response, error) {
+				response := crawlerFailureIntegrationResponse(
+					http.StatusTooManyRequests, "text/html", "slow down",
+				)
+				response.Header.Set("Retry-After", "1")
+				return response, nil
+			},
+		)
+
+		config := crawlerFailureIntegrationConfig()
+		waiter := &crawlerFailureIntegrationWaiter{err: waitErr}
+		crawler, err := newMultiPageCrawler(
+			getter, &crawlerFailureIntegrationSink{}, config,
+			waiter, contextTimeoutFactory{}, discardCrawlTelemetry{},
+		)
+		if err != nil {
+			t.Fatalf("newMultiPageCrawler() error = %v", err)
+		}
+
+		_, err = crawler.Crawl(context.Background(), source)
+		if !errors.Is(err, waitErr) {
+			t.Errorf("Crawl() error = %v, want %v", err, waitErr)
+		}
+	})
+}
+
+type crawlerFailureIntegrationWaiter struct {
+	err error
+}
+
+func (waiter *crawlerFailureIntegrationWaiter) Wait(
+	context.Context, time.Duration,
+) error {
+	return waiter.err
+}
+
+func TestCrawlerFailureIntegrationExtractStatusTooLargeFromDecode(
+	t *testing.T,
+) {
+	source := crawlerFailureIntegrationOrigin(t, "https://source.example")
+
+	// Body that is within MaxPageBytes as raw but expands beyond
+	// MaxRawBody when decoded from windows-1252 to UTF-8. Each byte 0x80
+	// becomes a 3-byte UTF-8 sequence (€), so MaxRawBody bytes of 0x80
+	// decode to 3*MaxRawBody bytes, well above MaxDecodedBody.
+	rawBody := make([]byte, MaxRawBody)
+	for i := range rawBody {
+		rawBody[i] = 0x80
+	}
+
+	getter := crawlerFailureIntegrationGetterFunc(
+		func(context.Context, *url.URL) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"text/html; charset=windows-1252"},
+				},
+				Body: io.NopCloser(strings.NewReader(string(rawBody))),
+			}, nil
+		},
+	)
+
+	config := crawlerFailureIntegrationConfig()
+	config.MaxPageBytes = MaxRawBody + 1
+	crawler := crawlerFailureIntegrationCrawler(t, getter, config)
+	page := crawlerFailureIntegrationFetch(t, crawler, context.Background(), source)
+
+	if page.failureCategory != retry.CategoryOversizedContent ||
+		page.attempt.Outcome != PageTooLarge {
+		t.Errorf(
+			"fetchPage() = category %q outcome %q, want oversized/too_large",
+			page.failureCategory, page.attempt.Outcome,
+		)
+	}
+}
+
+func TestCrawlerFailureIntegrationExtractStatusUnavailableFromParse(
+	t *testing.T,
+) {
+	source := crawlerFailureIntegrationOrigin(t, "https://source.example")
+
+	original := parseHTMLDocument
+	t.Cleanup(func() { parseHTMLDocument = original })
+	parseHTMLDocument = func(r io.Reader) (*html.Node, error) {
+		return nil, errors.New("integration parse failure")
+	}
+
+	getter := crawlerFailureIntegrationResponseGetter(
+		http.StatusOK, "text/html", "<html></html>",
+	)
+	crawler := crawlerFailureIntegrationCrawler(t, getter, crawlerFailureIntegrationConfig())
+	page := crawlerFailureIntegrationFetch(t, crawler, context.Background(), source)
+
+	if page.failureCategory != retry.CategoryTransport ||
+		page.attempt.Outcome != PageNetworkError {
+		t.Errorf(
+			"fetchPage() = category %q outcome %q, want transport/network_error",
+			page.failureCategory, page.attempt.Outcome,
+		)
+	}
 }
 
 func crawlerFailureIntegrationCrawler(t *testing.T, getter Getter, config CrawlConfig) *MultiPageCrawler {

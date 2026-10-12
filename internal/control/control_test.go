@@ -477,6 +477,66 @@ func TestControlValidationHelpersCoverBoundaries(t *testing.T) {
 	if got := bounded("abcdef", 3); got != "abc" {
 		t.Errorf("bounded() = %q", got)
 	}
+	// "é" is two UTF-8 bytes; truncating to one byte must not leave a
+	// partial rune.
+	if got := bounded("aé", 2); got != "a" {
+		t.Errorf("bounded(UTF-8) = %q, want %q", got, "a")
+	}
+}
+
+func TestDecodeOptionalJSONTreatsUnknownEmptyLengthAsEmpty(
+	t *testing.T,
+) {
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/",
+		http.NoBody,
+	)
+	request.ContentLength = -1
+	request.Header.Set("Content-Type", "application/json")
+
+	var body metadata
+	status, code := decodeOptionalJSON(
+		httptest.NewRecorder(),
+		request,
+		&body,
+	)
+	if status != 0 || code != "" {
+		t.Fatalf(
+			"decodeOptionalJSON() = %d, %q",
+			status,
+			code,
+		)
+	}
+}
+
+func TestDecodeOptionalJSONRebuffersUnknownLengthBody(
+	t *testing.T,
+) {
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/",
+		strings.NewReader(`{"actor":"ops"}`),
+	)
+	request.ContentLength = -1
+	request.Header.Set("Content-Type", "application/json")
+
+	var body metadata
+	status, code := decodeOptionalJSON(
+		httptest.NewRecorder(),
+		request,
+		&body,
+	)
+	if status != 0 || code != "" {
+		t.Fatalf(
+			"decodeOptionalJSON() = %d, %q",
+			status,
+			code,
+		)
+	}
+	if body.Actor != "ops" {
+		t.Fatalf("decoded actor = %q, want ops", body.Actor)
+	}
 }
 
 func TestHandlerRejectsEveryMutationValidationPath(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joshternet/joshbot/internal/operatortoken"
 	"github.com/joshternet/joshbot/internal/reporting"
 )
 
@@ -359,11 +360,7 @@ func readReportToken(
 	}
 
 	token := string(data)
-
-	if strings.ContainsAny(
-		token,
-		"\r\n",
-	) {
+	if !operatortoken.Valid(token) {
 		return "", errInvalidReportToken
 	}
 
@@ -453,20 +450,30 @@ func serveReport(
 			)
 		defer cancel()
 
-		if err := server.Shutdown(
+		shutdownErr := server.Shutdown(
 			shutdownContext,
-		); err != nil {
+		)
+		if shutdownErr != nil {
+			type closer interface {
+				Close() error
+			}
+			if c, ok := server.(closer); ok {
+				_ = c.Close()
+			}
+		}
+
+		serveErr := <-serverErrors
+
+		if shutdownErr != nil {
 			return fmt.Errorf(
 				"shutdown reporting API: %w",
-				err,
+				shutdownErr,
 			)
 		}
 
-		err := <-serverErrors
-
-		if err == nil ||
+		if serveErr == nil ||
 			errors.Is(
-				err,
+				serveErr,
 				http.ErrServerClosed,
 			) {
 			return nil
@@ -474,7 +481,7 @@ func serveReport(
 
 		return fmt.Errorf(
 			"stop reporting API: %w",
-			err,
+			serveErr,
 		)
 	}
 }

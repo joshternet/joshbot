@@ -21,8 +21,9 @@ deployed with `v1.1.0`.
 
 ## Soak checklist
 
-Use the private reporting service (default `127.0.0.1:8788`, bearer token from
-`JOSHBOT_REPORT_TOKEN_FILE`) and Compose health checks:
+Use the private reporting service on the internal Compose reporting network
+(service `report` port `8788`; bearer token from `JOSHBOT_REPORT_TOKEN_FILE`)
+and Compose health checks. The report port is not published to the host:
 
 1. Confirm `worker` and `discovery` heartbeats are fresh via
    `GET /api/v1/services` or `joshbot_service_heartbeat_age_seconds`.
@@ -125,7 +126,7 @@ Classify each soak question before asking for new telemetry.
 | Funnel drop from admissions to probes | compare promotions admitted to probe queue growth over the same window |
 | Verified participant growth | compare successive public `registry.json` exports or verified source counts over time |
 | Retry-heavy origins | inspect queue items and source detail retry columns for high streaks |
-| Lease recovery symptoms | compare heartbeat restarts, incomplete crawl runs, and later reclaimed source attempts in crawl/source history |
+| Lease recovery symptoms | compare heartbeat restarts, crawl runs closed as `canceled`/`lease_reclaimed` or `canceled`/`abandoned`, and later reclaimed source attempts in crawl/source history |
 
 ### NOT CURRENTLY AVAILABLE
 
@@ -211,11 +212,11 @@ This is not a ticket system. GitHub issues should be opened only when evidence
 reveals a concrete defect, operational deficiency, or clearly justified
 enhancement.
 
-### 2026-09-21 — initial live snapshot on barf.lan
+### 2026-09-21 — initial live snapshot
 
 ```text
 date/time: 2026-09-21 ~22:03 UTC (dashboard ~3:02 PM local)
-observation: Production JoshBot on barf.lan is actively discovering and verifying; funnel is very wide at the top and narrow at Joshternet membership.
+observation: Production JoshBot is actively discovering and verifying; funnel is very wide at the top and narrow at Joshternet membership.
 evidence:
   - heartbeats: discovery+worker stable slots, ages ~1s; both often state=running
   - processors: discovery_paused=false, verification_paused=false

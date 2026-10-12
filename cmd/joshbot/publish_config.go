@@ -124,6 +124,11 @@ func readGitHubToken(
 		data = data[:len(data)-1]
 	}
 
+	if len(data) > 0 &&
+		data[len(data)-1] == '\r' {
+		data = data[:len(data)-1]
+	}
+
 	if len(data) == 0 {
 		return "", errEmptyGitHubToken
 	}

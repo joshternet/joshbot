@@ -1,7 +1,9 @@
 package retry
 
 import (
+	"math"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -111,7 +113,11 @@ func TestHTTPStatusCategory(t *testing.T) {
 		http.StatusServiceUnavailable:  {CategoryHTTP5xx, true},
 		http.StatusNotFound:            {CategoryDeclarationAbsent, false},
 		http.StatusGone:                {CategoryDeclarationAbsent, false},
-		http.StatusBadRequest:          {CategoryDeclarationUnavailable, false},
+		http.StatusBadRequest:          {CategoryHTTP4xx, false},
+		http.StatusForbidden:           {CategoryHTTP4xx, false},
+		http.StatusTeapot:              {CategoryHTTP4xx, false},
+		http.StatusOK:                  {CategoryDeclarationUnavailable, false},
+		http.StatusFound:               {CategoryDeclarationUnavailable, false},
 	}
 	for status, expected := range tests {
 		got, retryable := HTTPStatusCategory(status)
@@ -137,10 +143,11 @@ func TestCapDurationRejectsNonpositive(t *testing.T) {
 func TestParseRetryAfter(t *testing.T) {
 	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
 	tests := map[string]time.Duration{
-		"":          0,
-		"-5":        0,
-		"60":        time.Minute,
-		"999999999": 24 * time.Hour,
+		"":                                   0,
+		"-5":                                 0,
+		"60":                                 time.Minute,
+		"999999999":                          24 * time.Hour,
+		strconv.FormatInt(math.MaxInt64, 10): MaxDelay,
 		now.Add(30 * time.Minute).Format(http.TimeFormat): 30 * time.Minute,
 		now.Add(-time.Hour).Format(http.TimeFormat):       0,
 		"invalid": 0,

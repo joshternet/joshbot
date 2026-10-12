@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/joshternet/joshbot/internal/operatortoken"
 )
 
 const (
@@ -276,7 +278,7 @@ func newHandler(
 		return nil, errReaderUnavailable
 	}
 
-	if strings.TrimSpace(token) == "" {
+	if !operatortoken.Valid(token) {
 		return nil, errTokenUnavailable
 	}
 

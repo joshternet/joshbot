@@ -116,6 +116,55 @@ func TestOriginIntegrationCanonicalizesSupportedWebOrigins(t *testing.T) {
 	}
 }
 
+func TestOriginIntegrationStripsTrailingDotFromFQDNHost(t *testing.T) {
+	got, err := origin.Parse("https://example.com./path")
+	if err != nil {
+		t.Fatalf("origin.Parse() error = %v", err)
+	}
+
+	if got.String() != "https://example.com" {
+		t.Errorf("String() = %q, want %q", got.String(), "https://example.com")
+	}
+
+	if got.Hostname() != "example.com" {
+		t.Errorf("Hostname() = %q, want %q", got.Hostname(), "example.com")
+	}
+}
+
+func TestOriginIntegrationRejectsEmptyOrMultipleDotHosts(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "host is only a dot",
+			raw:  "https://./path",
+		},
+		{
+			name: "multiple trailing dots",
+			raw:  "https://example.com../path",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := origin.Parse(test.raw)
+			if err == nil {
+				t.Fatalf(
+					"origin.Parse(%q) = %#v, nil error",
+					test.raw, got,
+				)
+			}
+			if got != (origin.Origin{}) {
+				t.Errorf(
+					"origin.Parse(%q) = %#v on error, want zero origin",
+					test.raw, got,
+				)
+			}
+		})
+	}
+}
+
 func TestOriginIntegrationRejectsUnsupportedOrAmbiguousOrigins(
 	t *testing.T,
 ) {

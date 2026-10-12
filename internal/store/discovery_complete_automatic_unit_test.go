@@ -51,6 +51,31 @@ type completeAutomaticScheduleLockFailTx struct {
 	err error
 }
 
+type failDurableAdmissionStateTx struct {
+	*discoveryPolicyUnitTx
+
+	err error
+}
+
+func (tx *failDurableAdmissionStateTx) Exec(
+	ctx context.Context,
+	query string,
+	args ...any,
+) (pgconn.CommandTag, error) {
+	if strings.Contains(
+		query,
+		"discovery_candidate_admission_state",
+	) {
+		return pgconn.CommandTag{}, tx.err
+	}
+
+	return tx.discoveryPolicyUnitTx.Exec(
+		ctx,
+		query,
+		args...,
+	)
+}
+
 func (tx *completeAutomaticScheduleLockFailTx) Exec(
 	ctx context.Context,
 	query string,
@@ -438,6 +463,41 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 		)
 	})
 
+	t.Run("network rejected durable outcome failure", func(t *testing.T) {
+		testErr := errors.New("test durable network rejected failure")
+		tx := completeAutomaticBaseTx(
+			1,
+			0,
+			0,
+			[]string{candidateOrigin.String()},
+		)
+		tx.execResults = append(
+			tx.execResults,
+			completeAutomaticSuccessExec(),
+			discoveryUnitExecResult{
+				err: testErr,
+			},
+		)
+		err := callCompleteAutomatic(
+			t,
+			ctx,
+			tx,
+			completeAutomaticClock{now: now},
+			[]AutomaticCandidateResult{
+				{
+					Candidate:       candidate,
+					FailureCategory: retry.CategoryUnsafeAddress,
+				},
+			},
+		)
+		assertCompleteAutomaticError(
+			t,
+			err,
+			testErr,
+			"record durable admission outcome",
+		)
+	})
+
 	t.Run("reset retry streak failure", func(t *testing.T) {
 		testErr := errors.New("test retry streak reset failure")
 		tx := completeAutomaticBaseTx(
@@ -580,6 +640,49 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 		)
 	})
 
+	t.Run("existing source durable outcome failure", func(t *testing.T) {
+		testErr := errors.New("test durable admission outcome failure")
+		baseTx := completeAutomaticBaseTx(
+			1,
+			0,
+			0,
+			[]string{candidateOrigin.String()},
+		)
+		baseTx.execResults = append(
+			baseTx.execResults,
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+		)
+		baseTx.rowResults = append(
+			baseTx.rowResults,
+			completeAutomaticAdmissionState(
+				true,
+				false,
+				false,
+				false,
+				false,
+				false,
+			),
+		)
+		tx := &failDurableAdmissionStateTx{
+			discoveryPolicyUnitTx: baseTx,
+			err:                   testErr,
+		}
+		err := callCompleteAutomatic(
+			t,
+			ctx,
+			tx,
+			completeAutomaticClock{now: now},
+			[]AutomaticCandidateResult{successResult},
+		)
+		assertCompleteAutomaticError(
+			t,
+			err,
+			testErr,
+			"record durable admission outcome",
+		)
+	})
+
 	t.Run(
 		"scheduled and verified sources stay nonautomatic",
 		func(t *testing.T) {
@@ -627,7 +730,7 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 							baseTx.rowResults,
 							test.state,
 						)
-						for index := 0; index < 4; index++ {
+						for index := 0; index < 5; index++ {
 							baseTx.execResults = append(
 								baseTx.execResults,
 								completeAutomaticSuccessExec(),
@@ -667,6 +770,16 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 						) {
 							t.Fatalf(
 								"existing source outcome not recorded:\n%s",
+								joined,
+							)
+						}
+
+						if !strings.Contains(
+							joined,
+							"INSERT INTO discovery_candidate_admission_state",
+						) {
+							t.Fatalf(
+								"existing source durable outcome not recorded:\n%s",
 								joined,
 							)
 						}
@@ -1353,6 +1466,56 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 		)
 	})
 
+	t.Run("durable promoted outcome failure", func(t *testing.T) {
+		testErr := errors.New("test durable promoted outcome failure")
+		tx := completeAutomaticBaseTx(
+			1,
+			0,
+			0,
+			[]string{
+				candidateOrigin.String(),
+			},
+		)
+		tx.execResults = append(
+			tx.execResults,
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+			discoveryUnitExecResult{
+				err: testErr,
+			},
+		)
+		tx.rowResults = append(
+			tx.rowResults,
+			completeAutomaticAdmissionState(
+				false,
+				false,
+				false,
+				false,
+				false,
+				false,
+			),
+		)
+		err := callCompleteAutomatic(
+			t,
+			ctx,
+			tx,
+			completeAutomaticClock{
+				now: now,
+			},
+			[]AutomaticCandidateResult{
+				successResult,
+			},
+		)
+		assertCompleteAutomaticError(
+			t,
+			err,
+			testErr,
+			"record durable admission outcome",
+		)
+	})
+
 	t.Run("promotion count update failure", func(t *testing.T) {
 		testErr := errors.New("test promotion count update failure")
 		tx := completeAutomaticBaseTx(
@@ -1365,6 +1528,7 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 		)
 		tx.execResults = append(
 			tx.execResults,
+			completeAutomaticSuccessExec(),
 			completeAutomaticSuccessExec(),
 			completeAutomaticSuccessExec(),
 			completeAutomaticSuccessExec(),
@@ -1415,6 +1579,7 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 		)
 		tx.execResults = append(
 			tx.execResults,
+			completeAutomaticSuccessExec(),
 			completeAutomaticSuccessExec(),
 			completeAutomaticSuccessExec(),
 			completeAutomaticSuccessExec(),
@@ -1530,7 +1695,7 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 				true,
 			),
 		)
-		for index := 0; index < 15; index++ {
+		for index := 0; index < 18; index++ {
 			tx.execResults = append(
 				tx.execResults,
 				completeAutomaticSuccessExec(),

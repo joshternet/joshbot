@@ -169,6 +169,54 @@ type runtimeBoundaryIntegrationState struct {
 	runner    *runtimeBoundaryIntegrationRunner
 }
 
+func TestRuntimeBoundaryIntegrationNewPostgresDatabaseBoundaries(
+	t *testing.T,
+) {
+	t.Run("nil config", func(t *testing.T) {
+		connection, err := newPostgresDatabase(
+			context.Background(),
+			nil,
+		)
+		if connection != nil || !errors.Is(err, errInvalidRuntimeConfiguration) {
+			t.Errorf(
+				"newPostgresDatabase(nil) = %#v, %v, want nil, %v",
+				connection, err, errInvalidRuntimeConfiguration,
+			)
+		}
+	})
+
+	t.Run("openPostgresPool error", func(t *testing.T) {
+		original := openPostgresPool
+		t.Cleanup(func() { openPostgresPool = original })
+
+		poolErr := errors.New("integration pool open failure")
+		openPostgresPool = func(
+			context.Context,
+			*pgxpool.Config,
+		) (*pgxpool.Pool, error) {
+			return nil, poolErr
+		}
+
+		config, err := pgxpool.ParseConfig(
+			"postgres://localhost:5432/joshbot_test",
+		)
+		if err != nil {
+			t.Fatalf("pgxpool.ParseConfig() error = %v", err)
+		}
+
+		connection, openErr := newPostgresDatabase(
+			context.Background(),
+			config,
+		)
+		if connection != nil || !errors.Is(openErr, poolErr) {
+			t.Errorf(
+				"newPostgresDatabase(failing pool) = %#v, %v, want nil, %v",
+				connection, openErr, poolErr,
+			)
+		}
+	})
+}
+
 func TestRuntimeBoundaryIntegrationProductionPublisherAdapter(
 	t *testing.T,
 ) {

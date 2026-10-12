@@ -70,12 +70,11 @@ func (server *reportBoundaryIntegrationServer) Serve(net.Listener) error {
 
 func (server *reportBoundaryIntegrationServer) Shutdown(context.Context) error {
 	server.shutdownCalls++
+	server.serveResult <- server.shutdownServeResult
 
 	if server.shutdownErr != nil {
 		return server.shutdownErr
 	}
-
-	server.serveResult <- server.shutdownServeResult
 
 	return nil
 }
@@ -440,10 +439,6 @@ func TestReportBoundaryIntegrationServeReport(t *testing.T) {
 				time.Second,
 			)
 
-			if test.shutdownErr != nil {
-				server.serveResult <- http.ErrServerClosed
-			}
-
 			if test.want == nil {
 				if err != nil {
 					t.Errorf(
@@ -469,6 +464,43 @@ func TestReportBoundaryIntegrationServeReport(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+type reportBoundaryIntegrationClosableServer struct {
+	reportBoundaryIntegrationServer
+	closeCalls int
+}
+
+func (server *reportBoundaryIntegrationClosableServer) Close() error {
+	server.closeCalls++
+	return nil
+}
+
+func TestReportBoundaryIntegrationShutdownFailureCallsClose(t *testing.T) {
+	listener := &reportBoundaryIntegrationListener{}
+
+	server := &reportBoundaryIntegrationClosableServer{
+		reportBoundaryIntegrationServer: reportBoundaryIntegrationServer{
+			serveResult:         make(chan error, 1),
+			shutdownErr:         errReportBoundaryIntegrationFailure,
+			shutdownServeResult: http.ErrServerClosed,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := serveReport(ctx, server, listener, time.Second)
+	if !errors.Is(err, errReportBoundaryIntegrationFailure) {
+		t.Errorf(
+			"serveReport() error = %v, want %v",
+			err, errReportBoundaryIntegrationFailure,
+		)
+	}
+
+	if server.closeCalls != 1 {
+		t.Errorf("Close() calls = %d, want 1", server.closeCalls)
 	}
 }
 
@@ -499,7 +531,7 @@ func reportBoundaryIntegrationDependencies() reportRuntimeDependencies {
 		readToken: func(
 			string,
 		) (string, error) {
-			return "integration-report-token",
+			return "0123456789abcdef0123456789abcdef",
 				nil
 		},
 

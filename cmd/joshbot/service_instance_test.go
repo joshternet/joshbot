@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -17,7 +18,7 @@ func TestLoadServiceInstanceID(t *testing.T) {
 
 			return "ignored"
 		},
-		"fallback",
+		strings.NewReader(strings.Repeat("a", generatedServiceInstanceIDBytes)),
 	)
 	if err != nil {
 		t.Fatalf("loadServiceInstanceID() error = %v", err)
@@ -26,15 +27,18 @@ func TestLoadServiceInstanceID(t *testing.T) {
 		t.Fatalf("configured instance ID = %q", configured)
 	}
 
-	fallback, err := loadServiceInstanceID(
+	generated, err := loadServiceInstanceID(
 		func(string) string { return "   " },
-		"  discovery  ",
+		strings.NewReader(strings.Repeat("b", generatedServiceInstanceIDBytes)),
 	)
 	if err != nil {
-		t.Fatalf("fallback loadServiceInstanceID() error = %v", err)
+		t.Fatalf("generated loadServiceInstanceID() error = %v", err)
 	}
-	if fallback != "discovery" {
-		t.Fatalf("fallback instance ID = %q", fallback)
+	wantGenerated := "service-" + hex.EncodeToString(
+		[]byte(strings.Repeat("b", generatedServiceInstanceIDBytes)),
+	)
+	if generated != wantGenerated {
+		t.Fatalf("generated instance ID = %q, want %q", generated, wantGenerated)
 	}
 
 	longest := strings.Repeat("a", maxServiceInstanceIDLength)
@@ -46,7 +50,7 @@ func TestLoadServiceInstanceID(t *testing.T) {
 
 			return ""
 		},
-		"fallback",
+		strings.NewReader(strings.Repeat("c", generatedServiceInstanceIDBytes)),
 	)
 	if err != nil || bounded != longest {
 		t.Fatalf("bounded instance ID = %q, %v", bounded, err)
@@ -64,7 +68,7 @@ func TestLoadServiceInstanceID(t *testing.T) {
 
 				return ""
 			},
-			"fallback",
+			strings.NewReader(strings.Repeat("d", generatedServiceInstanceIDBytes)),
 		)
 		if !errors.Is(err, errInvalidRuntimeConfiguration) {
 			t.Fatalf("loadServiceInstanceID(%q) error = %v", invalid, err)
@@ -73,33 +77,17 @@ func TestLoadServiceInstanceID(t *testing.T) {
 
 	_, err = loadServiceInstanceID(
 		func(string) string { return "" },
-		string([]byte{0xff}),
+		nil,
 	)
-	if !errors.Is(err, errInvalidRuntimeConfiguration) {
-		t.Fatalf("invalid fallback error = %v", err)
+	if !errors.Is(err, errServiceInstanceIDGeneration) {
+		t.Fatalf("nil entropy error = %v", err)
 	}
 
-	if discoveryServiceInstanceFallback(func(string) string {
-		return ""
-	}) != defaultDiscoveryInstanceID {
-		t.Fatal("empty hostname fallback is not discovery")
-	}
-	if discoveryServiceInstanceFallback(func(name string) string {
-		if name == hostnameEnvironment {
-			return "   "
-		}
-
-		return ""
-	}) != defaultDiscoveryInstanceID {
-		t.Fatal("blank hostname fallback is not discovery")
-	}
-	if discoveryServiceInstanceFallback(func(name string) string {
-		if name == hostnameEnvironment {
-			return "container-host"
-		}
-
-		return ""
-	}) != "container-host" {
-		t.Fatal("hostname fallback was not preserved")
+	_, err = loadServiceInstanceID(
+		func(string) string { return "" },
+		strings.NewReader("short"),
+	)
+	if !errors.Is(err, errServiceInstanceIDGeneration) {
+		t.Fatalf("short entropy error = %v", err)
 	}
 }

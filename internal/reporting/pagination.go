@@ -167,7 +167,8 @@ func (h *handler) withPagination(
 			writer http.ResponseWriter,
 			request *http.Request,
 		) {
-			if request.Method != http.MethodGet {
+			if request.Method != http.MethodGet &&
+				request.Method != http.MethodHead {
 				next.ServeHTTP(
 					writer,
 					request,

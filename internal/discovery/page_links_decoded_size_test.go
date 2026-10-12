@@ -2,10 +2,13 @@ package discovery
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"net/url"
 	"testing"
 
 	"github.com/joshternet/joshbot/internal/origin"
+	"golang.org/x/net/html"
 )
 
 func TestExtractPageLinksRejectsDecodedBodyOverLimit(
@@ -126,5 +129,43 @@ func TestExtractPageLinksEmptyExplicitHTMLIsUnavailable(
 			"links = %#v, want empty",
 			links,
 		)
+	}
+}
+
+func TestExtractPageLinksTreatsHTMLParseFailureAsUnavailable(
+	t *testing.T,
+) {
+	source, err := origin.Parse("https://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageURL, err := url.Parse("https://example.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := errors.New("html parse failed")
+	original := parseHTMLDocument
+	parseHTMLDocument = func(io.Reader) (*html.Node, error) {
+		return nil, want
+	}
+	t.Cleanup(func() {
+		parseHTMLDocument = original
+	})
+
+	links, status, err := ExtractPageLinks(
+		source,
+		pageURL,
+		"text/html",
+		[]byte("<html></html>"),
+	)
+	if err != nil {
+		t.Fatalf("ExtractPageLinks() error = %v", err)
+	}
+	if status != StatusUnavailable {
+		t.Fatalf("status = %v, want %v", status, StatusUnavailable)
+	}
+	if len(links.Internal) != 0 || len(links.Candidates) != 0 {
+		t.Fatalf("links = %#v, want empty", links)
 	}
 }

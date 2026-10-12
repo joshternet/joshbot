@@ -181,7 +181,9 @@ func TestCrawlRunnerPersistsTypedCrawlResultFailure(t *testing.T) {
 	}
 }
 
-func TestCrawlRunnerDoesNotPersistTransientFailureAfterPartialSuccess(t *testing.T) {
+func TestCrawlRunnerKeepsProcessorCategoryAfterPartialParseFailure(
+	t *testing.T,
+) {
 	source := mustDiscoveryOrigin(t, "https://example.com")
 	base := &fakeCrawlSourceStore{claims: []fakeCrawlSourceClaim{{
 		source: source, found: true,
@@ -189,10 +191,9 @@ func TestCrawlRunnerDoesNotPersistTransientFailureAfterPartialSuccess(t *testing
 	store := &retryingCrawlSourceStore{fakeCrawlSourceStore: base}
 	crawler := &fakeSourceCrawler{results: []fakeSourceCrawlResult{{
 		result: CrawlResult{
-			Source:          source,
-			PagesAttempted:  2,
-			PagesParsed:     1,
-			FailureCategory: retry.CategoryHTTP5xx,
+			Source:         source,
+			PagesAttempted: 2,
+			PagesParsed:    1,
 		},
 		err: errors.New("late persistence failure"),
 	}}}
@@ -203,8 +204,42 @@ func TestCrawlRunnerDoesNotPersistTransientFailureAfterPartialSuccess(t *testing
 	if _, err := runner.RunOnce(context.Background()); err == nil {
 		t.Fatal("RunOnce() error = nil")
 	}
-	if len(store.categories) != 1 || store.categories[0] != retry.CategoryNone {
+	if len(store.categories) != 1 ||
+		store.categories[0] != retry.CategoryProcessor {
 		t.Fatalf("completion categories = %#v", store.categories)
+	}
+}
+
+func TestCrawlRunnerRejectsNilContext(t *testing.T) {
+	runner, err := NewCrawlRunner(
+		&fakeCrawlSourceStore{},
+		&fakeSourceCrawler{},
+		testCrawlRunnerConfig(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var nilContext context.Context
+	if _, err := runner.RunOnce(nilContext); !errors.Is(
+		err,
+		errInvalidContext,
+	) {
+		t.Fatalf(
+			"RunOnce(nil) error = %v, want %v",
+			err,
+			errInvalidContext,
+		)
+	}
+	if err := runner.Run(nilContext); !errors.Is(
+		err,
+		errInvalidContext,
+	) {
+		t.Fatalf(
+			"Run(nil) error = %v, want %v",
+			err,
+			errInvalidContext,
+		)
 	}
 }
 

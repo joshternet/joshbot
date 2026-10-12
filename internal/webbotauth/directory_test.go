@@ -418,6 +418,26 @@ func TestValidateDirectory(t *testing.T) {
 		}
 	})
 
+	t.Run("content digest rejects substring label", func(t *testing.T) {
+		header := validHeader.Clone()
+		digest := header.Get("Content-Digest")
+		header.Set("Content-Digest", "x"+digest)
+
+		_, err := ValidateDirectory(
+			now,
+			authority,
+			http.StatusOK,
+			header,
+			validBody,
+		)
+		if !errors.Is(err, ErrInvalidDirectory) {
+			t.Fatalf(
+				"ValidateDirectory() error = %v, want invalid directory",
+				err,
+			)
+		}
+	})
+
 	t.Run("signature bytes do not verify", func(t *testing.T) {
 		header := validHeader.Clone()
 		encoded := strings.TrimSuffix(

@@ -967,10 +967,13 @@ func (s *DiscoveryStore) scheduleProbeCandidates(
 			INSERT INTO verification_queue (origin, available_at, mode)
 			SELECT candidate.origin, $2, 'probe'
 			FROM unnest($1::text[]) AS candidate(origin)
-			WHERE NOT EXISTS (
-				SELECT 1 FROM verification_queue
-				WHERE verification_queue.origin = candidate.origin
-			)
+			LEFT JOIN discovery_source_state AS source_state
+				ON source_state.source_origin = candidate.origin
+			WHERE NOT COALESCE(source_state.crawl_blocked, false)
+				AND NOT EXISTS (
+					SELECT 1 FROM verification_queue
+					WHERE verification_queue.origin = candidate.origin
+				)
 			ORDER BY candidate.origin
 			LIMIT GREATEST(
 				$3::bigint - (
@@ -1102,13 +1105,8 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 						)
 						AND NOT EXISTS (
 							SELECT 1
-							FROM crawl_run_automatic_admission_batches AS prior
-							WHERE prior.candidate_origin = candidate.origin
-								AND prior.outcome IN (
-								'promoted',
-								'network_rejected',
-								'existing'
-								)
+							FROM discovery_candidate_admission_state AS durable
+							WHERE durable.candidate_origin = candidate.origin
 						)
 						AND NOT EXISTS (
 							SELECT 1
@@ -1127,26 +1125,50 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 								)
 								)) AS hostname
 							) AS parsed
+							CROSS JOIN LATERAL (
+								SELECT replace(
+									replace(
+										replace(
+											CASE
+												WHEN right(
+													excluded.pattern,
+													2
+												) = '.*'
+												THEN left(
+													excluded.pattern,
+													length(
+														excluded.pattern
+													) - 2
+												)
+												ELSE excluded.pattern
+											END,
+											E'\\',
+											E'\\\\'
+										),
+										E'%',
+										E'\\%'
+									),
+									E'_',
+									E'\\_'
+								) AS like_pattern
+							) AS escaped
 							WHERE (
 								right(excluded.pattern, 2) = '.*'
 								AND (
 								parsed.hostname LIKE
-								left(
-								excluded.pattern,
-								length(excluded.pattern) - 2
-								) || '.%'
+								escaped.like_pattern || '.%'
+								ESCAPE E'\\'
 								OR parsed.hostname LIKE
-								'%.' || left(
-								excluded.pattern,
-								length(excluded.pattern) - 2
-								) || '.%'
+								'%.' || escaped.like_pattern || '.%'
+								ESCAPE E'\\'
 								)
 							) OR (
 								right(excluded.pattern, 2) <> '.*'
 								AND (
 								parsed.hostname = excluded.pattern
 								OR parsed.hostname LIKE
-								'%.' || excluded.pattern
+								'%.' || escaped.like_pattern
+								ESCAPE E'\\'
 								)
 							)
 						)
@@ -1210,26 +1232,50 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 								)
 							)) AS hostname
 						) AS parsed
+						CROSS JOIN LATERAL (
+							SELECT replace(
+								replace(
+									replace(
+										CASE
+											WHEN right(
+												excluded.pattern,
+												2
+											) = '.*'
+											THEN left(
+												excluded.pattern,
+												length(
+													excluded.pattern
+												) - 2
+											)
+											ELSE excluded.pattern
+										END,
+										E'\\',
+										E'\\\\'
+									),
+									E'%',
+									E'\\%'
+								),
+								E'_',
+								E'\\_'
+							) AS like_pattern
+						) AS escaped
 						WHERE (
 							right(excluded.pattern, 2) = '.*'
 							AND (
 								parsed.hostname LIKE
-								left(
-								excluded.pattern,
-								length(excluded.pattern) - 2
-								) || '.%'
+								escaped.like_pattern || '.%'
+								ESCAPE E'\\'
 								OR parsed.hostname LIKE
-								'%.' || left(
-								excluded.pattern,
-								length(excluded.pattern) - 2
-								) || '.%'
+								'%.' || escaped.like_pattern || '.%'
+								ESCAPE E'\\'
 							)
 						) OR (
 							right(excluded.pattern, 2) <> '.*'
 							AND (
 								parsed.hostname = excluded.pattern
 								OR parsed.hostname LIKE
-								'%.' || excluded.pattern
+								'%.' || escaped.like_pattern
+								ESCAPE E'\\'
 							)
 						)
 					)
@@ -1451,6 +1497,15 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 				`, int64(runID), rawOrigin); err != nil {
 					return fmt.Errorf("record network-rejected admission: %w", err)
 				}
+				if err := upsertDurableAdmissionOutcome(
+					ctx,
+					tx,
+					rawOrigin,
+					"network_rejected",
+					now.UTC(),
+				); err != nil {
+					return err
+				}
 				continue
 			}
 			if _, err := tx.Exec(ctx, `
@@ -1542,6 +1597,15 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 				`, int64(runID), rawOrigin); err != nil {
 					return fmt.Errorf("record existing discovery source: %w", err)
 				}
+				if err := upsertDurableAdmissionOutcome(
+					ctx,
+					tx,
+					rawOrigin,
+					"existing",
+					now.UTC(),
+				); err != nil {
+					return err
+				}
 				continue
 			}
 			if staleTerminalEvidence {
@@ -1625,6 +1689,15 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 				WHERE admission_run_id = $1 AND candidate_origin = $2
 			`, int64(runID), rawOrigin); err != nil {
 				return fmt.Errorf("record promoted admission: %w", err)
+			}
+			if err := upsertDurableAdmissionOutcome(
+				ctx,
+				tx,
+				rawOrigin,
+				"promoted",
+				now.UTC(),
+			); err != nil {
+				return err
 			}
 			promotions++
 		}
@@ -1737,6 +1810,33 @@ func prepareAdmissionCandidates(
 	return prepared, nil
 }
 
+func upsertDurableAdmissionOutcome(
+	ctx context.Context,
+	tx pgx.Tx,
+	candidateOrigin string,
+	outcome string,
+	updatedAt time.Time,
+) error {
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO discovery_candidate_admission_state (
+			candidate_origin,
+			outcome,
+			updated_at
+		)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (candidate_origin) DO UPDATE
+		SET
+			outcome = EXCLUDED.outcome,
+			updated_at = EXCLUDED.updated_at
+	`, candidateOrigin, outcome, updatedAt); err != nil {
+		return fmt.Errorf(
+			"record durable admission outcome: %w",
+			err,
+		)
+	}
+	return nil
+}
+
 func validExcludedHostSuffixes(value string) bool {
 	for _, suffix := range strings.Split(value, ",") {
 		suffix = strings.TrimSpace(suffix)
@@ -1746,7 +1846,7 @@ func validExcludedHostSuffixes(value string) bool {
 		family := strings.TrimSuffix(suffix, ".*")
 		if strings.ToLower(suffix) != suffix || strings.HasPrefix(suffix, ".") ||
 			strings.HasSuffix(family, ".") || family == "" ||
-			strings.ContainsAny(family, "/:@?#*") ||
+			strings.ContainsAny(family, `/:@?#*_%\`) ||
 			(strings.Contains(suffix, "*") && suffix != family+".*") {
 			return false
 		}

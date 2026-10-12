@@ -181,6 +181,33 @@ Disallow: /empty
 			rawURL: "https://example.com/empty/page",
 			want:   true,
 		},
+		{
+			name: "invalid user-agent does not attach to prior group",
+			robots: `
+User-agent: *
+Disallow: /star-only
+
+User-agent: Bad Bot
+Disallow: /leaked-into-star
+`,
+			rawURL: "https://example.com/leaked-into-star",
+			want:   true,
+		},
+		{
+			name: "invalid user-agent resets before exact group",
+			robots: `
+User-agent: *
+Disallow: /star
+
+User-agent: Bad Bot
+Disallow: /ignored-invalid
+
+User-agent: Joshternet-Joshbot
+Disallow: /exact
+`,
+			rawURL: "https://example.com/ignored-invalid",
+			want:   true,
+		},
 	}
 
 	for _, test := range tests {

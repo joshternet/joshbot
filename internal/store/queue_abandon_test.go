@@ -78,6 +78,52 @@ func TestQueueAbandonVerificationReleasesAuthoritativeLease(
 		)
 	}
 
+	var abandonEvents int
+	if err := pool.QueryRow(
+		ctx,
+		`
+			SELECT count(*)
+			FROM verification_queue_events
+			WHERE origin = $1
+				AND event = 'abandoned'
+		`,
+		source.String(),
+	).Scan(&abandonEvents); err != nil {
+		t.Fatalf(
+			"count abandoned events: %v",
+			err,
+		)
+	}
+	if abandonEvents != 1 {
+		t.Fatalf(
+			"abandoned events = %d, want 1",
+			abandonEvents,
+		)
+	}
+
+	var completedEvents int
+	if err := pool.QueryRow(
+		ctx,
+		`
+			SELECT count(*)
+			FROM verification_queue_events
+			WHERE origin = $1
+				AND event = 'completed'
+		`,
+		source.String(),
+	).Scan(&completedEvents); err != nil {
+		t.Fatalf(
+			"count completed events: %v",
+			err,
+		)
+	}
+	if completedEvents != 0 {
+		t.Fatalf(
+			"completed events = %d, want 0",
+			completedEvents,
+		)
+	}
+
 	after := readQueueState(
 		t,
 		pool,

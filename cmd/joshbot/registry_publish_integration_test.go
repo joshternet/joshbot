@@ -3,12 +3,68 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/joshternet/joshbot/internal/githubpublish"
 )
+
+func TestRegistryPublishIntegrationBackoffCapsAtMaximum(t *testing.T) {
+	root := t.TempDir()
+	name, err := automaticSnapshotNameFor(
+		time.Now().UTC(),
+		bytes.NewReader(bytes.Repeat([]byte{0xAA}, 16)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRegistryPointer(root, name); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	var delays []time.Duration
+
+	if err := runRegistryPublish(
+		context.Background(),
+		time.Hour,
+		root,
+		func(context.Context, string) (githubpublish.Result, error) {
+			calls++
+			return githubpublish.Result{}, errors.New("integration publish failure")
+		},
+		func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			if calls >= 8 {
+				return errors.New("stop")
+			}
+			return nil
+		},
+		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if calls != 8 {
+		t.Fatalf("publish calls = %d, want 8", calls)
+	}
+
+	for _, delay := range delays[len(delays)-2:] {
+		if delay != registryPublishMaxBackoff {
+			t.Fatalf(
+				"capped delay = %v, want %v (delays = %v)",
+				delay, registryPublishMaxBackoff, delays,
+			)
+		}
+	}
+}
 
 func TestRegistryPublishIntegration(t *testing.T) {
 	t.Run("interval", TestRegistryPublishInterval)
