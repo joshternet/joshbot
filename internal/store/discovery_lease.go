@@ -223,6 +223,16 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 						FOR UPDATE OF schedule
 							SKIP LOCKED
 						LIMIT 1
+					),
+					locked_state AS (
+						SELECT state.source_origin
+						FROM discovery_source_state
+							AS state
+						WHERE state.source_origin = (
+							SELECT source_origin
+							FROM scheduled_candidate
+						)
+						FOR UPDATE OF state
 					)
 					INSERT INTO discovery_source_state (
 						source_origin,
@@ -233,13 +243,17 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 						lease_expires_at
 					)
 					SELECT
-						source_origin,
-						seeded,
+						candidate.source_origin,
+						candidate.seeded,
 						1,
 						$6::text,
 						$1::timestamptz,
 						$5::timestamptz
-					FROM scheduled_candidate
+					FROM scheduled_candidate AS candidate
+					WHERE (
+						SELECT count(*)
+						FROM locked_state
+					) >= 0
 					ON CONFLICT (source_origin) DO UPDATE
 					SET
 						lease_generation =
@@ -251,6 +265,11 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 							EXCLUDED.last_claimed_at,
 						lease_expires_at =
 							EXCLUDED.lease_expires_at
+					WHERE
+						discovery_source_state.
+							lease_expires_at IS NULL
+						OR discovery_source_state.
+							lease_expires_at <= $1
 					RETURNING
 						source_origin,
 						lease_generation,
@@ -299,6 +318,35 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 						AND finished_at IS NULL
 				`,
 				source.String(),
+				now,
+			); err != nil {
+				return fmt.Errorf(
+					"store: cancel abandoned crawl runs: %w",
+					err,
+				)
+			}
+
+			if _, err := tx.Exec(
+				ctx,
+				`
+					UPDATE crawl_runs AS run
+					SET
+						finished_at = $1,
+						outcome = 'canceled',
+						stop_reason = 'abandoned'
+					WHERE run.outcome = 'running'
+						AND run.finished_at IS NULL
+						AND NOT EXISTS (
+							SELECT 1
+							FROM discovery_source_state
+								AS state
+							WHERE state.source_origin =
+								run.source_origin
+								AND state.lease_expires_at
+									IS NOT NULL
+								AND state.lease_expires_at > $1
+						)
+				`,
 				now,
 			); err != nil {
 				return fmt.Errorf(
@@ -357,6 +405,17 @@ func (s *DiscoveryStore) RenewDiscoverySourceLease(
 		ctx,
 		s.pool,
 		func(tx pgx.Tx) error {
+			if _, err := tx.Exec(
+				ctx,
+				"SELECT pg_advisory_xact_lock($1)",
+				discoveryClaimAdvisoryLockKey,
+			); err != nil {
+				return fmt.Errorf(
+					"store: lock discovery claim: %w",
+					err,
+				)
+			}
+
 			now, err := s.clock.NowTransaction(
 				ctx,
 				tx,

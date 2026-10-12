@@ -445,7 +445,16 @@ func TestCrawlRunnerLeaseCrawlFailureCompletion(
 			wantCategory: retry.CategoryProcessor,
 		},
 		{
-			name: "partial success resets failure",
+			name: "partial parse with processor failure",
+			result: CrawlResult{
+				Source:         source,
+				PagesAttempted: 2,
+				PagesParsed:    1,
+			},
+			wantCategory: retry.CategoryProcessor,
+		},
+		{
+			name: "partial parse keeps typed failure",
 			result: CrawlResult{
 				Source:          source,
 				PagesAttempted:  2,
@@ -453,7 +462,8 @@ func TestCrawlRunnerLeaseCrawlFailureCompletion(
 				FailureCategory: retry.CategoryHTTP5xx,
 				RetryAfter:      time.Hour,
 			},
-			wantCategory: retry.CategoryNone,
+			wantCategory:   retry.CategoryHTTP5xx,
+			wantRetryAfter: time.Hour,
 		},
 		{
 			name: "typed transient failure",

@@ -349,11 +349,13 @@ func TestRunOncePreservesVerificationFailure(
 ) {
 	source := mustWorkerOrigin(t)
 	verifyError := errors.New("test verification failure")
-	queue := &fakeQueue{
-		claims: []fakeClaim{
-			{
-				lease: workerTestLease(source),
-				found: true,
+	queue := &recordingAbandonQueue{
+		fakeQueue: &fakeQueue{
+			claims: []fakeClaim{
+				{
+					lease: workerTestLease(source),
+					found: true,
+				},
 			},
 		},
 	}
@@ -385,6 +387,79 @@ func TestRunOncePreservesVerificationFailure(
 			"CompleteVerification() calls = %d, want 0",
 			queue.completeCalls,
 		)
+	}
+
+	if queue.abandonCalls != 1 {
+		t.Fatalf(
+			"AbandonVerification() calls = %d, want 1",
+			queue.abandonCalls,
+		)
+	}
+}
+
+func TestRunOnceBacksOffBetweenTransientVerifyRetries(
+	t *testing.T,
+) {
+	source := mustWorkerOrigin(t)
+	queue := &fakeQueue{claims: []fakeClaim{{
+		lease: workerTestLease(source), found: true,
+	}}}
+	verifier := &fakeVerifier{}
+	verifier.verify = func(
+		context.Context,
+		origin.Origin,
+	) (declaration.Result, error) {
+		if verifier.calls < retry.MaxAttemptsPerCycle {
+			return declaration.Result{
+				Outcome:    declaration.OutcomeUnavailable,
+				Origin:     source,
+				RetryAfter: 3 * time.Second,
+			}, nil
+		}
+		return workerTestResult(source), nil
+	}
+	var waits []time.Duration
+	waiter := waitStrategyFunc(
+		func(
+			_ context.Context,
+			delay time.Duration,
+		) error {
+			waits = append(waits, delay)
+			return nil
+		},
+	)
+	runtime, err := newWorker(
+		queue,
+		verifier,
+		workerTestConfig(),
+		waiter,
+		contextTimeoutFactory{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if worked, runErr := runtime.RunOnce(
+		context.Background(),
+	); runErr != nil || !worked {
+		t.Fatalf("RunOnce() = %v, %v", worked, runErr)
+	}
+
+	wantWaits := retry.MaxAttemptsPerCycle - 1
+	if len(waits) != wantWaits {
+		t.Fatalf(
+			"backoff waits = %v, want %d entries",
+			waits,
+			wantWaits,
+		)
+	}
+	for _, delay := range waits {
+		if delay != 3*time.Second {
+			t.Fatalf(
+				"backoff delay = %v, want 3s",
+				delay,
+			)
+		}
 	}
 }
 

@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,6 +57,121 @@ func (queue *recordingAbandonQueue) AbandonVerification(
 	}
 
 	return queue.abandonError
+}
+
+func TestRunOnceJoinsHardVerifyAndAbandonFailures(
+	t *testing.T,
+) {
+	source := mustWorkerOrigin(t)
+	verifyError := errors.New("test verification failure")
+	abandonError := errors.New("test abandonment failure")
+	queue := &recordingAbandonQueue{
+		fakeQueue: &fakeQueue{
+			claims: []fakeClaim{
+				{
+					lease: workerTestLease(source),
+					found: true,
+				},
+			},
+		},
+		abandonError: abandonError,
+	}
+	runtime := newWorkerForTest(
+		t,
+		queue,
+		&fakeVerifier{err: verifyError},
+		workerTestConfig(),
+	)
+
+	worked, err := runtime.RunOnce(context.Background())
+	if !worked {
+		t.Fatal("RunOnce() worked = false, want true")
+	}
+	if !errors.Is(err, verifyError) {
+		t.Fatalf("RunOnce() error = %v, want verify failure", err)
+	}
+	if !errors.Is(err, abandonError) {
+		t.Fatalf("RunOnce() error = %v, want abandon failure", err)
+	}
+	if !strings.Contains(err.Error(), "worker: abandon verification") {
+		t.Fatalf("RunOnce() error = %v, want wrapped abandon failure", err)
+	}
+}
+
+func TestRunOnceSurfacesRetryBackoffWaitFailure(
+	t *testing.T,
+) {
+	source := mustWorkerOrigin(t)
+	queue := &fakeQueue{claims: []fakeClaim{{
+		lease: workerTestLease(source), found: true,
+	}}}
+	verifier := &fakeVerifier{}
+	verifier.verify = func(
+		context.Context,
+		origin.Origin,
+	) (declaration.Result, error) {
+		return declaration.Result{
+			Outcome:         declaration.OutcomeUnavailable,
+			Origin:          source,
+			FailureCategory: retry.CategoryHTTP5xx,
+			RetryAfter:      time.Second,
+		}, nil
+	}
+	want := errors.New("backoff wait canceled")
+	waiter := waitStrategyFunc(
+		func(context.Context, time.Duration) error {
+			return want
+		},
+	)
+	runtime, err := newWorker(
+		queue,
+		verifier,
+		workerTestConfig(),
+		waiter,
+		contextTimeoutFactory{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	worked, runErr := runtime.RunOnce(context.Background())
+	if !worked {
+		t.Fatal("RunOnce() worked = false, want true")
+	}
+	if !errors.Is(runErr, want) {
+		t.Fatalf("RunOnce() error = %v, want %v", runErr, want)
+	}
+}
+
+func TestAbandonHardVerifyFailurePreservesParentCancellation(
+	t *testing.T,
+) {
+	source := mustWorkerOrigin(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	queue := &recordingAbandonQueue{
+		fakeQueue: &fakeQueue{},
+		abandon: func(context.Context, store.Lease) error {
+			cancel()
+			return errors.New("abandon failed")
+		},
+	}
+	runtime := newWorkerForTest(
+		t,
+		queue,
+		&fakeVerifier{},
+		workerTestConfig(),
+	)
+
+	err := runtime.abandonHardVerifyFailure(
+		ctx,
+		workerTestLease(source),
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf(
+			"abandonHardVerifyFailure() error = %v, want canceled",
+			err,
+		)
+	}
 }
 
 func TestRunOnceAbandonsTimedOutVerificationAfterCompletionFailure(

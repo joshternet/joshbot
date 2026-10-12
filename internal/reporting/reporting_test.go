@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const testToken = "test-reporting-token"
+const testToken = "0123456789abcdef0123456789abcdef"
 
 var testNow = time.Date(
 	2026,
@@ -134,18 +134,26 @@ func TestNewHandlerValidatesDependencies(
 		)
 	}
 
-	if _, err := newHandler(
-		reader,
+	for _, token := range []string{
 		"",
-		func() time.Time {
-			return testNow
-		},
-	); !errors.Is(err, errTokenUnavailable) {
-		t.Errorf(
-			"newHandler(empty token) error = %v, want %v",
-			err,
-			errTokenUnavailable,
-		)
+		"short",
+		strings.Repeat("x", 32),
+		"test-reporting-token",
+	} {
+		if _, err := newHandler(
+			reader,
+			token,
+			func() time.Time {
+				return testNow
+			},
+		); !errors.Is(err, errTokenUnavailable) {
+			t.Errorf(
+				"newHandler(%q) error = %v, want %v",
+				token,
+				err,
+				errTokenUnavailable,
+			)
+		}
 	}
 
 	handler, err := NewHandler(

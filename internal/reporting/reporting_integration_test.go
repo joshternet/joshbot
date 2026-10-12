@@ -17,7 +17,7 @@ import (
 	"github.com/joshternet/joshbot/internal/store"
 )
 
-const reportingIntegrationToken = "integration-reporting-token"
+const reportingIntegrationToken = "0123456789abcdef0123456789abcdef"
 
 var reportingIntegrationSchemaSequence uint64
 

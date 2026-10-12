@@ -256,7 +256,9 @@ func newWebBotAuthConformanceClient(
 ) webBotAuthConformanceClient {
 	return robots.NewCheckerWithRequestDelayAndSigner(
 		net.DefaultResolver,
-		&net.Dialer{},
+		&net.Dialer{
+			Timeout: defaultDiscoveryPageTimeout,
+		},
 		requestDelay,
 		signer,
 	)

@@ -97,20 +97,16 @@ type automaticCandidateStore interface {
 		context.Context,
 		discovery.CrawlRunID,
 	) ([]discovery.Candidate, error)
-	AdmitAutomaticCandidates(
-		context.Context,
-		discovery.CrawlRunID,
-		[]discovery.Candidate,
-	) error
-}
-
-type retryingAutomaticCandidateStore interface {
 	CompleteAutomaticCandidates(
 		context.Context,
 		discovery.CrawlRunID,
 		[]store.AutomaticCandidateResult,
 	) error
 }
+
+const discoveryAdmissionDNSRetryDelay = 100 * time.Millisecond
+
+var sleepAdmissionDNSRetry = sleepRegistryInterval
 
 // FinalizeCandidates resolves every pending link through netguard immediately
 // before asking PostgreSQL to admit candidates under this crawl run's budgets.
@@ -136,16 +132,11 @@ func (sink runtimeCandidateSink) FinalizeCandidates(
 		0,
 		len(pending),
 	)
-	eligible := make(
-		[]discovery.Candidate,
-		0,
-		len(pending),
-	)
 
 	for _, candidate := range pending {
 		category := retry.CategoryNone
 
-		for range retry.MaxAttemptsPerCycle {
+		for attempt := 0; attempt < retry.MaxAttemptsPerCycle; attempt++ {
 			_, resolveErr := netguard.Resolve(
 				ctx,
 				candidate.Origin,
@@ -163,6 +154,17 @@ func (sink runtimeCandidateSink) FinalizeCandidates(
 			if !category.Transient() {
 				break
 			}
+
+			if attempt+1 >= retry.MaxAttemptsPerCycle {
+				break
+			}
+
+			if err := sleepAdmissionDNSRetry(
+				ctx,
+				discoveryAdmissionDNSRetryDelay,
+			); err != nil {
+				return err
+			}
 		}
 
 		decisions = append(
@@ -172,28 +174,12 @@ func (sink runtimeCandidateSink) FinalizeCandidates(
 				FailureCategory: category,
 			},
 		)
-
-		if category == retry.CategoryNone {
-			eligible = append(
-				eligible,
-				candidate,
-			)
-		}
 	}
 
-	if retryingStore, ok :=
-		sink.store.(retryingAutomaticCandidateStore); ok {
-		return retryingStore.CompleteAutomaticCandidates(
-			ctx,
-			runID,
-			decisions,
-		)
-	}
-
-	return admissionStore.AdmitAutomaticCandidates(
+	return admissionStore.CompleteAutomaticCandidates(
 		ctx,
 		runID,
-		eligible,
+		decisions,
 	)
 }
 
@@ -301,7 +287,9 @@ func newDiscoveryRuntimeWithStoreFactory(
 
 	checker := robots.NewCheckerWithRequestDelayAndSigner(
 		net.DefaultResolver,
-		&net.Dialer{},
+		&net.Dialer{
+			Timeout: settings.crawl.PageTimeout,
+		},
 		settings.crawl.RequestDelay,
 		settings.signer,
 	)
@@ -358,9 +346,7 @@ func (operations runtimeOperations) discover(
 
 	leaseOwner, err := loadServiceInstanceID(
 		operations.getenv,
-		discoveryServiceInstanceFallback(
-			operations.getenv,
-		),
+		operations.random,
 	)
 	if err != nil {
 		return err

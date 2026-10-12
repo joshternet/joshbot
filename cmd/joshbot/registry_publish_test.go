@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -178,6 +179,33 @@ func TestAutomaticSnapshotNames(t *testing.T) {
 	); !errors.Is(err, errRegistryEntropyUnavailable) {
 		t.Fatalf("read entropy error = %v", err)
 	}
+
+	shortReads := &shortRegistryEntropy{}
+	name, err = automaticSnapshotNameFor(now, shortReads)
+	if err != nil {
+		t.Fatalf("short-read entropy error = %v", err)
+	}
+	if !validAutomaticSnapshotName(name) {
+		t.Fatalf("short-read snapshot name %q is not valid", name)
+	}
+	if shortReads.reads < 2 {
+		t.Fatalf("short-read calls = %d, want multiple", shortReads.reads)
+	}
+}
+
+type shortRegistryEntropy struct {
+	reads int
+}
+
+func (reader *shortRegistryEntropy) Read(
+	target []byte,
+) (int, error) {
+	reader.reads++
+	if len(target) == 0 {
+		return 0, nil
+	}
+	target[0] = byte(reader.reads)
+	return 1, nil
 }
 
 func TestRegistryPointerRoundTrip(t *testing.T) {
@@ -192,6 +220,18 @@ func TestRegistryPointerRoundTrip(t *testing.T) {
 
 	if err := writeRegistryPointer(root, name); err != nil {
 		t.Fatal(err)
+	}
+	info, err := os.Stat(
+		filepath.Join(root, registryCurrentName),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf(
+			"pointer mode = %04o, want 0644",
+			info.Mode().Perm(),
+		)
 	}
 	got, err := readRegistryPointer(root)
 	if err != nil || got != name {
@@ -305,11 +345,30 @@ func TestRemoveOldAutomaticSnapshots(t *testing.T) {
 		t.Fatal("reading a file as a directory succeeded")
 	}
 
-	leftover := filepath.Join(
+	invalidLeftover := filepath.Join(
 		root,
 		automaticSnapshotPrefix+"leftover",
 	)
-	if err := os.Mkdir(leftover, 0o755); err != nil {
+	if err := os.Mkdir(invalidLeftover, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeOldAutomaticSnapshots(
+		root,
+		current,
+		previous,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(invalidLeftover); err != nil {
+		t.Fatalf("invalid snapshot name was removed: %v", err)
+	}
+
+	validOld := automaticSnapshotPrefix +
+		"20260930T000003Z-" + strings.Repeat("d", 32)
+	if err := os.Mkdir(
+		filepath.Join(root, validOld),
+		0o755,
+	); err != nil {
 		t.Fatal(err)
 	}
 	original := removeSnapshotDirectory
@@ -326,7 +385,9 @@ func TestRemoveOldAutomaticSnapshots(t *testing.T) {
 	); err == nil {
 		t.Fatal("snapshot removal failure was ignored")
 	}
-	if _, err := os.Lstat(leftover); err != nil {
+	if _, err := os.Lstat(
+		filepath.Join(root, validOld),
+	); err != nil {
 		t.Fatalf("failed removal deleted the snapshot: %v", err)
 	}
 }
@@ -586,6 +647,7 @@ func TestRegistryPublishLoopPublishesANewSnapshot(t *testing.T) {
 	}
 
 	calls := 0
+	var delays []time.Duration
 	err = runRegistryPublish(
 		context.Background(),
 		15*time.Minute,
@@ -606,7 +668,8 @@ func TestRegistryPublishLoopPublishesANewSnapshot(t *testing.T) {
 				return githubpublish.Result{}, nil
 			}
 		},
-		func(context.Context, time.Duration) error {
+		func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
 			if calls == 2 {
 				if err := writeRegistryPointer(
 					root,
@@ -627,6 +690,70 @@ func TestRegistryPublishLoopPublishesANewSnapshot(t *testing.T) {
 	}
 	if calls != 3 {
 		t.Fatalf("publish calls = %d, want 3", calls)
+	}
+	if len(delays) < 2 ||
+		delays[0] != registryPublishFollowInterval ||
+		delays[1] != registryPublishFollowInterval {
+		t.Fatalf(
+			"publish delays = %v, want failure backoff then reset",
+			delays,
+		)
+	}
+}
+
+func TestRegistryPublishLoopBacksOffOnFailure(t *testing.T) {
+	root := t.TempDir()
+	name, err := automaticSnapshotNameFor(
+		time.Now().UTC(),
+		strings.NewReader(strings.Repeat("g", 16)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRegistryPointer(root, name); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	var delays []time.Duration
+	err = runRegistryPublish(
+		context.Background(),
+		15*time.Minute,
+		root,
+		func(context.Context, string) (githubpublish.Result, error) {
+			calls++
+			return githubpublish.Result{}, errors.New("github unavailable")
+		},
+		func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			if calls >= 8 {
+				return errors.New("stop")
+			}
+			return nil
+		},
+		discardRegistryLogger(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 8 {
+		t.Fatalf("publish calls = %d, want 8", calls)
+	}
+	wantDelays := []time.Duration{
+		registryPublishFollowInterval,
+		2 * registryPublishFollowInterval,
+		4 * registryPublishFollowInterval,
+		8 * registryPublishFollowInterval,
+		16 * registryPublishFollowInterval,
+		32 * registryPublishFollowInterval,
+		registryPublishMaxBackoff,
+		registryPublishMaxBackoff,
+	}
+	if !reflect.DeepEqual(delays, wantDelays) {
+		t.Fatalf("publish delays = %v, want %v", delays, wantDelays)
 	}
 }
 

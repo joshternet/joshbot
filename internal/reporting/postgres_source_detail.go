@@ -91,6 +91,14 @@ func (reader *PostgresReader) sourceDetailBase(
 		crawlRequestDelayMilliseconds int64
 		crawlRedirectLimit            int
 		crawlPageTimeoutMilliseconds  int64
+		crawlPromotionsAdmitted       int
+		crawlPromotionsDeferred       int
+		crawlFailureCategory          string
+		crawlPagesBlocked             int
+		crawlPagesFailed              int
+		crawlURLsFound                int
+		crawlURLsEnqueued             int
+		crawlFrontierRemaining        int
 
 		robotsPresent  bool
 		robotsRunID    int64
@@ -194,6 +202,26 @@ func (reader *PostgresReader) sourceDetailBase(
 						page_timeout_milliseconds,
 					0
 				),
+				COALESCE(
+					latest_crawl.promotions_admitted,
+					0
+				),
+				COALESCE(
+					latest_crawl.promotions_deferred,
+					0
+				),
+				COALESCE(
+					latest_crawl.failure_category,
+					''
+				),
+				COALESCE(latest_crawl.pages_blocked, 0),
+				COALESCE(latest_crawl.pages_failed, 0),
+				COALESCE(latest_crawl.urls_found, 0),
+				COALESCE(latest_crawl.urls_enqueued, 0),
+				COALESCE(
+					latest_crawl.frontier_remaining,
+					0
+				),
 
 				latest_robots.run_id IS NOT NULL,
 				COALESCE(latest_robots.run_id, 0),
@@ -253,7 +281,15 @@ func (reader *PostgresReader) sourceDetailBase(
 					run.max_page_bytes,
 					run.request_delay_milliseconds,
 					run.redirect_limit,
-					run.page_timeout_milliseconds
+					run.page_timeout_milliseconds,
+					run.promotions_admitted,
+					run.promotions_deferred,
+					run.failure_category,
+					run.pages_blocked,
+					run.pages_failed,
+					run.urls_found,
+					run.urls_enqueued,
+					run.frontier_remaining
 				FROM crawl_runs AS run
 				WHERE run.source_origin =
 						source.source_origin
@@ -322,6 +358,14 @@ func (reader *PostgresReader) sourceDetailBase(
 		&crawlRequestDelayMilliseconds,
 		&crawlRedirectLimit,
 		&crawlPageTimeoutMilliseconds,
+		&crawlPromotionsAdmitted,
+		&crawlPromotionsDeferred,
+		&crawlFailureCategory,
+		&crawlPagesBlocked,
+		&crawlPagesFailed,
+		&crawlURLsFound,
+		&crawlURLsEnqueued,
+		&crawlFrontierRemaining,
 
 		&robotsPresent,
 		&robotsRunID,
@@ -372,6 +416,14 @@ func (reader *PostgresReader) sourceDetailBase(
 			RequestDelayMilliseconds: crawlRequestDelayMilliseconds,
 			RedirectLimit:            crawlRedirectLimit,
 			PageTimeoutMilliseconds:  crawlPageTimeoutMilliseconds,
+			PromotionsAdmitted:       crawlPromotionsAdmitted,
+			PromotionsDeferred:       crawlPromotionsDeferred,
+			FailureCategory:          crawlFailureCategory,
+			PagesBlocked:             crawlPagesBlocked,
+			PagesFailed:              crawlPagesFailed,
+			URLsFound:                crawlURLsFound,
+			URLsEnqueued:             crawlURLsEnqueued,
+			FrontierRemaining:        crawlFrontierRemaining,
 		}
 	}
 

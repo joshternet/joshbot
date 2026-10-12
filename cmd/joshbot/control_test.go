@@ -302,11 +302,14 @@ func TestServeControl(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			err := serveControl(ctx, server, listener, time.Second)
-			if test.shutdownErr != nil {
-				server.serveResult <- http.ErrServerClosed
-			}
 			if (err != nil) != test.wantError {
 				t.Errorf("error = %v, wantError %v", err, test.wantError)
+			}
+			if test.shutdownErr != nil && server.closeCalls != 1 {
+				t.Errorf(
+					"Close() calls = %d, want 1 after shutdown failure",
+					server.closeCalls,
+				)
 			}
 		})
 	}

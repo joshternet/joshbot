@@ -200,6 +200,38 @@ func TestCrawlRunnerFailureIntegrationPrivateValidationBoundaries(
 	}
 }
 
+func TestCrawlRunnerFailureIntegrationNilContextValidation(
+	t *testing.T,
+) {
+	runner, err := NewCrawlRunner(
+		&crawlRunnerFailureIntegrationStore{},
+		crawlRunnerFailureIntegrationCrawler{},
+		CrawlRunnerConfig{
+			DiscoveryInterval: time.Hour,
+			PollInterval:      time.Second,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCrawlRunner() error = %v", err)
+	}
+
+	var nilContext context.Context
+
+	if _, err := runner.RunOnce(nilContext); !errors.Is(err, errInvalidContext) {
+		t.Errorf(
+			"RunOnce(nil ctx) error = %v, want %v",
+			err, errInvalidContext,
+		)
+	}
+
+	if err := runner.Run(nilContext); !errors.Is(err, errInvalidContext) {
+		t.Errorf(
+			"Run(nil ctx) error = %v, want %v",
+			err, errInvalidContext,
+		)
+	}
+}
+
 func TestCrawlRunnerFailureIntegrationRunReturnsWaitFailure(
 	t *testing.T,
 ) {

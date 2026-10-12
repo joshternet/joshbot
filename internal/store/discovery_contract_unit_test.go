@@ -548,6 +548,10 @@ func TestValidExcludedHostSuffixesWithoutDatabase(
 		"example.com#fragment",
 		"*",
 		"blogspot.*.example",
+		"foo_bar.example",
+		"foo%bar.example",
+		`foo\bar.example`,
+		"under_score.*",
 	}
 
 	for _, value := range invalid {

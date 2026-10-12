@@ -434,6 +434,11 @@ func TestReadGitHubToken(t *testing.T) {
 			want:  "github-token",
 		},
 		{
+			name:  "trailing CRLF",
+			input: "github-token\r\n",
+			want:  "github-token",
+		},
+		{
 			name:  "maximum token size",
 			input: maximumToken,
 			want:  maximumToken,

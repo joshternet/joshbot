@@ -136,7 +136,15 @@ func TestPostgresReaderSourceWithoutDatabase(
 		detail.LatestCrawl.Outcome != "complete" ||
 		detail.LatestCrawl.PagesAttempted != 4 ||
 		detail.LatestCrawl.PagesParsed != 3 ||
-		detail.LatestCrawl.CandidatesDiscovered != 2 {
+		detail.LatestCrawl.CandidatesDiscovered != 2 ||
+		detail.LatestCrawl.PromotionsAdmitted != 1 ||
+		detail.LatestCrawl.PromotionsDeferred != 2 ||
+		detail.LatestCrawl.FailureCategory != "none" ||
+		detail.LatestCrawl.PagesBlocked != 0 ||
+		detail.LatestCrawl.PagesFailed != 1 ||
+		detail.LatestCrawl.URLsFound != 5 ||
+		detail.LatestCrawl.URLsEnqueued != 6 ||
+		detail.LatestCrawl.FrontierRemaining != 7 {
 		t.Fatalf(
 			"Source().LatestCrawl = %#v",
 			detail.LatestCrawl,
@@ -503,6 +511,14 @@ func unitSourceDetailValues(
 		int64(250),
 		5,
 		int64(5000),
+		1,
+		2,
+		"none",
+		0,
+		1,
+		5,
+		6,
+		7,
 
 		true,
 		int64(42),

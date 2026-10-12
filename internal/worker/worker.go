@@ -243,6 +243,12 @@ func (w *Worker) RunOnce(
 
 	result, lease, timedOut, err := w.verifyWithRetries(ctx, lease)
 	if err != nil {
+		if abandonErr := w.abandonHardVerifyFailure(
+			ctx,
+			lease,
+		); abandonErr != nil {
+			return true, errors.Join(err, abandonErr)
+		}
 		return true, err
 	}
 
@@ -392,8 +398,43 @@ func (w *Worker) verifyWithRetries(
 			return result, current, anyTimeout, nil
 		}
 		lastResult = result
+		if attempt == retry.MaxAttemptsPerCycle {
+			break
+		}
+		backoff := result.RetryAfter
+		if backoff > 0 {
+			if waitErr := w.waiter.Wait(ctx, backoff); waitErr != nil {
+				return declaration.Result{}, current, anyTimeout, waitErr
+			}
+		}
 	}
 	return lastResult, current, anyTimeout, nil
+}
+
+func (w *Worker) abandonHardVerifyFailure(
+	ctx context.Context,
+	lease store.Lease,
+) error {
+	abandonContext, cancelAbandon := w.timeoutFactory.WithTimeout(
+		ctx,
+		w.config.CompletionGrace,
+	)
+	defer cancelAbandon()
+
+	if abandonErr := w.queue.AbandonVerification(
+		abandonContext,
+		lease,
+	); abandonErr != nil {
+		if contextError := ctx.Err(); contextError != nil {
+			return contextError
+		}
+		return fmt.Errorf(
+			"worker: abandon verification: %w",
+			abandonErr,
+		)
+	}
+
+	return nil
 }
 
 // ensureVerificationLeaseBudget renews only when remaining wall-clock lease

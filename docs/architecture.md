@@ -526,8 +526,8 @@ initial `starting` write. Their lifecycle states are `running`, `idle`,
 `paused`, `failed`, and `stopping` as applicable. Current-origin and failure
 message fields are bounded operational state, and heartbeat persistence
 failures are logged on transition into failure. Each process writes the
-logical slot in `JOSHBOT_SERVICE_INSTANCE_ID` when set, and otherwise falls
-back to the worker ID or discovery hostname. Compose pins `worker` and
+logical slot in `JOSHBOT_SERVICE_INSTANCE_ID` when set, and otherwise
+generates a unique `service-<16hex>` id. Compose pins `worker` and
 `discovery`. A newer `started_at` replaces that slot; an older process
 generation cannot overwrite it.
 

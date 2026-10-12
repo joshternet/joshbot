@@ -27,6 +27,16 @@ func TestLoadConfigReadsPasswordFile(t *testing.T) {
 			password: "correct-horse-battery-staple",
 		},
 		{
+			name:     "with trailing carriage return",
+			fileData: "correct-horse-battery-staple\r",
+			password: "correct-horse-battery-staple",
+		},
+		{
+			name:     "with trailing windows newline",
+			fileData: "correct-horse-battery-staple\r\n",
+			password: "correct-horse-battery-staple",
+		},
+		{
 			name: "maximum password with trailing newline",
 			fileData: strings.Repeat(
 				"x",

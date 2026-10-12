@@ -11,6 +11,29 @@ import (
 	"time"
 )
 
+func TestRuntimeConfigIntegrationLoadServiceInstanceIDConfigured(
+	t *testing.T,
+) {
+	getenv := func(name string) string {
+		if name == serviceInstanceIDEnvironment {
+			return "integration-configured-instance"
+		}
+		return ""
+	}
+
+	instanceID, err := loadServiceInstanceID(getenv, nil)
+	if err != nil {
+		t.Fatalf("loadServiceInstanceID() error = %v", err)
+	}
+
+	if instanceID != "integration-configured-instance" {
+		t.Errorf(
+			"loadServiceInstanceID() = %q, want integration-configured-instance",
+			instanceID,
+		)
+	}
+}
+
 func TestRuntimeConfigurationIntegrationLoadsOperationalSettingsAndWebBotAuth(
 	t *testing.T,
 ) {

@@ -21,6 +21,7 @@ func main() {
 		os.Interrupt,
 		syscall.SIGTERM,
 	)
+	defer stop()
 
 	code := run(
 		ctx,
@@ -28,7 +29,6 @@ func main() {
 		commandOutput,
 		commandErrors,
 	)
-	stop()
 
 	exitProcess(code)
 }

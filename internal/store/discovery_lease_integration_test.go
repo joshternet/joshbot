@@ -218,6 +218,458 @@ func TestDiscoverySourceLeaseReclaimCancelsAbandonedCrawlRun(
 	}
 }
 
+func TestDiscoverySourceLeaseClaimAbandonsOrphanedCrawlRun(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newStoreTestPool(t)
+
+	start := queueTestTime()
+	interval := 168 * time.Hour
+	leaseDuration := 5 * time.Minute
+
+	firstClaimAt := start
+	secondClaimAt := firstClaimAt.Add(leaseDuration)
+
+	firstSource := seedDiscoveryTestSource(
+		t,
+		pool,
+		"https://a.example",
+		start,
+	)
+	secondSource := seedDiscoveryTestSource(
+		t,
+		pool,
+		"https://b.example",
+		start,
+	)
+
+	discoveryStore := newDiscoveryTestStore(
+		t,
+		pool,
+		firstClaimAt,
+		secondClaimAt,
+	)
+
+	firstLease, found, err :=
+		discoveryStore.ClaimDiscoverySourceLease(
+			ctx,
+			testDiscoveryLeaseOwner,
+			interval,
+			leaseDuration,
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("first claim found = false, want true")
+	}
+	if firstLease.Origin.String() !=
+		firstSource.String() {
+		t.Fatalf(
+			"first claim origin = %q, want %q",
+			firstLease.Origin.String(),
+			firstSource.String(),
+		)
+	}
+
+	var orphanedRunID int64
+	if err := pool.QueryRow(
+		ctx,
+		`
+			INSERT INTO crawl_runs (
+				source_origin,
+				started_at,
+				max_depth,
+				max_pages,
+				max_page_bytes,
+				request_delay_milliseconds,
+				redirect_limit,
+				page_timeout_milliseconds
+			)
+			VALUES (
+				$1,
+				$2,
+				0,
+				1,
+				1,
+				0,
+				0,
+				1
+			)
+			RETURNING id
+		`,
+		firstSource.String(),
+		firstClaimAt,
+	).Scan(&orphanedRunID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a crashed claimant: the lease expires without
+	// finishing the crawl run, and the origin is no longer due.
+	if _, err := pool.Exec(
+		ctx,
+		`
+			UPDATE discovery_source_state
+			SET
+				lease_owner = NULL,
+				lease_expires_at = NULL,
+				last_attempted_at = $2
+			WHERE source_origin = $1
+		`,
+		firstSource.String(),
+		secondClaimAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	secondLease, found, err :=
+		discoveryStore.ClaimDiscoverySourceLease(
+			ctx,
+			testDiscoveryLeaseOwner,
+			interval,
+			leaseDuration,
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal(
+			"second claim found = false, want true",
+		)
+	}
+	if secondLease.Origin.String() !=
+		secondSource.String() {
+		t.Fatalf(
+			"second claim origin = %q, want %q",
+			secondLease.Origin.String(),
+			secondSource.String(),
+		)
+	}
+
+	var (
+		outcome    string
+		stopReason string
+		finishedAt *time.Time
+	)
+	if err := pool.QueryRow(
+		ctx,
+		`
+			SELECT
+				outcome,
+				stop_reason,
+				finished_at
+			FROM crawl_runs
+			WHERE id = $1
+		`,
+		orphanedRunID,
+	).Scan(
+		&outcome,
+		&stopReason,
+		&finishedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if outcome != "canceled" {
+		t.Errorf(
+			"orphaned outcome = %q, want canceled",
+			outcome,
+		)
+	}
+	if stopReason != "abandoned" {
+		t.Errorf(
+			"orphaned stop reason = %q, want abandoned",
+			stopReason,
+		)
+	}
+	if finishedAt == nil {
+		t.Fatal("orphaned finished_at = NULL")
+	}
+	if !finishedAt.Equal(secondClaimAt) {
+		t.Errorf(
+			"orphaned finished_at = %v, want %v",
+			*finishedAt,
+			secondClaimAt,
+		)
+	}
+}
+
+func TestDiscoverySourceLeaseClaimPreservesActiveLeaseCrawlRun(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newStoreTestPool(t)
+
+	start := queueTestTime()
+	interval := 168 * time.Hour
+	leaseDuration := 5 * time.Minute
+
+	firstClaimAt := start
+	secondClaimAt := firstClaimAt.Add(time.Minute)
+
+	firstSource := seedDiscoveryTestSource(
+		t,
+		pool,
+		"https://a.example",
+		start,
+	)
+	secondSource := seedDiscoveryTestSource(
+		t,
+		pool,
+		"https://b.example",
+		start,
+	)
+
+	discoveryStore := newDiscoveryTestStore(
+		t,
+		pool,
+		firstClaimAt,
+		secondClaimAt,
+	)
+
+	firstLease, found, err :=
+		discoveryStore.ClaimDiscoverySourceLease(
+			ctx,
+			testDiscoveryLeaseOwner,
+			interval,
+			leaseDuration,
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("first claim found = false, want true")
+	}
+	if firstLease.Origin.String() !=
+		firstSource.String() {
+		t.Fatalf(
+			"first claim origin = %q, want %q",
+			firstLease.Origin.String(),
+			firstSource.String(),
+		)
+	}
+
+	var activeRunID int64
+	if err := pool.QueryRow(
+		ctx,
+		`
+			INSERT INTO crawl_runs (
+				source_origin,
+				started_at,
+				max_depth,
+				max_pages,
+				max_page_bytes,
+				request_delay_milliseconds,
+				redirect_limit,
+				page_timeout_milliseconds
+			)
+			VALUES (
+				$1,
+				$2,
+				0,
+				1,
+				1,
+				0,
+				0,
+				1
+			)
+			RETURNING id
+		`,
+		firstSource.String(),
+		firstClaimAt,
+	).Scan(&activeRunID); err != nil {
+		t.Fatal(err)
+	}
+
+	secondLease, found, err :=
+		discoveryStore.ClaimDiscoverySourceLease(
+			ctx,
+			testDiscoveryLeaseOwner,
+			interval,
+			leaseDuration,
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("second claim found = false, want true")
+	}
+	if secondLease.Origin.String() !=
+		secondSource.String() {
+		t.Fatalf(
+			"second claim origin = %q, want %q",
+			secondLease.Origin.String(),
+			secondSource.String(),
+		)
+	}
+
+	var (
+		outcome    string
+		stopReason string
+		finishedAt *time.Time
+	)
+	if err := pool.QueryRow(
+		ctx,
+		`
+			SELECT
+				outcome,
+				stop_reason,
+				finished_at
+			FROM crawl_runs
+			WHERE id = $1
+		`,
+		activeRunID,
+	).Scan(
+		&outcome,
+		&stopReason,
+		&finishedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if outcome != "running" ||
+		stopReason != "" ||
+		finishedAt != nil {
+		t.Fatalf(
+			"active crawl run = %q/%q/%v, want running/empty/NULL",
+			outcome,
+			stopReason,
+			finishedAt,
+		)
+	}
+}
+
+func TestDiscoverySourceLeaseCompleteAbandonsUnfinishedCrawlRun(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newStoreTestPool(t)
+
+	start := queueTestTime()
+	interval := 168 * time.Hour
+	leaseDuration := 5 * time.Minute
+
+	claimedAt := start
+	completedAt := claimedAt.Add(time.Minute)
+
+	source := seedDiscoveryTestSource(
+		t,
+		pool,
+		"https://example.com",
+		start,
+	)
+
+	discoveryStore := newDiscoveryTestStore(
+		t,
+		pool,
+		claimedAt,
+		completedAt,
+	)
+
+	lease, found, err :=
+		discoveryStore.ClaimDiscoverySourceLease(
+			ctx,
+			testDiscoveryLeaseOwner,
+			interval,
+			leaseDuration,
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("claim found = false, want true")
+	}
+
+	var runID int64
+	if err := pool.QueryRow(
+		ctx,
+		`
+			INSERT INTO crawl_runs (
+				source_origin,
+				started_at,
+				max_depth,
+				max_pages,
+				max_page_bytes,
+				request_delay_milliseconds,
+				redirect_limit,
+				page_timeout_milliseconds
+			)
+			VALUES (
+				$1,
+				$2,
+				0,
+				1,
+				1,
+				0,
+				0,
+				1
+			)
+			RETURNING id
+		`,
+		source.String(),
+		claimedAt,
+	).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := discoveryStore.CompleteDiscoverySourceLeaseRetry(
+		ctx,
+		lease,
+		retry.CategoryNone,
+		0,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		outcome    string
+		stopReason string
+		finishedAt *time.Time
+	)
+	if err := pool.QueryRow(
+		ctx,
+		`
+			SELECT
+				outcome,
+				stop_reason,
+				finished_at
+			FROM crawl_runs
+			WHERE id = $1
+		`,
+		runID,
+	).Scan(
+		&outcome,
+		&stopReason,
+		&finishedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if outcome != "canceled" {
+		t.Errorf(
+			"completed outcome = %q, want canceled",
+			outcome,
+		)
+	}
+	if stopReason != "abandoned" {
+		t.Errorf(
+			"completed stop reason = %q, want abandoned",
+			stopReason,
+		)
+	}
+	if finishedAt == nil {
+		t.Fatal("completed finished_at = NULL")
+	}
+	if !finishedAt.Equal(completedAt) {
+		t.Errorf(
+			"completed finished_at = %v, want %v",
+			*finishedAt,
+			completedAt,
+		)
+	}
+}
+
 func TestDiscoverySourceLeaseCrashRecovery(
 	t *testing.T,
 ) {

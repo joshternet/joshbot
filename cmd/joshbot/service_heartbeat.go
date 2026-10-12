@@ -6,10 +6,13 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/store"
 )
+
+const maxServiceHeartbeatMessageBytes = 256
 
 const serviceHeartbeatInterval = 5 * time.Second
 
@@ -133,12 +136,30 @@ func (heartbeat *serviceHeartbeat) Observe(
 	if heartbeat == nil {
 		return
 	}
-	if len(message) > 256 {
-		message = message[:256]
-	}
+	message = truncateUTF8Bytes(
+		message,
+		maxServiceHeartbeatMessageBytes,
+	)
 	heartbeat.mu.Lock()
 	heartbeat.state = state
 	heartbeat.current = currentOrigin
 	heartbeat.message = message
 	heartbeat.mu.Unlock()
+}
+
+// truncateUTF8Bytes shortens s to at most maxBytes without splitting a rune.
+func truncateUTF8Bytes(s string, maxBytes int) string {
+	if maxBytes <= 0 || len(s) <= maxBytes {
+		if maxBytes <= 0 {
+			return ""
+		}
+
+		return s
+	}
+
+	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
+		maxBytes--
+	}
+
+	return s[:maxBytes]
 }

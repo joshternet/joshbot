@@ -873,6 +873,9 @@ func TestRuntimeWorkerHeartbeatFailures(t *testing.T) {
 
 func TestRuntimeWorkerRecordsHeartbeatLifecycle(t *testing.T) {
 	operations, _ := newTestRuntimeOperations(t)
+	operations.random = bytes.NewReader(
+		make([]byte, generatedServiceInstanceIDBytes),
+	)
 	storage := &fakeHeartbeatStore{}
 	operations.newHeartbeatStore = func(*pgxpool.Pool) (heartbeatStore, error) {
 		return storage, nil
@@ -885,8 +888,13 @@ func TestRuntimeWorkerRecordsHeartbeatLifecycle(t *testing.T) {
 	if len(storage.writes) != 2 || storage.writes[0].State != "starting" || storage.writes[1].State != "stopping" {
 		t.Errorf("worker heartbeat lifecycle = %#v", storage.writes)
 	}
-	if storage.writes[0].InstanceID != "worker-test" {
-		t.Errorf("fallback heartbeat instance = %q, want worker-test", storage.writes[0].InstanceID)
+	wantInstance := "service-" + strings.Repeat("00", generatedServiceInstanceIDBytes)
+	if storage.writes[0].InstanceID != wantInstance {
+		t.Errorf(
+			"generated heartbeat instance = %q, want %q",
+			storage.writes[0].InstanceID,
+			wantInstance,
+		)
 	}
 }
 
@@ -964,6 +972,42 @@ func TestRuntimeProductionAdapters(t *testing.T) {
 
 	if database.Pool() == nil {
 		t.Error("database pool is nil")
+	}
+
+	failed, err := newPostgresDatabase(
+		context.Background(),
+		nil,
+	)
+	if err == nil || failed != nil {
+		t.Fatalf(
+			"newPostgresDatabase(nil) = %#v, %v, want nil, error",
+			failed,
+			err,
+		)
+	}
+
+	openFailure := errors.New("pool open failed")
+	originalOpen := openPostgresPool
+	openPostgresPool = func(
+		context.Context,
+		*pgxpool.Config,
+	) (*pgxpool.Pool, error) {
+		return nil, openFailure
+	}
+	t.Cleanup(func() {
+		openPostgresPool = originalOpen
+	})
+	failed, err = newPostgresDatabase(
+		context.Background(),
+		config,
+	)
+	if !errors.Is(err, openFailure) || failed != nil {
+		t.Fatalf(
+			"newPostgresDatabase(open failure) = %#v, %v, want nil, %v",
+			failed,
+			err,
+			openFailure,
+		)
 	}
 
 	ctx, cancel := context.WithCancel(
@@ -1107,7 +1151,11 @@ func newTestRuntimeOperations(
 	operations := runtimeOperations{
 		getenv: runtimeTestEnvironment(t).get,
 		random: bytes.NewReader(
-			make([]byte, generatedWorkerIDBytes),
+			make(
+				[]byte,
+				generatedWorkerIDBytes+
+					generatedServiceInstanceIDBytes,
+			),
 		),
 		logger: slog.New(
 			slog.NewTextHandler(io.Discard, nil),

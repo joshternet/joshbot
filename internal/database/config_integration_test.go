@@ -79,6 +79,41 @@ func TestDatabaseConfigIntegrationLoadsPasswordFromFilesystem(
 	}
 }
 
+func TestDatabaseConfigIntegrationStripsTrailingCRLFFromPassword(
+	t *testing.T,
+) {
+	passwordFile := filepath.Join(
+		t.TempDir(),
+		"crlf-password",
+	)
+
+	const password = "correct-horse-battery-staple"
+
+	if err := os.WriteFile(
+		passwordFile,
+		[]byte(password+"\r\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write CRLF password: %v", err)
+	}
+
+	config, err := LoadConfig(
+		integrationDatabaseURL,
+		passwordFile,
+	)
+	if err != nil {
+		t.Fatalf("LoadConfig(CRLF) error = %v", err)
+	}
+
+	if config.ConnConfig.Password != password {
+		t.Errorf(
+			"configured password = %q, want %q",
+			config.ConnConfig.Password,
+			password,
+		)
+	}
+}
+
 func TestDatabaseConfigIntegrationRejectsUnsafeAndInvalidConfiguration(
 	t *testing.T,
 ) {

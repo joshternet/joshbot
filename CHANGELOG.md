@@ -28,12 +28,90 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   access and no GitHub token.
 - `registry-publish` publishes each new snapshot. An unchanged registry
   does not create a commit. It has the GitHub token and no database access.
-- The embedded schema now contains twenty-four migrations, `0001` through
-  `0024`, including `0023_discovery_source_schedule.sql` and
-  `0024_amplification_domain_avoid.sql`.
+- The embedded schema now contains twenty-eight migrations, `0001` through
+  `0028`, including durable candidate admission state, domain-avoid LIKE
+  hardening, verification-queue `abandoned` events, and removal of the
+  WordPress domain-avoid rules.
+
+### Changed
+
+- `wordpress.com` and `wordpress.org` are no longer domain-avoid rules, and
+  existing blocks on those hosts are cleared. Sites that install the official
+  Joshternet WordPress plugin can be probed and promoted. Other avoid rules
+  stay in place.
+- Report bearer tokens now require the same strength rules as operator control
+  tokens: at least 32 bytes, printable ASCII only, and at least eight distinct
+  characters. Weak report tokens are rejected at process start.
 
 ### Fixed
 
+- staticcheck v0.8.2 understands Go 1.27.2 export data.
+- Go 1.27.2 and `golang.org/x/net` v0.60.0 close the govulncheck HTTP/2, HTTP/1, TLS, MIME, and Windows `os.Root` findings (GO-2026-6603 through GO-2026-6617).
+- Registry snapshot entropy uses full reads, publish failures back off
+  exponentially (capped), and cleanup only removes valid automatic snapshot
+  names. Snapshot pointer files stay mode `0644` so host-side export readers
+  (including deployment smoke) can read them across the container UID boundary.
+- Service heartbeat messages truncate on a UTF-8 rune boundary within the
+  256-byte limit.
+- GitHub publish tokens strip a trailing CR after LF, matching report and
+  control token files.
+- Discovery admission always completes typed candidate decisions; the
+  eligible-only admit fallback is gone.
+- Worker, discovery, and conformance dialers set a dial timeout aligned
+  with job or page timeouts.
+- When `JOSHBOT_SERVICE_INSTANCE_ID` is unset, processes generate a unique
+  `service-<16hex>` id instead of sharing a hostname or fixed default.
+  Compose already pins `worker` and `discovery`.
+- Database construction failure returns a nil connection with the error.
+- Report and control shutdown always drains the Serve goroutine after a
+  shutdown failure.
+- Main installs `defer stop()` for the signal context.
+- Discovery DNS admission retries wait a short backoff between attempts.
+- Source detail `LatestCrawl` includes the same crawl telemetry columns as the
+  crawl list (promotions, failure category, URL/frontier counters).
+- Reporting keyset pagination treats `HEAD` like `GET`.
+- Crawl detail loads at most 10,000 page attempts per run.
+- Control audit truncation is UTF-8 safe, and optional JSON bodies with unknown
+  length and an empty body are accepted as empty.
+- Retry-After second values are clamped before duration multiply to avoid
+  overflow, and non-retryable HTTP 4xx map to the permanent `http_4xx`
+  category.
+- Origin parsing strips one trailing dot from domain hosts after IDNA, and
+  rejects hosts that are empty or still end in `.` after that strip so
+  canonical serializations always round-trip.
+- Database password files strip a trailing CR the same way report tokens do.
+- Web Bot Auth directory `Content-Digest` checks require a proper `sha-256`
+  dictionary member and reject substring labels such as `xsha-256`.
+- Invalid robots `User-agent` tokens start a new group and no longer let
+  Allow/Disallow/Crawl-delay attach to the previous group.
+- Robots policy fetches no longer hold the checker mutex across the network
+  call, and the policy cache is bounded with idle eviction.
+- Per-origin request scheduling releases the origin lock while waiting for the
+  delay, without weakening politeness.
+- Discovery maps oversized and unavailable page extraction correctly, honors
+  Retry-After between root in-cycle retries, treats HTML parse failures as
+  unavailable, and classifies canceled body reads as timeouts.
+- Crawl runner rejects a nil context, and a non-zero pages-parsed count no
+  longer clears finalize, store, or processor failure categories.
+- Hard verification errors abandon the lease before return, and transient
+  verification retries wait for Retry-After backoff between attempts.
+- Unfinished crawl runs whose discovery source lease is no longer active are
+  closed as `canceled` with `stop_reason` `abandoned` (or `lease_reclaimed` on
+  same-origin reclaim). Zero-page runs no longer stay `outcome=running` for
+  days after the worker moves on (#127).
+- Discovery source claim upserts only steal a lease when it is null or expired,
+  lock schedule and source state when present, and renew takes the same claim
+  advisory lock as claim.
+- Domain-avoid LIKE matching escapes `_`, `%`, and `\`, and validation plus the
+  durable CHECK reject those metacharacters in avoid patterns.
+- Probe scheduling skips crawl-blocked origins the same way automatic admission
+  does.
+- Durable candidate admission outcomes (`network_rejected`, `promoted`,
+  `existing`) survive crawl telemetry purge so rejected candidates are not
+  revived.
+- Abandoning a verification lease records an `abandoned` queue event instead of
+  `completed`.
+- Queue claim reads its clock inside the claim transaction.
 - Concurrent queue claim tests give each database attempt its own 30-second
   limit. A shared deadline no longer cancels workers that are still claiming.
   Each claim must still succeed, and distinct origins remain required.

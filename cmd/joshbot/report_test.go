@@ -71,6 +71,7 @@ type reportTestServer struct {
 
 	serveCalls    int
 	shutdownCalls int
+	closeCalls    int
 }
 
 func (server *reportTestServer) Serve(
@@ -85,13 +86,17 @@ func (server *reportTestServer) Shutdown(
 	context.Context,
 ) error {
 	server.shutdownCalls++
+	server.serveResult <- server.shutdownServeResult
 
 	if server.shutdownErr != nil {
 		return server.shutdownErr
 	}
 
-	server.serveResult <- server.shutdownServeResult
+	return nil
+}
 
+func (server *reportTestServer) Close() error {
+	server.closeCalls++
 	return nil
 }
 
@@ -376,18 +381,18 @@ func TestReadReportToken(
 	}{
 		{
 			name: "plain",
-			raw:  "secret-token",
-			want: "secret-token",
+			raw:  "0123456789abcdef0123456789abcdef",
+			want: "0123456789abcdef0123456789abcdef",
 		},
 		{
 			name: "newline",
-			raw:  "secret-token\n",
-			want: "secret-token",
+			raw:  "0123456789abcdef0123456789abcdef\n",
+			want: "0123456789abcdef0123456789abcdef",
 		},
 		{
 			name: "windows newline",
-			raw:  "secret-token\r\n",
-			want: "secret-token",
+			raw:  "0123456789abcdef0123456789abcdef\r\n",
+			want: "0123456789abcdef0123456789abcdef",
 		},
 	}
 
@@ -478,6 +483,34 @@ func TestReadReportTokenRejectsInvalidInput(
 	}
 
 	if _, err := readReportToken(
+		strings.NewReader(
+			"short-weak-token",
+		),
+	); !errors.Is(
+		err,
+		errInvalidReportToken,
+	) {
+		t.Errorf(
+			"weak token error = %v",
+			err,
+		)
+	}
+
+	if _, err := readReportToken(
+		strings.NewReader(
+			strings.Repeat("x", 32),
+		),
+	); !errors.Is(
+		err,
+		errInvalidReportToken,
+	) {
+		t.Errorf(
+			"low-entropy token error = %v",
+			err,
+		)
+	}
+
+	if _, err := readReportToken(
 		failingReportReader{},
 	); !errors.Is(
 		err,
@@ -496,9 +529,10 @@ func TestReadReportTokenFile(
 	tokenFile := t.TempDir() +
 		"/report-token"
 
+	wantToken := "0123456789abcdef0123456789abcdef"
 	if err := os.WriteFile(
 		tokenFile,
-		[]byte("test-token\n"),
+		[]byte(wantToken+"\n"),
 		0600,
 	); err != nil {
 		t.Fatalf(
@@ -517,10 +551,11 @@ func TestReadReportTokenFile(
 		)
 	}
 
-	if token != "test-token" {
+	if token != wantToken {
 		t.Errorf(
-			"token = %q, want test-token",
+			"token = %q, want %q",
 			token,
+			wantToken,
 		)
 	}
 
@@ -1081,7 +1116,12 @@ func TestServeReport(
 				time.Second,
 			)
 
-			server.serveResult <- http.ErrServerClosed
+			if server.closeCalls != 1 {
+				t.Errorf(
+					"Close() calls = %d, want 1 after shutdown failure",
+					server.closeCalls,
+				)
+			}
 
 			if !errors.Is(
 				err,

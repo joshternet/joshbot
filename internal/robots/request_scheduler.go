@@ -101,33 +101,38 @@ func (scheduler *originRequestScheduler) wait(
 		targetOrigin,
 	)
 
-	schedule.mu.Lock()
-	defer schedule.mu.Unlock()
+	for {
+		schedule.mu.Lock()
 
-	effectiveDelay := scheduler.minimum
-	if schedule.crawlDelay > effectiveDelay {
-		effectiveDelay = schedule.crawlDelay
-	}
+		effectiveDelay := scheduler.minimum
+		if schedule.crawlDelay > effectiveDelay {
+			effectiveDelay = schedule.crawlDelay
+		}
 
-	if !schedule.lastStart.IsZero() {
+		var wait time.Duration
 		now := scheduler.now()
-		earliestStart := schedule.lastStart.Add(
-			effectiveDelay,
-		)
-
-		if earliestStart.After(now) {
-			if err := scheduler.waiter.Wait(
-				ctx,
-				earliestStart.Sub(now),
-			); err != nil {
-				return err
+		if !schedule.lastStart.IsZero() {
+			earliestStart := schedule.lastStart.Add(
+				effectiveDelay,
+			)
+			if earliestStart.After(now) {
+				wait = earliestStart.Sub(now)
 			}
 		}
+
+		if wait > 0 {
+			// Release while sleeping so other origins are not blocked.
+			schedule.mu.Unlock()
+			if err := scheduler.waiter.Wait(ctx, wait); err != nil {
+				return err
+			}
+			continue
+		}
+
+		schedule.lastStart = now
+		schedule.mu.Unlock()
+		return nil
 	}
-
-	schedule.lastStart = scheduler.now()
-
-	return nil
 }
 
 type scheduledHopGetter struct {

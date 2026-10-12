@@ -140,11 +140,10 @@ func (server *controlBoundaryIntegrationServer) Serve(net.Listener) error {
 
 func (server *controlBoundaryIntegrationServer) Shutdown(context.Context) error {
 	server.shutdownCalls++
+	server.serveResult <- server.shutdownServeResult
 	if server.shutdownErr != nil {
 		return server.shutdownErr
 	}
-
-	server.serveResult <- server.shutdownServeResult
 	return nil
 }
 
@@ -642,10 +641,6 @@ func TestControlBoundaryIntegrationServeControl(t *testing.T) {
 				time.Second,
 			)
 
-			if test.shutdownErr != nil {
-				server.serveResult <- http.ErrServerClosed
-			}
-
 			if test.want == nil {
 				if err != nil {
 					t.Errorf(
@@ -671,6 +666,43 @@ func TestControlBoundaryIntegrationServeControl(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+type controlBoundaryIntegrationClosableServer struct {
+	controlBoundaryIntegrationServer
+	closeCalls int
+}
+
+func (server *controlBoundaryIntegrationClosableServer) Close() error {
+	server.closeCalls++
+	return nil
+}
+
+func TestControlBoundaryIntegrationShutdownFailureCallsClose(t *testing.T) {
+	listener := &controlBoundaryIntegrationListener{}
+
+	server := &controlBoundaryIntegrationClosableServer{
+		controlBoundaryIntegrationServer: controlBoundaryIntegrationServer{
+			serveResult:         make(chan error, 1),
+			shutdownErr:         errControlBoundaryIntegrationFailure,
+			shutdownServeResult: http.ErrServerClosed,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := serveControl(ctx, server, listener, time.Second)
+	if !errors.Is(err, errControlBoundaryIntegrationFailure) {
+		t.Errorf(
+			"serveControl() error = %v, want %v",
+			err, errControlBoundaryIntegrationFailure,
+		)
+	}
+
+	if server.closeCalls != 1 {
+		t.Errorf("Close() calls = %d, want 1", server.closeCalls)
 	}
 }
 

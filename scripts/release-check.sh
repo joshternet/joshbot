@@ -145,6 +145,7 @@ CHANGELOG.md
 CONTRIBUTING.md
 CODE_OF_CONDUCT.md
 SECURITY.md
+THIRD_PARTY.md
 docs/architecture.md
 docs/crawler.md
 docs/retention.md
@@ -167,12 +168,14 @@ done
 
 required_executables='
 deploy/backup.sh
+deploy/restore.sh
 deploy/postgres/init/010-joshbot-roles.sh
 deploy/publish.sh
 deploy/publish_test.sh
 deploy/smoke.sh
 scripts/govulncheck.sh
 scripts/release-check.sh
+scripts/staticcheck.sh
 '
 
 for path in $required_executables; do
@@ -181,12 +184,14 @@ done
 
 shell_files='
 deploy/backup.sh
+deploy/restore.sh
 deploy/postgres/init/010-joshbot-roles.sh
 deploy/publish.sh
 deploy/publish_test.sh
 deploy/smoke.sh
 scripts/govulncheck.sh
 scripts/release-check.sh
+scripts/staticcheck.sh
 '
 
 for path in $shell_files; do

@@ -264,7 +264,7 @@ func TestScheduleProbeCandidatesWithoutDatabase(
 	t.Run(
 		"success",
 		func(t *testing.T) {
-			tx := &discoveryPolicyUnitTx{
+			baseTx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{
 						tag: pgconn.NewCommandTag(
@@ -277,6 +277,9 @@ func TestScheduleProbeCandidatesWithoutDatabase(
 						),
 					},
 				},
+			}
+			tx := &completeAutomaticCaptureTx{
+				discoveryPolicyUnitTx: baseTx,
 			}
 
 			database := discoveryPolicyDatabase(
@@ -304,6 +307,17 @@ func TestScheduleProbeCandidatesWithoutDatabase(
 				t.Fatalf(
 					"scheduleProbeCandidates() error = %v",
 					err,
+				)
+			}
+
+			joined := strings.Join(tx.execQueries, "\n")
+			if !strings.Contains(
+				joined,
+				"NOT COALESCE(source_state.crawl_blocked, false)",
+			) {
+				t.Fatalf(
+					"probe scheduling omits crawl_blocked filter:\n%s",
+					joined,
 				)
 			}
 		},

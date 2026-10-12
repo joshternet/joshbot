@@ -30,6 +30,8 @@ const (
 	automaticSnapshotPrefix = ".joshbot-automatic-"
 
 	registryPublishFollowInterval = 5 * time.Second
+
+	registryPublishMaxBackoff = 5 * time.Minute
 )
 
 var (
@@ -284,12 +286,15 @@ func runRegistryPublish(
 	)
 
 	var published string
+	backoff := registryPublishFollowInterval
 
 	for {
 		if err := ctx.Err(); err != nil {
 			logger.Info("registry publish stopped")
 			return nil
 		}
+
+		delay := registryPublishFollowInterval
 
 		name, err := readRegistryPointer(root)
 		if err != nil {
@@ -328,8 +333,14 @@ func runRegistryPublish(
 					"error",
 					err,
 				)
+				delay = backoff
+				backoff *= 2
+				if backoff > registryPublishMaxBackoff {
+					backoff = registryPublishMaxBackoff
+				}
 			} else {
 				published = name
+				backoff = registryPublishFollowInterval
 				if result.Changed {
 					logger.Info(
 						"registry published",
@@ -344,10 +355,7 @@ func runRegistryPublish(
 			}
 		}
 
-		if err := sleep(
-			ctx,
-			registryPublishFollowInterval,
-		); err != nil {
+		if err := sleep(ctx, delay); err != nil {
 			logger.Info("registry publish stopped")
 			return nil
 		}
@@ -363,7 +371,7 @@ func automaticSnapshotNameFor(
 	}
 
 	var entropy [16]byte
-	if _, err := random.Read(entropy[:]); err != nil {
+	if _, err := io.ReadFull(random, entropy[:]); err != nil {
 		return "", errRegistryEntropyUnavailable
 	}
 
@@ -457,10 +465,7 @@ func removeOldAutomaticSnapshots(
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasPrefix(
-			name,
-			automaticSnapshotPrefix,
-		) {
+		if !validAutomaticSnapshotName(name) {
 			continue
 		}
 

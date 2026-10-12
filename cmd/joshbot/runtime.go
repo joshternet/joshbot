@@ -156,15 +156,25 @@ func newRuntimeOperations(
 	}
 }
 
+// openPostgresPool creates a pgx pool; tests replace it to force open failures.
+var openPostgresPool = pgxpool.NewWithConfig
+
 func newPostgresDatabase(
 	ctx context.Context,
 	config *pgxpool.Config,
 ) (databaseConnection, error) {
-	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if config == nil {
+		return nil, errInvalidRuntimeConfiguration
+	}
+
+	pool, err := openPostgresPool(ctx, config)
+	if err != nil {
+		return nil, err
+	}
 
 	return &postgresDatabase{
 		pool: pool,
-	}, err
+	}, nil
 }
 
 func (database *postgresDatabase) Close() {
@@ -482,7 +492,7 @@ func (operations runtimeOperations) worker(
 				}
 				instanceID, err := loadServiceInstanceID(
 					operations.getenv,
-					settings.worker.WorkerID,
+					operations.random,
 				)
 				if err != nil {
 					return err
@@ -520,7 +530,9 @@ func (operations runtimeOperations) worker(
 
 			checker := robots.NewCheckerWithRequestDelayAndSigner(
 				net.DefaultResolver,
-				&net.Dialer{},
+				&net.Dialer{
+					Timeout: settings.worker.JobTimeout,
+				},
 				requestDelay,
 				signer,
 			)

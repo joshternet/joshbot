@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
@@ -468,9 +469,6 @@ func TestDiscoveryRuntimeUsesServiceInstanceAsLeaseOwner(
 		case serviceInstanceIDEnvironment:
 			return "discovery-owner"
 
-		case hostnameEnvironment:
-			return "ignored-hostname"
-
 		default:
 			return base(name)
 		}
@@ -720,10 +718,12 @@ func TestDiscoveryRuntimeRecordsHeartbeatLifecycle(
 			lastWrite :=
 				storage.writes[len(storage.writes)-1]
 
+			instanceID := storage.writes[0].InstanceID
 			if len(storage.writes) != 2 ||
 				lastWrite.State != test.wantState ||
-				storage.writes[0].InstanceID !=
-					defaultDiscoveryInstanceID {
+				!strings.HasPrefix(instanceID, "service-") ||
+				len(instanceID) != len("service-")+
+					generatedServiceInstanceIDBytes*2 {
 				t.Errorf(
 					"heartbeat writes = %#v",
 					storage.writes,
@@ -746,9 +746,6 @@ func TestDiscoveryHeartbeatUsesConfiguredServiceInstance(
 		switch name {
 		case serviceInstanceIDEnvironment:
 			return "discovery"
-
-		case hostnameEnvironment:
-			return "recreated-container"
 
 		default:
 			return base(name)
@@ -786,22 +783,17 @@ func TestDiscoveryHeartbeatUsesConfiguredServiceInstance(
 	}
 }
 
-func TestDiscoveryHeartbeatFallsBackToHostname(
+func TestDiscoveryHeartbeatGeneratesUniqueServiceInstance(
 	t *testing.T,
 ) {
 	operations, _ := newTestRuntimeOperations(t)
 
-	base := withCrawlRuntimeEnvironment(
+	operations.getenv = withCrawlRuntimeEnvironment(
 		operations.getenv,
 	)
-
-	operations.getenv = func(name string) string {
-		if name == hostnameEnvironment {
-			return "ephemeral-host"
-		}
-
-		return base(name)
-	}
+	operations.random = strings.NewReader(
+		strings.Repeat("e", generatedServiceInstanceIDBytes),
+	)
 
 	storage := &fakeHeartbeatStore{}
 
@@ -824,12 +816,18 @@ func TestDiscoveryHeartbeatFallsBackToHostname(
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
+	want := "service-" + hex.EncodeToString(
+		[]byte(strings.Repeat(
+			"e",
+			generatedServiceInstanceIDBytes,
+		)),
+	)
 	if len(storage.writes) == 0 ||
-		storage.writes[0].InstanceID !=
-			"ephemeral-host" {
+		storage.writes[0].InstanceID != want {
 		t.Fatalf(
-			"heartbeat instance = %#v, want ephemeral-host",
+			"heartbeat instance = %#v, want %q",
 			storage.writes,
+			want,
 		)
 	}
 }

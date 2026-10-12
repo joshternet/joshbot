@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/control"
+	"github.com/joshternet/joshbot/internal/operatortoken"
 	"github.com/joshternet/joshbot/internal/store"
 )
 
@@ -190,18 +191,7 @@ func readControlToken(reader io.Reader) (string, error) {
 }
 
 func validControlToken(token string) bool {
-	if len(token) < minControlTokenSize || len(token) > maxControlTokenSize ||
-		strings.TrimSpace(token) != token || strings.ContainsAny(token, "\r\n") {
-		return false
-	}
-	unique := make(map[rune]struct{})
-	for _, character := range token {
-		if character < '!' || character > '~' {
-			return false
-		}
-		unique[character] = struct{}{}
-	}
-	return len(unique) >= 8
+	return operatortoken.Valid(token)
 }
 
 func newControlCommander(pool *pgxpool.Pool) (control.Commander, error) {
@@ -245,14 +235,23 @@ func serveControl(
 			shutdownTimeout,
 		)
 		defer cancel()
-		if err := server.Shutdown(shutdownContext); err != nil {
-			return fmt.Errorf("shutdown control API: %w", err)
+		shutdownErr := server.Shutdown(shutdownContext)
+		if shutdownErr != nil {
+			type closer interface {
+				Close() error
+			}
+			if c, ok := server.(closer); ok {
+				_ = c.Close()
+			}
 		}
-		err := <-serverErrors
-		if err == nil || errors.Is(err, http.ErrServerClosed) {
+		serveErr := <-serverErrors
+		if shutdownErr != nil {
+			return fmt.Errorf("shutdown control API: %w", shutdownErr)
+		}
+		if serveErr == nil || errors.Is(serveErr, http.ErrServerClosed) {
 			return nil
 		}
-		return fmt.Errorf("stop control API: %w", err)
+		return fmt.Errorf("stop control API: %w", serveErr)
 	}
 }
 

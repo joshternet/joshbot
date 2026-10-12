@@ -85,7 +85,10 @@ Deleting a completed `crawl_runs` row cascades to its run-scoped
 `crawl_page_attempts`, `crawl_run_discovery_candidates`, and
 `crawl_run_automatic_admission_batches` rows.
 
-Running crawl attempts are never removed by retention cleanup.
+Running crawl attempts are never removed by retention cleanup. When a source
+lease is no longer active, unfinished runs are closed as `canceled` with
+`stop_reason` `abandoned` or `lease_reclaimed` so they become eligible for the
+completed-telemetry retention policy.
 
 ## Discovery provenance
 

@@ -140,6 +140,27 @@ func (s *DiscoveryStore) CompleteDiscoverySourceLeaseRetry(
 				return ErrDiscoverySourceLeaseLost
 			}
 
+			if _, err := tx.Exec(
+				ctx,
+				`
+					UPDATE crawl_runs
+					SET
+						finished_at = $2,
+						outcome = 'canceled',
+						stop_reason = 'abandoned'
+					WHERE source_origin = $1
+						AND outcome = 'running'
+						AND finished_at IS NULL
+				`,
+				lease.Origin.String(),
+				completedAt,
+			); err != nil {
+				return fmt.Errorf(
+					"store: cancel abandoned crawl runs: %w",
+					err,
+				)
+			}
+
 			return nil
 		},
 	)

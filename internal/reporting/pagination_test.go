@@ -376,6 +376,59 @@ func TestPagedHandlersPreserveArrayBodiesAndExposeNextCursor(
 	}
 }
 
+func TestPagedHandlersTreatHeadLikeGet(
+	t *testing.T,
+) {
+	reader := &fakePagedReader{
+		fakeReader: &fakeReader{},
+		sourcePageResult: sourcePage{
+			Items: []CrawlSource{
+				{Origin: "https://example.com"},
+			},
+			NextCursor: "next-sources",
+		},
+	}
+
+	handler := mustReportingHandler(t, reader)
+
+	request := httptest.NewRequest(
+		http.MethodHead,
+		"/api/v1/sources?limit=10",
+		nil,
+	)
+	request.Header.Set(
+		"Authorization",
+		"Bearer "+testToken,
+	)
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"HEAD status = %d, want %d; body=%q",
+			response.Code,
+			http.StatusOK,
+			response.Body.String(),
+		)
+	}
+
+	if got := response.Header().Get(nextCursorHeader); got != "next-sources" {
+		t.Errorf(
+			"HEAD next cursor = %q, want %q",
+			got,
+			"next-sources",
+		)
+	}
+
+	if reader.sourceQuery.Limit != 10 {
+		t.Errorf(
+			"HEAD source query limit = %d, want 10",
+			reader.sourceQuery.Limit,
+		)
+	}
+}
+
 func TestPagedHandlersUseDefaultsAndNoCursorHeader(
 	t *testing.T,
 ) {

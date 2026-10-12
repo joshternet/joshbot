@@ -112,10 +112,16 @@ func parseGroups(data []byte) []group {
 					current.userAgents,
 					value,
 				)
+			} else {
+				// Invalid tokens start a fresh group so later
+				// Allow/Disallow/Crawl-delay cannot attach to the
+				// previous group (fail-closed).
+				groups = append(groups, group{})
+				current = &groups[len(groups)-1]
 			}
 		case strings.EqualFold(field, "allow") ||
 			strings.EqualFold(field, "disallow"):
-			if current != nil {
+			if current != nil && len(current.userAgents) > 0 {
 				current.hasDirectives = true
 
 				parsedRule, valid := makeRule(
@@ -130,7 +136,7 @@ func parseGroups(data []byte) []group {
 				}
 			}
 		case strings.EqualFold(field, "crawl-delay"):
-			if current != nil {
+			if current != nil && len(current.userAgents) > 0 {
 				current.hasDirectives = true
 				current.crawlDelays = append(
 					current.crawlDelays,

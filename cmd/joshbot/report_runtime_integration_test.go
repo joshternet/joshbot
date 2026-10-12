@@ -99,7 +99,7 @@ func (*reportRuntimeIntegrationReader) Services(
 func TestReportRuntimeIntegrationServesPrivateAPI(
 	t *testing.T,
 ) {
-	const token = "integration-report-token"
+	const token = "0123456789abcdef0123456789abcdef"
 
 	tokenFile := filepath.Join(
 		t.TempDir(),

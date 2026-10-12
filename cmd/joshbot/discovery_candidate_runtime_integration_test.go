@@ -6,9 +6,11 @@ import (
 	"net/netip"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/retry"
+	"github.com/joshternet/joshbot/internal/store"
 )
 
 func TestDiscoveryCandidateRuntimeIntegrationRecordingBoundaries(
@@ -221,7 +223,7 @@ func TestDiscoveryCandidateRuntimeIntegrationFinalizationBoundaries(
 		}
 	})
 
-	t.Run("legacy automatic admission", func(t *testing.T) {
+	t.Run("complete automatic admission", func(t *testing.T) {
 		safe := mustRuntimeOrigin(
 			t,
 			"https://safe.example",
@@ -290,20 +292,36 @@ func TestDiscoveryCandidateRuntimeIntegrationFinalizationBoundaries(
 			)
 		}
 
-		want := []discovery.Candidate{
+		want := []store.AutomaticCandidateResult{
 			{
-				Origin: safe,
-				Kind:   discovery.KindLink,
+				Candidate: discovery.Candidate{
+					Origin: mixed,
+					Kind:   discovery.KindLink,
+				},
+				FailureCategory: retry.CategoryUnsafeAddress,
+			},
+			{
+				Candidate: discovery.Candidate{
+					Origin: safe,
+					Kind:   discovery.KindLink,
+				},
+			},
+			{
+				Candidate: discovery.Candidate{
+					Origin: unsafe,
+					Kind:   discovery.KindLink,
+				},
+				FailureCategory: retry.CategoryUnsafeAddress,
 			},
 		}
 
 		if !reflect.DeepEqual(
-			candidateStore.admitted,
+			candidateStore.results,
 			want,
 		) {
 			t.Errorf(
-				"admitted candidates = %#v, want %#v",
-				candidateStore.admitted,
+				"admission results = %#v, want %#v",
+				candidateStore.results,
 				want,
 			)
 		}
@@ -332,20 +350,26 @@ func TestDiscoveryCandidateRuntimeIntegrationFinalizationBoundaries(
 			Kind: discovery.KindLink,
 		}
 
-		base := &fakeAutomaticAdmissionStore{
+		candidateStore := &fakeAutomaticAdmissionStore{
 			pending: []discovery.Candidate{
 				candidate,
 			},
 		}
-		candidateStore :=
-			&retryAutomaticAdmissionStore{
-				fakeAutomaticAdmissionStore: base,
-			}
 		resolver := &failingAdmissionResolver{
 			err: errors.New(
 				"temporary DNS failure",
 			),
 		}
+		originalSleep := sleepAdmissionDNSRetry
+		sleepAdmissionDNSRetry = func(
+			context.Context,
+			time.Duration,
+		) error {
+			return nil
+		}
+		t.Cleanup(func() {
+			sleepAdmissionDNSRetry = originalSleep
+		})
 
 		err := (runtimeCandidateSink{
 			store:    candidateStore,

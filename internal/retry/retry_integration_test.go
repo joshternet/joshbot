@@ -26,7 +26,8 @@ func TestRetryIntegrationClassifiesHTTPAndRetryAfter(t *testing.T) {
 		{http.StatusNetworkAuthenticationRequired, retry.CategoryHTTP5xx, true},
 		{http.StatusNotFound, retry.CategoryDeclarationAbsent, false},
 		{http.StatusGone, retry.CategoryDeclarationAbsent, false},
-		{http.StatusBadRequest, retry.CategoryDeclarationUnavailable, false},
+		{http.StatusBadRequest, retry.CategoryHTTP4xx, false},
+		{http.StatusForbidden, retry.CategoryHTTP4xx, false},
 	}
 
 	for _, test := range tests {

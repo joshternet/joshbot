@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -93,6 +94,77 @@ func TestFetchPageTelemetryClassifiesResponseFailures(t *testing.T) {
 	}
 }
 
+func TestMultiPageCrawlerSurfacesRetryAfterWaitCancellation(
+	t *testing.T,
+) {
+	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+	source := mustDiscoveryOrigin(t, "https://source.example")
+	getter := frontierGetterFunc(func(context.Context, *url.URL) (*http.Response, error) {
+		header := http.Header{}
+		header.Set("Retry-After", now.Add(time.Hour).Format(http.TimeFormat))
+		return &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader("unavailable")),
+		}, nil
+	})
+	config := frontierCrawlConfig()
+	config.RetryClock = fixedDiscoveryClock{now: now}
+	want := errors.New("retry-after wait canceled")
+	waiter := &frontierWaiter{
+		wait: func(context.Context, time.Duration) error {
+			return want
+		},
+	}
+	crawler, err := newMultiPageCrawler(
+		getter,
+		&frontierCandidateSink{},
+		config,
+		waiter,
+		contextTimeoutFactory{},
+		discardCrawlTelemetry{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = crawler.Crawl(context.Background(), source)
+	if !errors.Is(err, want) {
+		t.Fatalf("Crawl() error = %v, want %v", err, want)
+	}
+}
+
+func TestFetchPageMarksCanceledBodyFailureAsTimeout(t *testing.T) {
+	source := mustDiscoveryOrigin(t, "https://source.example")
+	testErr := errors.New("body read failed")
+	getter := frontierGetterFunc(func(context.Context, *url.URL) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{},
+			Body: &trackedBody{
+				reader: failingReader{err: testErr},
+			},
+		}, nil
+	})
+	crawler := mustNewMultiPageCrawler(
+		t,
+		getter,
+		&frontierCandidateSink{},
+		frontierCrawlConfig(),
+		&frontierWaiter{},
+		&frontierTimeoutFactory{},
+	)
+	pageURL, _ := url.Parse(source.String() + "/")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	page := crawler.fetchPage(ctx, source, pageURL, map[string]struct{}{})
+	if page.attempt.Outcome != PageTimeout {
+		t.Fatalf("outcome = %q, want %q", page.attempt.Outcome, PageTimeout)
+	}
+	if page.failureCategory != retry.CategoryTimeout {
+		t.Fatalf("category = %q, want timeout", page.failureCategory)
+	}
+}
+
 func TestMultiPageCrawlerCarriesTransientRootFailure(t *testing.T) {
 	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
 	source := mustDiscoveryOrigin(t, "https://source.example")
@@ -109,7 +181,15 @@ func TestMultiPageCrawlerCarriesTransientRootFailure(t *testing.T) {
 	})
 	config := frontierCrawlConfig()
 	config.RetryClock = fixedDiscoveryClock{now: now}
-	crawler, err := NewMultiPageCrawler(getter, &frontierCandidateSink{}, config)
+	waiter := &frontierWaiter{}
+	crawler, err := newMultiPageCrawler(
+		getter,
+		&frontierCandidateSink{},
+		config,
+		waiter,
+		contextTimeoutFactory{},
+		discardCrawlTelemetry{},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +204,23 @@ func TestMultiPageCrawlerCarriesTransientRootFailure(t *testing.T) {
 	}
 	if calls != retry.MaxAttemptsPerCycle {
 		t.Fatalf("root attempts = %d, want %d", calls, retry.MaxAttemptsPerCycle)
+	}
+	wantWaits := retry.MaxAttemptsPerCycle - 1
+	if len(waiter.durations) != wantWaits {
+		t.Fatalf(
+			"Retry-After waits = %d, want %d",
+			len(waiter.durations),
+			wantWaits,
+		)
+	}
+	for _, delay := range waiter.durations {
+		if delay != time.Hour {
+			t.Fatalf(
+				"Retry-After wait = %v, want %v",
+				delay,
+				time.Hour,
+			)
+		}
 	}
 }
 
@@ -323,6 +420,29 @@ func TestFetchPageSeparatesRetryableAndPermanentCategories(t *testing.T) {
 				config.MaxPageBytes = 1
 			},
 			want: retry.CategoryOversizedContent,
+		},
+		{
+			name: "extract too large",
+			getter: responseGetter(
+				http.StatusOK,
+				"text/html",
+				string(bytes.Repeat([]byte("x"), MaxRawBody+1)),
+			),
+			context: context.Background(),
+			configure: func(config *CrawlConfig) {
+				config.MaxPageBytes = MaxRawBody + 8
+			},
+			want: retry.CategoryOversizedContent,
+		},
+		{
+			name: "extract unavailable empty html",
+			getter: responseGetter(
+				http.StatusOK,
+				"text/html",
+				"",
+			),
+			context: context.Background(),
+			want:    retry.CategoryTransport,
 		},
 	}
 	for _, test := range tests {

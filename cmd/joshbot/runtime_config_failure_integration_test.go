@@ -23,6 +23,32 @@ func (reader runtimeConfigFailureIntegrationReader) Read([]byte) (int, error) {
 	return 0, reader.err
 }
 
+func TestRuntimeConfigFailureIntegrationServiceInstanceID(t *testing.T) {
+	t.Run("nil random", func(t *testing.T) {
+		instanceID, err := generateServiceInstanceID(nil)
+		if !errors.Is(err, errServiceInstanceIDGeneration) || instanceID != "" {
+			t.Errorf(
+				"generateServiceInstanceID(nil) = %q, %v, want empty, %v",
+				instanceID, err, errServiceInstanceIDGeneration,
+			)
+		}
+	})
+
+	t.Run("ReadFull failure", func(t *testing.T) {
+		instanceID, err := generateServiceInstanceID(
+			runtimeConfigFailureIntegrationReader{
+				err: errors.New("integration random failure"),
+			},
+		)
+		if !errors.Is(err, errServiceInstanceIDGeneration) || instanceID != "" {
+			t.Errorf(
+				"generateServiceInstanceID(failing reader) = %q, %v, want empty, %v",
+				instanceID, err, errServiceInstanceIDGeneration,
+			)
+		}
+	})
+}
+
 func TestRuntimeConfigFailureIntegrationWorkerSettings(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -237,6 +263,16 @@ func TestRuntimeConfigFailureIntegrationPublishSettings(t *testing.T) {
 		})
 	}
 
+	t.Run("strips trailing CRLF", func(t *testing.T) {
+		token, err := readGitHubToken(strings.NewReader("integration-github-token-crlf\r\n"))
+		if err != nil || token != "integration-github-token-crlf" {
+			t.Errorf(
+				"readGitHubToken(CRLF) = %q, %v, want integration-github-token-crlf, nil",
+				token, err,
+			)
+		}
+	})
+
 	t.Run("load settings propagates token open failure", func(t *testing.T) {
 		environment := runtimeConfigFailureIntegrationEnvironment{
 			publishOwnerEnvironment:      "joshternet",
@@ -299,6 +335,18 @@ func TestRuntimeConfigFailureIntegrationReportSettings(t *testing.T) {
 	if _, err := readReportToken(runtimeConfigFailureIntegrationReader{err: readFailure}); !errors.Is(err, errReadReportTokenFile) {
 		t.Errorf("readReportToken(read failure) error = %v, want %v", err, errReadReportTokenFile)
 	}
+
+	t.Run("strips trailing CRLF from report token", func(t *testing.T) {
+		token, err := readReportToken(
+			strings.NewReader("0123456789abcdef0123456789abcdef\r\n"),
+		)
+		if err != nil || token != "0123456789abcdef0123456789abcdef" {
+			t.Errorf(
+				"readReportToken(CRLF) = %q, %v",
+				token, err,
+			)
+		}
+	})
 
 	invalid := []struct {
 		name string

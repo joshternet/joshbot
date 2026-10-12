@@ -250,19 +250,25 @@ func parseDirectoryKey(raw json.RawMessage) (directoryKey, error) {
 }
 
 func directoryContentDigest(value string, body []byte) error {
-	const prefix = "sha-256=:"
-
-	start := strings.Index(value, prefix)
-	if start < 0 {
+	dictionary, err := directoryDictionary(value)
+	if err != nil {
 		return fmt.Errorf(
 			"%w: content digest",
 			ErrInvalidDirectory,
 		)
 	}
 
-	encoded := value[start+len(prefix):]
-	end := strings.Index(encoded, ":")
-	if end < 0 {
+	encoded, ok := dictionary["sha-256"]
+	if !ok {
+		return fmt.Errorf(
+			"%w: content digest",
+			ErrInvalidDirectory,
+		)
+	}
+
+	if len(encoded) < 3 ||
+		!strings.HasPrefix(encoded, ":") ||
+		!strings.HasSuffix(encoded, ":") {
 		return fmt.Errorf(
 			"%w: content digest",
 			ErrInvalidDirectory,
@@ -270,7 +276,7 @@ func directoryContentDigest(value string, body []byte) error {
 	}
 
 	digest, err := base64.StdEncoding.DecodeString(
-		encoded[:end],
+		encoded[1 : len(encoded)-1],
 	)
 	sum := sha256.Sum256(body)
 	if err != nil || !bytes.Equal(digest, sum[:]) {

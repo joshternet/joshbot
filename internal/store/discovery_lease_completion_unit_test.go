@@ -51,10 +51,12 @@ func discoveryCompletionStore(
 type discoveryLeaseCompletionCaptureTx struct {
 	*discoveryPolicyUnitTx
 
-	lockQuery  string
-	lockArgs   []any
-	updateSQL  string
-	updateArgs []any
+	lockQuery    string
+	lockArgs     []any
+	updateSQL    string
+	updateArgs   []any
+	cleanupQuery string
+	cleanupArgs  []any
 }
 
 func (tx *discoveryLeaseCompletionCaptureTx) QueryRow(
@@ -99,6 +101,17 @@ func (tx *discoveryLeaseCompletionCaptureTx) Exec(
 		) {
 		tx.updateSQL = query
 		tx.updateArgs = append(
+			[]any(nil),
+			args...,
+		)
+	}
+
+	if strings.Contains(
+		query,
+		"UPDATE crawl_runs",
+	) {
+		tx.cleanupQuery = query
+		tx.cleanupArgs = append(
 			[]any(nil),
 			args...,
 		)
@@ -520,6 +533,7 @@ func TestCompleteDiscoverySourceLeaseWithoutDatabase(
 							"UPDATE 1",
 						),
 					},
+					{},
 				},
 			}
 			tx := &discoveryLeaseCompletionCaptureTx{
@@ -628,6 +642,56 @@ func TestCompleteDiscoverySourceLeaseWithoutDatabase(
 					tx.updateArgs[4],
 				)
 			}
+
+			normalizedCleanupQuery := strings.Join(
+				strings.Fields(tx.cleanupQuery),
+				" ",
+			)
+
+			if !strings.Contains(
+				normalizedCleanupQuery,
+				"UPDATE crawl_runs SET finished_at = $2, outcome = 'canceled', stop_reason = 'abandoned'",
+			) {
+				t.Fatalf(
+					"completion does not abandon unfinished crawl runs: %s",
+					normalizedCleanupQuery,
+				)
+			}
+
+			if !strings.Contains(
+				normalizedCleanupQuery,
+				"WHERE source_origin = $1 AND outcome = 'running' AND finished_at IS NULL",
+			) {
+				t.Fatalf(
+					"completion crawl-run cleanup is not bounded to the completed origin: %s",
+					normalizedCleanupQuery,
+				)
+			}
+
+			if len(tx.cleanupArgs) != 2 {
+				t.Fatalf(
+					"cleanup argument count = %d, want 2",
+					len(tx.cleanupArgs),
+				)
+			}
+
+			if got, ok := tx.cleanupArgs[0].(string); !ok ||
+				got != lease.Origin.String() {
+				t.Fatalf(
+					"cleanup origin argument = %#v, want %q",
+					tx.cleanupArgs[0],
+					lease.Origin.String(),
+				)
+			}
+
+			if got, ok := tx.cleanupArgs[1].(time.Time); !ok ||
+				!got.Equal(now) {
+				t.Fatalf(
+					"cleanup time argument = %#v, want %v",
+					tx.cleanupArgs[1],
+					now,
+				)
+			}
 		},
 	)
 
@@ -648,6 +712,7 @@ func TestCompleteDiscoverySourceLeaseWithoutDatabase(
 							"UPDATE 1",
 						),
 					},
+					{},
 				},
 			}
 			tx := &discoveryLeaseCompletionCaptureTx{
@@ -700,6 +765,21 @@ func TestCompleteDiscoverySourceLeaseWithoutDatabase(
 				)
 			}
 
+			normalizedCleanupQuery := strings.Join(
+				strings.Fields(tx.cleanupQuery),
+				" ",
+			)
+
+			if !strings.Contains(
+				normalizedCleanupQuery,
+				"stop_reason = 'abandoned'",
+			) {
+				t.Fatalf(
+					"transient completion does not abandon unfinished crawl runs: %s",
+					normalizedCleanupQuery,
+				)
+			}
+
 			if got, ok := tx.updateArgs[5].(string); !ok ||
 				got != string(retry.CategoryDNS) {
 				t.Fatalf(
@@ -719,6 +799,65 @@ func TestCompleteDiscoverySourceLeaseWithoutDatabase(
 					"completion next attempt argument = %#v, want %v",
 					tx.updateArgs[6],
 					wantNextAttempt,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"crawl run cleanup failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test abandoned crawl cleanup failure",
+			)
+
+			tx := &discoveryPolicyUnitTx{
+				rowResults: []discoveryUnitRow{
+					{
+						values: []any{
+							1,
+						},
+					},
+				},
+				execResults: []discoveryUnitExecResult{
+					{
+						tag: pgconn.NewCommandTag(
+							"UPDATE 1",
+						),
+					},
+					{
+						err: testErr,
+					},
+				},
+			}
+
+			store := discoveryCompletionStore(
+				t,
+				discoveryPolicyDatabase(tx),
+				discoveryCompletionClock{
+					now: now,
+				},
+			)
+
+			err := store.CompleteDiscoverySourceLeaseRetry(
+				ctx,
+				lease,
+				retry.CategoryNone,
+				0,
+			)
+
+			if !errors.Is(err, testErr) ||
+				!strings.Contains(
+					err.Error(),
+					"store: cancel abandoned crawl runs",
+				) ||
+				!strings.Contains(
+					err.Error(),
+					"store: complete discovery source lease",
+				) {
+				t.Fatalf(
+					"CompleteDiscoverySourceLeaseRetry() error = %v",
+					err,
 				)
 			}
 		},

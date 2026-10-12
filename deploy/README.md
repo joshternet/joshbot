@@ -86,8 +86,11 @@ The Compose deployment includes:
 - `registry-publish`: publishes each new snapshot and does not commit when
   the registry tree is unchanged;
 - `publisher`: one-shot GitHub registry publication;
-- `backup`: logical PostgreSQL backups;
-- `restore`: controlled logical restoration.
+- `backup`: logical PostgreSQL backups.
+
+Logical restoration uses [`deploy/restore.sh`](restore.sh) against a
+**disposable** database only (`JOSHBOT_RESTORE_DISPOSABLE=yes`). There is no
+Compose service that restores into the live application database.
 
 The reporting service is intentionally profile-gated. Existing worker and
 discovery deployments do not begin exposing a new service merely because the
@@ -112,7 +115,7 @@ Compose file is upgraded.
   `worker` or `discovery` services for crawler commands that require outbound
   Web Bot Auth signing.
 - `publisher` receives egress, a read-only export mount, and the GitHub token.
-- `migrate`, `postgres`, `backup`, and `restore` receive the database network.
+- `migrate`, `postgres`, and `backup` receive the database network.
 - Database services never receive the GitHub token.
 - The publisher receives no database URL, password, network, or storage.
 - The report service receives no GitHub token.
@@ -277,12 +280,12 @@ from the heartbeat service slot.
 `JOSHBOT_SERVICE_INSTANCE_ID` identifies one logical worker or discovery slot
 in `crawl_service_heartbeats`. It must be non-empty after trimming, valid
 UTF-8, and no more than 128 bytes. Compose sets `worker` and `discovery`.
-Keep that value stable across restarts of the same slot. Concurrent replicas
-must use distinct IDs. `started_at` distinguishes successive process
-generations that occupy one slot. Host overrides are
-`JOSHBOT_WORKER_SERVICE_INSTANCE_ID` and
-`JOSHBOT_DISCOVERY_SERVICE_INSTANCE_ID`. Do not rely on a generated worker ID
-or the container hostname for the production slot.
+When unset, the process generates `service-` followed by 16 lowercase
+hexadecimal characters. Keep Compose values stable across restarts of the
+same slot. Concurrent replicas must use distinct IDs. `started_at`
+distinguishes successive process generations that occupy one slot. Host
+overrides are `JOSHBOT_WORKER_SERVICE_INSTANCE_ID` and
+`JOSHBOT_DISCOVERY_SERVICE_INSTANCE_ID`.
 
 Review discovery timing:
 
@@ -331,7 +334,9 @@ requests made by both the worker and discovery services. An applicable robots
 
 The durable domain avoid list is managed through the operator control API and
 starts with the hosted publishing and social-platform defaults, including
-`centerblog.net`. An environment value adds emergency rules to that list;
+`centerblog.net`. `wordpress.com` and `wordpress.org` are not on that list, so
+sites using the official Joshternet plugin stay eligible. An environment
+value adds emergency rules to that list;
 dashboard removal cannot override an environment rule. Use a family such as
 `blogspot.*` to cover regional public suffixes.
 
@@ -689,6 +694,7 @@ only these routes:
 ```text
 GET /healthz
 POST /api/v1/control/processors/{discovery|verification}/{pause|resume}
+POST /api/v1/control/automatic-expansion/{pause|resume}
 POST /api/v1/control/domain-avoid
 DELETE /api/v1/control/domain-avoid/{pattern}
 POST /api/v1/control/origins/block
@@ -701,11 +707,13 @@ connects as `joshbot_operator`, which has narrowly granted control and audit
 permissions but cannot read publication data, mutate verification results or
 curated seed status, or alter or delete audit rows.
 
-JSON mutation bodies use `application/json`. Processor and DELETE requests may
-omit the body or provide optional `actor` and `reason` strings. Domain-add
-requests require `pattern`; origin block and allow requests require `origin`.
-Successful mutations and their audit events commit atomically. Authenticated
-rejections are append-only audited after rollback.
+JSON mutation bodies use `application/json`. Processor, automatic-expansion, and
+DELETE requests may omit the body or provide optional `actor` and `reason`
+strings. The optional `actor` field is caller-declared audit metadata under the
+shared operator bearer token; it is not an authenticated login identity.
+Domain-add requests require `pattern`; origin block and allow requests require
+`origin`. Successful mutations and their audit events commit atomically.
+Authenticated rejections are append-only audited after rollback.
 
 ## Secrets
 
@@ -1283,6 +1291,28 @@ The backup service:
 Backup-file retention is a separate destructive policy decision and is not
 automated. Database operational-history retention is documented separately in
 [`docs/retention.md`](../docs/retention.md).
+
+## Disposable restore
+
+Restore only into a disposable PostgreSQL database that you create for
+recovery validation. The helper script refuses to run unless
+`JOSHBOT_RESTORE_DISPOSABLE=yes` is set.
+
+```bash
+export JOSHBOT_RESTORE_DISPOSABLE=yes
+export PGHOST=...
+export PGPORT=5432
+export PGDATABASE=...
+export PGUSER=...
+export JOSHBOT_DATABASE_PASSWORD_FILE=...
+export JOSHBOT_BACKUP_ARCHIVE=/path/to/joshbot-….dump
+export PGCONNECT_TIMEOUT=10
+./deploy/restore.sh
+```
+
+Do not point this script at the live application database. Production recovery
+validation uses [`./deploy/smoke.sh`](smoke.sh), which restores into a fresh
+isolated instance.
 
 ## Recovery validation
 

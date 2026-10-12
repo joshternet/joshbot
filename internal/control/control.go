@@ -1,6 +1,7 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -13,7 +14,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/joshternet/joshbot/internal/operatortoken"
 	"github.com/joshternet/joshbot/internal/origin"
 )
 
@@ -25,7 +28,6 @@ const (
 	maxCallerBytes      = 256
 	maxReasonBytes      = 512
 	maxTargetBytes      = 2048
-	minTokenBytes       = 32
 )
 
 const (
@@ -45,9 +47,11 @@ type Audit struct {
 	Action     string
 	Target     string
 	Caller     string
-	Actor      string
-	Result     string
-	Reason     string
+	// Actor is caller-declared audit metadata under the shared operator
+	// bearer token. It is not an authenticated login identity.
+	Actor  string
+	Result string
+	Reason string
 }
 
 // Commander applies control mutations and their success audits atomically.
@@ -68,20 +72,26 @@ type handler struct {
 }
 
 type metadata struct {
+	// Actor is caller-declared audit metadata under the shared operator
+	// bearer token. It is not an authenticated login identity.
 	Actor  string `json:"actor,omitempty"`
 	Reason string `json:"reason,omitempty"`
 }
 
 type originRequest struct {
 	Origin string `json:"origin"`
+	// Actor is caller-declared audit metadata under the shared operator
+	// bearer token. It is not an authenticated login identity.
 	Actor  string `json:"actor,omitempty"`
 	Reason string `json:"reason,omitempty"`
 }
 
 type domainRequest struct {
 	Pattern string `json:"pattern"`
-	Actor   string `json:"actor,omitempty"`
-	Reason  string `json:"reason,omitempty"`
+	// Actor is caller-declared audit metadata under the shared operator
+	// bearer token. It is not an authenticated login identity.
+	Actor  string `json:"actor,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // NewHandler constructs the private operator control HTTP handler.
@@ -114,18 +124,7 @@ func NewHandler(commander Commander, token string) (http.Handler, error) {
 }
 
 func validToken(token string) bool {
-	if len(token) < minTokenBytes || len(token) > maxRequestBodyBytes ||
-		strings.TrimSpace(token) != token || strings.ContainsAny(token, "\r\n") {
-		return false
-	}
-	unique := make(map[rune]struct{})
-	for _, character := range token {
-		if character < '!' || character > '~' {
-			return false
-		}
-		unique[character] = struct{}{}
-	}
-	return len(unique) >= 8
+	return operatortoken.Valid(token)
 }
 
 func (h *handler) withHeaders(next http.Handler) http.Handler {
@@ -427,6 +426,25 @@ func decodeOptionalJSON(
 	if request.ContentLength == 0 {
 		return 0, ""
 	}
+	if request.ContentLength < 0 {
+		peek := make([]byte, 1)
+		n, err := request.Body.Read(peek)
+		switch {
+		case n == 0 && (err == nil || errors.Is(err, io.EOF)):
+			return 0, ""
+		case n > 0:
+			request.Body = struct {
+				io.Reader
+				io.Closer
+			}{
+				Reader: io.MultiReader(
+					bytes.NewReader(peek[:n]),
+					request.Body,
+				),
+				Closer: request.Body,
+			}
+		}
+	}
 	return decodeJSON(writer, request, destination)
 }
 
@@ -476,10 +494,18 @@ func boundedTarget(value string) string {
 }
 
 func bounded(value string, limit int) string {
-	if len(value) > limit {
-		return value[:limit]
+	if len(value) <= limit {
+		return value
 	}
-	return value
+	truncated := value[:limit]
+	for len(truncated) > 0 {
+		r, size := utf8.DecodeLastRuneInString(truncated)
+		if r != utf8.RuneError || size != 1 {
+			break
+		}
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated
 }
 
 func writeError(writer http.ResponseWriter, status int, code string) {

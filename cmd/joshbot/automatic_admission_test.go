@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/origin"
@@ -13,7 +14,7 @@ import (
 	"github.com/joshternet/joshbot/internal/store"
 )
 
-func TestRuntimeCandidateSinkAdmitsOnlyAllAddressPublicCandidates(t *testing.T) {
+func TestRuntimeCandidateSinkCompletesTypedAdmissionDecisions(t *testing.T) {
 	safe := mustRuntimeOrigin(t, "https://safe.example")
 	mixed := mustRuntimeOrigin(t, "https://mixed.example")
 	unsafe := mustRuntimeOrigin(t, "https://unsafe.example")
@@ -47,11 +48,21 @@ func TestRuntimeCandidateSinkAdmitsOnlyAllAddressPublicCandidates(t *testing.T) 
 	if err := sink.FinalizeCandidates(context.Background(), 41); err != nil {
 		t.Fatalf("FinalizeCandidates() error = %v", err)
 	}
-	want := []discovery.Candidate{
-		{Origin: safe, Kind: discovery.KindLink},
+	want := []store.AutomaticCandidateResult{
+		{
+			Candidate:       discovery.Candidate{Origin: mixed, Kind: discovery.KindLink},
+			FailureCategory: retry.CategoryUnsafeAddress,
+		},
+		{
+			Candidate: discovery.Candidate{Origin: safe, Kind: discovery.KindLink},
+		},
+		{
+			Candidate:       discovery.Candidate{Origin: unsafe, Kind: discovery.KindLink},
+			FailureCategory: retry.CategoryUnsafeAddress,
+		},
 	}
-	if !reflect.DeepEqual(candidateStore.admitted, want) {
-		t.Fatalf("admitted candidates = %#v, want %#v", candidateStore.admitted, want)
+	if !reflect.DeepEqual(candidateStore.results, want) {
+		t.Fatalf("admission results = %#v, want %#v", candidateStore.results, want)
 	}
 	if candidateStore.runID != 41 {
 		t.Fatalf("admission run ID = %d, want 41", candidateStore.runID)
@@ -72,10 +83,12 @@ func TestRuntimeCandidateSinkPropagatesAdmissionStoreFailures(t *testing.T) {
 			store: &fakeAutomaticAdmissionStore{pendingErr: testError},
 		},
 		{
-			name: "atomic admission",
+			name: "complete admission",
 			store: &fakeAutomaticAdmissionStore{
-				pending:  []discovery.Candidate{{Origin: mustRuntimeOrigin(t, "https://safe.example"), Kind: discovery.KindLink}},
-				admitErr: testError,
+				pending: []discovery.Candidate{
+					{Origin: mustRuntimeOrigin(t, "https://safe.example"), Kind: discovery.KindLink},
+				},
+				completeErr: testError,
 			},
 		},
 	}
@@ -106,10 +119,21 @@ func TestRuntimeCandidateSinkRetriesAndPersistsTypedDNSFailure(t *testing.T) {
 		Origin: mustRuntimeOrigin(t, "https://temporary.example"),
 		Kind:   discovery.KindLink,
 	}
-	base := &fakeAutomaticAdmissionStore{pending: []discovery.Candidate{candidate}}
-	retryingStore := &retryAutomaticAdmissionStore{fakeAutomaticAdmissionStore: base}
+	candidateStore := &fakeAutomaticAdmissionStore{pending: []discovery.Candidate{candidate}}
 	resolver := &failingAdmissionResolver{err: errors.New("temporary DNS failure")}
-	sink := runtimeCandidateSink{store: retryingStore, resolver: resolver}
+	originalSleep := sleepAdmissionDNSRetry
+	var delays []time.Duration
+	sleepAdmissionDNSRetry = func(
+		_ context.Context,
+		delay time.Duration,
+	) error {
+		delays = append(delays, delay)
+		return nil
+	}
+	t.Cleanup(func() {
+		sleepAdmissionDNSRetry = originalSleep
+	})
+	sink := runtimeCandidateSink{store: candidateStore, resolver: resolver}
 
 	if err := sink.FinalizeCandidates(context.Background(), 7); err != nil {
 		t.Fatal(err)
@@ -117,9 +141,56 @@ func TestRuntimeCandidateSinkRetriesAndPersistsTypedDNSFailure(t *testing.T) {
 	if resolver.calls != retry.MaxAttemptsPerCycle {
 		t.Fatalf("resolver calls = %d, want %d", resolver.calls, retry.MaxAttemptsPerCycle)
 	}
-	if len(retryingStore.results) != 1 ||
-		retryingStore.results[0].FailureCategory != retry.CategoryDNS {
-		t.Fatalf("admission results = %#v", retryingStore.results)
+	if len(delays) != retry.MaxAttemptsPerCycle-1 {
+		t.Fatalf("DNS retry delays = %v, want %d entries", delays, retry.MaxAttemptsPerCycle-1)
+	}
+	for _, delay := range delays {
+		if delay != discoveryAdmissionDNSRetryDelay {
+			t.Fatalf("DNS retry delay = %v, want %v", delay, discoveryAdmissionDNSRetryDelay)
+		}
+	}
+	if len(candidateStore.results) != 1 ||
+		candidateStore.results[0].FailureCategory != retry.CategoryDNS {
+		t.Fatalf("admission results = %#v", candidateStore.results)
+	}
+}
+
+func TestRuntimeCandidateSinkSurfacesDNSRetrySleepCancellation(t *testing.T) {
+	candidate := discovery.Candidate{
+		Origin: mustRuntimeOrigin(t, "https://temporary.example"),
+		Kind:   discovery.KindLink,
+	}
+	candidateStore := &fakeAutomaticAdmissionStore{
+		pending: []discovery.Candidate{candidate},
+	}
+	resolver := &failingAdmissionResolver{
+		err: errors.New("temporary DNS failure"),
+	}
+	want := errors.New("admission DNS retry stopped")
+	originalSleep := sleepAdmissionDNSRetry
+	sleepAdmissionDNSRetry = func(
+		context.Context,
+		time.Duration,
+	) error {
+		return want
+	}
+	t.Cleanup(func() {
+		sleepAdmissionDNSRetry = originalSleep
+	})
+
+	sink := runtimeCandidateSink{
+		store:    candidateStore,
+		resolver: resolver,
+	}
+	if err := sink.FinalizeCandidates(
+		context.Background(),
+		7,
+	); !errors.Is(err, want) {
+		t.Fatalf(
+			"FinalizeCandidates() error = %v, want %v",
+			err,
+			want,
+		)
 	}
 }
 
@@ -179,32 +250,17 @@ func (resolver admissionResolver) LookupNetIP(
 
 type fakeAutomaticAdmissionStore struct {
 	pending      []discovery.Candidate
-	admitted     []discovery.Candidate
+	results      []store.AutomaticCandidateResult
 	runID        discovery.CrawlRunID
 	pendingRunID discovery.CrawlRunID
 	pendingErr   error
-	admitErr     error
+	completeErr  error
 	recordRunID  discovery.CrawlRunID
 	recordSource origin.Origin
 	recorded     []discovery.Candidate
 }
 
-type retryAutomaticAdmissionStore struct {
-	*fakeAutomaticAdmissionStore
-	results []store.AutomaticCandidateResult
-}
-
-func (retryStore *retryAutomaticAdmissionStore) CompleteAutomaticCandidates(
-	_ context.Context,
-	runID discovery.CrawlRunID,
-	results []store.AutomaticCandidateResult,
-) error {
-	retryStore.runID = runID
-	retryStore.results = append([]store.AutomaticCandidateResult(nil), results...)
-	return retryStore.admitErr
-}
-
-func (store *fakeAutomaticAdmissionStore) RecordDiscovery(
+func (admission *fakeAutomaticAdmissionStore) RecordDiscovery(
 	context.Context,
 	origin.Origin,
 	[]discovery.Candidate,
@@ -212,34 +268,34 @@ func (store *fakeAutomaticAdmissionStore) RecordDiscovery(
 	return discovery.RecordResult{}, nil
 }
 
-func (store *fakeAutomaticAdmissionStore) RecordDiscoveryForRun(
+func (admission *fakeAutomaticAdmissionStore) RecordDiscoveryForRun(
 	_ context.Context,
 	runID discovery.CrawlRunID,
 	source origin.Origin,
 	candidates []discovery.Candidate,
 ) (discovery.RecordResult, error) {
-	store.recordRunID = runID
-	store.recordSource = source
-	store.recorded = append([]discovery.Candidate(nil), candidates...)
+	admission.recordRunID = runID
+	admission.recordSource = source
+	admission.recorded = append([]discovery.Candidate(nil), candidates...)
 	return discovery.RecordResult{Accepted: len(candidates)}, nil
 }
 
-func (store *fakeAutomaticAdmissionStore) PendingAutomaticCandidates(
+func (admission *fakeAutomaticAdmissionStore) PendingAutomaticCandidates(
 	_ context.Context,
 	runID discovery.CrawlRunID,
 ) ([]discovery.Candidate, error) {
-	store.pendingRunID = runID
-	return append([]discovery.Candidate(nil), store.pending...), store.pendingErr
+	admission.pendingRunID = runID
+	return append([]discovery.Candidate(nil), admission.pending...), admission.pendingErr
 }
 
-func (store *fakeAutomaticAdmissionStore) AdmitAutomaticCandidates(
+func (admission *fakeAutomaticAdmissionStore) CompleteAutomaticCandidates(
 	_ context.Context,
 	runID discovery.CrawlRunID,
-	candidates []discovery.Candidate,
+	results []store.AutomaticCandidateResult,
 ) error {
-	store.runID = runID
-	store.admitted = append([]discovery.Candidate(nil), candidates...)
-	return store.admitErr
+	admission.runID = runID
+	admission.results = append([]store.AutomaticCandidateResult(nil), results...)
+	return admission.completeErr
 }
 
 func mustRuntimeOrigin(t *testing.T, raw string) origin.Origin {
