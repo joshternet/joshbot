@@ -400,3 +400,65 @@ func TestServiceHeartbeatIntegrationSlogReporter(
 		)
 	}
 }
+
+type deadlineHeartbeatStore struct {
+	serviceHeartbeatIntegrationStore
+	finalContext context.Context
+}
+
+func (storage *deadlineHeartbeatStore) UpsertServiceHeartbeat(ctx context.Context, heartbeat store.ServiceHeartbeat) error {
+	if heartbeat.State == "stopping" {
+		storage.finalContext = ctx
+	}
+	return storage.serviceHeartbeatIntegrationStore.UpsertServiceHeartbeat(ctx, heartbeat)
+}
+
+func TestServiceHeartbeatShutdownHasIndependentDeadline(t *testing.T) {
+	storage := &deadlineHeartbeatStore{}
+	heartbeat, err := startServiceHeartbeatWithInterval(context.Background(), storage, "discovery", "bounded-shutdown", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := heartbeat.stop(ctx, "stopping"); err != nil {
+		t.Fatal(err)
+	}
+	if storage.finalContext == nil {
+		t.Fatal("missing final heartbeat")
+	}
+	if _, ok := storage.finalContext.Deadline(); !ok {
+		t.Fatal("final heartbeat has no deadline")
+	}
+}
+
+type stalledHeartbeatStore struct {
+	serviceHeartbeatIntegrationStore
+}
+
+func (storage *stalledHeartbeatStore) UpsertServiceHeartbeat(ctx context.Context, heartbeat store.ServiceHeartbeat) error {
+	if heartbeat.State == "starting" {
+		return nil
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+func TestServiceHeartbeatShutdownReturnsAfterStalledWrite(t *testing.T) {
+	heartbeat, err := startServiceHeartbeatWithInterval(context.Background(), &stalledHeartbeatStore{}, "discovery", "stalled-shutdown", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	heartbeat.writeTimeout = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() { done <- heartbeat.stop(ctx, "stopping") }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("shutdown error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stalled shutdown write did not return")
+	}
+}

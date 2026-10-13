@@ -398,14 +398,10 @@ func (w *Worker) verifyWithRetries(
 			return result, current, anyTimeout, nil
 		}
 		lastResult = result
-		if attempt == retry.MaxAttemptsPerCycle {
+		// A server-requested delay belongs in the durable queue, where it
+		// does not occupy a worker or outlive this verification lease.
+		if attempt == retry.MaxAttemptsPerCycle || result.RetryAfter > 0 {
 			break
-		}
-		backoff := result.RetryAfter
-		if backoff > 0 {
-			if waitErr := w.waiter.Wait(ctx, backoff); waitErr != nil {
-				return declaration.Result{}, current, anyTimeout, waitErr
-			}
 		}
 	}
 	return lastResult, current, anyTimeout, nil

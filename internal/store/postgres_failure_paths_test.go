@@ -165,24 +165,7 @@ func TestExactCrawlBlockHandlesTransactionalFailures(t *testing.T) {
 				DROP FUNCTION reject_effective_block_update()
 			`,
 			want: "update effective crawl block",
-		},
-		{
-			name: "probe removal",
-			setup: `
-				CREATE FUNCTION reject_probe_delete() RETURNS trigger
-				LANGUAGE plpgsql AS $$
-				BEGIN RAISE EXCEPTION 'reject probe delete'; END $$;
-				CREATE TRIGGER reject_probe_delete
-				BEFORE DELETE ON verification_queue
-				FOR EACH STATEMENT EXECUTE FUNCTION reject_probe_delete()
-			`,
-			cleanup: `
-				DROP TRIGGER reject_probe_delete ON verification_queue;
-				DROP FUNCTION reject_probe_delete()
-			`,
-			want: "remove blocked origin probe",
-		},
-	}
+		}}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			resetAutomaticFixtureData(t, pool)

@@ -885,6 +885,8 @@ func TestMultiPageCrawlerSkipsRemotePageFailuresAndContinues(
 		"https://example.com/",
 		"https://example.com/denied",
 		"https://example.com/failed",
+		"https://example.com/failed",
+		"https://example.com/failed",
 		"https://example.com/ok",
 	}
 	if !reflect.DeepEqual(
@@ -1332,6 +1334,7 @@ func TestMultiPageCrawlerContinuesAfterPageTimeout(
 	wantCalls := []string{
 		"https://example.com/",
 		"https://example.com/timeout",
+		"https://example.com/timeout",
 		"https://example.com/ok",
 	}
 	if !reflect.DeepEqual(
@@ -1346,7 +1349,7 @@ func TestMultiPageCrawlerContinuesAfterPageTimeout(
 	}
 
 	if result.PagesAttempted != 3 ||
-		result.PagesParsed != 2 ||
+		result.PagesParsed != 3 ||
 		result.CandidatesDiscovered != 1 {
 		t.Errorf(
 			"Crawl() = %#v",
@@ -1354,11 +1357,55 @@ func TestMultiPageCrawlerContinuesAfterPageTimeout(
 		)
 	}
 
-	if len(timeoutFactory.durations) != 3 {
+	if len(timeoutFactory.durations) != 4 {
 		t.Errorf(
-			"timeout calls = %d, want 3",
+			"timeout calls = %d, want 4",
 			len(timeoutFactory.durations),
 		)
+	}
+}
+
+func TestMultiPageCrawlerContinuesAfterChildTimeoutRetriesExhausted(t *testing.T) {
+	source := mustDiscoveryOrigin(t, "https://example.com")
+	getter := newFrontierGetter(map[string][]frontierStep{
+		"https://example.com/":   {frontierHTML(`<a href="/timeout">timeout</a><a href="/ok">ok</a>`)},
+		"https://example.com/ok": {frontierHTML(`<a href="https://external.example/">external</a>`)},
+	})
+	timeouts := &frontierTimeoutFactory{cancelCalls: map[int]bool{
+		2: true, 3: true, 4: true,
+	}}
+	sink := &frontierCandidateSink{}
+	telemetry := &recordingTelemetry{runID: 1}
+	crawler, err := newMultiPageCrawler(getter, sink, frontierCrawlConfig(),
+		&frontierWaiter{}, timeouts, telemetry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := crawler.Crawl(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCalls := []string{
+		"https://example.com/",
+		"https://example.com/timeout",
+		"https://example.com/timeout",
+		"https://example.com/timeout",
+		"https://example.com/ok",
+	}
+	if !reflect.DeepEqual(getter.calls, wantCalls) {
+		t.Fatalf("fetch calls=%v, want %v", getter.calls, wantCalls)
+	}
+	if result.PagesAttempted != 3 || result.PagesParsed != 2 ||
+		result.CandidatesDiscovered != 1 || result.FailureCategory != retry.CategoryTimeout {
+		t.Fatalf("partial crawl result=%#v", result)
+	}
+	if telemetry.outcome != CrawlRunFailed || telemetry.stopReason != "partial_failure" ||
+		len(telemetry.attempts) != 3 || telemetry.attempts[1].FailureCategory != retry.CategoryTimeout {
+		t.Fatalf("partial crawl telemetry=%#v", telemetry)
+	}
+	if len(sink.calls) != 1 || len(sink.calls[0].candidates) != 1 ||
+		sink.calls[0].candidates[0].Origin.String() != "https://external.example" {
+		t.Fatalf("healthy sibling candidates=%#v", sink.calls)
 	}
 }
 

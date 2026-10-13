@@ -97,7 +97,7 @@ func TestRunControlBuildsIndependentBoundary(t *testing.T) {
 			}
 			return valid, nil
 		},
-		newCommander: func(*pgxpool.Pool) (control.Commander, error) {
+		newCommander: func(*pgxpool.Pool, string) (control.Commander, error) {
 			return commander, nil
 		},
 		newHandler: func(got control.Commander, token string) (http.Handler, error) {
@@ -132,7 +132,7 @@ func TestControlRuntimeAndConstructors(t *testing.T) {
 	if err := (runtimeOperations{}).control(context.Background()); !errors.Is(err, errControlRuntimeUnavailable) {
 		t.Errorf("control() error = %v", err)
 	}
-	if _, err := newControlCommander(nil); err == nil {
+	if _, err := newControlCommander(nil, ""); err == nil {
 		t.Error("newControlCommander(nil) error = nil")
 	}
 	settings := controlSettings{
@@ -168,6 +168,15 @@ func TestLoadControlSettingsRejectsInvalidConfiguration(t *testing.T) {
 		if !errors.Is(err, errInvalidControlConfiguration) {
 			t.Errorf("address %q error = %v", address, err)
 		}
+	}
+	settings, err := loadControlSettings(reportEnvironment(map[string]string{
+		controlTokenFileEnvironment:            "/token",
+		automaticCrawlExcludedHostsEnvironment: "https://invalid.example",
+	}))
+	if !errors.Is(err, errInvalidControlConfiguration) ||
+		!strings.Contains(err.Error(), automaticCrawlExcludedHostsEnvironment) ||
+		settings != (controlSettings{}) {
+		t.Fatalf("invalid excluded hosts returned settings=%#v error=%v", settings, err)
 	}
 }
 
@@ -222,7 +231,7 @@ func TestRunControlPreservesFailures(t *testing.T) {
 			}
 		}},
 		{"commander", func(dependencies *controlRuntimeDependencies) {
-			dependencies.newCommander = func(*pgxpool.Pool) (control.Commander, error) { return nil, expected }
+			dependencies.newCommander = func(*pgxpool.Pool, string) (control.Commander, error) { return nil, expected }
 		}},
 		{"handler", func(dependencies *controlRuntimeDependencies) {
 			dependencies.newHandler = func(control.Commander, string) (http.Handler, error) { return nil, expected }
@@ -326,7 +335,7 @@ func validControlDependencies() controlRuntimeDependencies {
 		readToken: func(string) (string, error) {
 			return "0123456789abcdef0123456789abcdef", nil
 		},
-		newCommander: func(*pgxpool.Pool) (control.Commander, error) {
+		newCommander: func(*pgxpool.Pool, string) (control.Commander, error) {
 			return &controlTestCommander{}, nil
 		},
 		newHandler: func(control.Commander, string) (http.Handler, error) {

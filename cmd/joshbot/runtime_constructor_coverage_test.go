@@ -30,7 +30,7 @@ func TestRuntimeStoreConstructorsCoverSuccessPaths(
 	}
 
 	sourceStore, err :=
-		newRuntimeCrawlSourceStore(pool)
+		newRuntimeCrawlSourceStore(pool, "")
 	if err != nil || sourceStore == nil {
 		t.Fatalf(
 			"newRuntimeCrawlSourceStore() = %#v, %v; want store, nil",

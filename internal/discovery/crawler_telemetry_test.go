@@ -94,7 +94,7 @@ func TestFetchPageTelemetryClassifiesResponseFailures(t *testing.T) {
 	}
 }
 
-func TestMultiPageCrawlerSurfacesRetryAfterWaitCancellation(
+func TestMultiPageCrawlerDefersRetryAfterWithoutWaiting(
 	t *testing.T,
 ) {
 	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
@@ -110,10 +110,10 @@ func TestMultiPageCrawlerSurfacesRetryAfterWaitCancellation(
 	})
 	config := frontierCrawlConfig()
 	config.RetryClock = fixedDiscoveryClock{now: now}
-	want := errors.New("retry-after wait canceled")
 	waiter := &frontierWaiter{
 		wait: func(context.Context, time.Duration) error {
-			return want
+			t.Error("waiter invoked for a durable retry")
+			return nil
 		},
 	}
 	crawler, err := newMultiPageCrawler(
@@ -128,8 +128,8 @@ func TestMultiPageCrawlerSurfacesRetryAfterWaitCancellation(
 		t.Fatal(err)
 	}
 	_, err = crawler.Crawl(context.Background(), source)
-	if !errors.Is(err, want) {
-		t.Fatalf("Crawl() error = %v, want %v", err, want)
+	if err != nil {
+		t.Fatalf("Crawl() error = %v", err)
 	}
 }
 
@@ -202,25 +202,16 @@ func TestMultiPageCrawlerCarriesTransientRootFailure(t *testing.T) {
 		result.PagesParsed != 0 {
 		t.Fatalf("root failure result = %#v", result)
 	}
-	if calls != retry.MaxAttemptsPerCycle {
-		t.Fatalf("root attempts = %d, want %d", calls, retry.MaxAttemptsPerCycle)
+	if calls != 1 {
+		t.Fatalf("root attempts = %d, want 1", calls)
 	}
-	wantWaits := retry.MaxAttemptsPerCycle - 1
+	wantWaits := 0
 	if len(waiter.durations) != wantWaits {
 		t.Fatalf(
 			"Retry-After waits = %d, want %d",
 			len(waiter.durations),
 			wantWaits,
 		)
-	}
-	for _, delay := range waiter.durations {
-		if delay != time.Hour {
-			t.Fatalf(
-				"Retry-After wait = %v, want %v",
-				delay,
-				time.Hour,
-			)
-		}
 	}
 }
 
@@ -281,7 +272,8 @@ func TestMultiPageCrawlerUsesSummaryTelemetry(t *testing.T) {
 	}
 	crawler, err := NewMultiPageCrawlerWithTelemetry(
 		newFrontierGetter(map[string][]frontierStep{
-			"https://source.example/": {frontierHTML(`<a href="/next">next</a>`)},
+			"https://source.example/":     {frontierHTML(`<a href="/next">next</a>`)},
+			"https://source.example/next": {frontierHTML("done")},
 		}),
 		&frontierCandidateSink{},
 		telemetry,
@@ -298,13 +290,15 @@ func TestMultiPageCrawlerUsesSummaryTelemetry(t *testing.T) {
 	}
 }
 
-func TestMultiPageCrawlerDoesNotRetryPartiallySuccessfulCrawl(t *testing.T) {
+func TestMultiPageCrawlerRetriesFailedChildPages(t *testing.T) {
 	source := mustDiscoveryOrigin(t, "https://source.example")
 	getter := newFrontierGetter(map[string][]frontierStep{
 		"https://source.example/": {
 			frontierHTML(`<a href="/next">next</a>`),
 		},
 		"https://source.example/next": {
+			{status: http.StatusTooManyRequests},
+			{status: http.StatusTooManyRequests},
 			{status: http.StatusTooManyRequests},
 		},
 	})
@@ -320,7 +314,7 @@ func TestMultiPageCrawlerDoesNotRetryPartiallySuccessfulCrawl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.PagesParsed != 1 || result.FailureCategory != retry.CategoryNone {
+	if result.PagesParsed != 1 || result.FailureCategory != retry.CategoryHTTP429 {
 		t.Fatalf("partial crawl result = %#v", result)
 	}
 }
@@ -545,7 +539,7 @@ func TestMultiPageCrawlerRecordsSafePageTelemetry(t *testing.T) {
 		telemetry.attempts[1].URLsEnqueued != 0 {
 		t.Errorf("URL telemetry = %#v", telemetry.attempts)
 	}
-	if telemetry.outcome != CrawlRunComplete || telemetry.stopReason != "frontier_exhausted" {
+	if telemetry.outcome != CrawlRunFailed || telemetry.stopReason != "partial_failure" {
 		t.Errorf("finish = %q/%q", telemetry.outcome, telemetry.stopReason)
 	}
 }

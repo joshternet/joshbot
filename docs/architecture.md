@@ -257,14 +257,15 @@ Every request uses the robots-aware guarded HTTP path.
 The frontier is intentionally in memory. A stopped crawl starts from the root
 during its next attempt.
 
-Only a transient root-page failure receives up to three immediate attempts.
+Each transient frontier-page failure receives up to three immediate attempts
+unless Retry-After defers the source crawl durably.
 Redirect-loop detection is local to each fetch attempt so a failed redirect
-cannot poison later root retries; successfully traversed same-origin URLs are
+cannot poison later page retries; successfully traversed same-origin URLs are
 merged into crawl-wide visited state only after that attempt succeeds. Failed
 attempts do not write hop URLs into crawl-wide visited state.
-Failures after at least one page was parsed remain page telemetry and do not
-turn an otherwise partially successful source crawl into a durable source
-retry.
+Failures after at least one page was parsed remain in page telemetry and the
+run result. A transient child failure schedules a durable source retry. A
+positive Retry-After ends the crawl rather than holding its lease in a sleep.
 
 The discovery runner continues claiming unrelated due sources after a claimed
 source fails. Claim and other pre-work processor failures wait for the

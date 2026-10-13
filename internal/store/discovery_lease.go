@@ -189,7 +189,8 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 								OR source_state.next_attempt_at <= $1
 							)
 							AND (
-								source_state.last_attempted_at
+								source_state.next_attempt_at IS NOT NULL
+								OR source_state.last_attempted_at
 								IS NULL
 								OR source_state.last_attempted_at
 								<= (

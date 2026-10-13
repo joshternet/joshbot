@@ -17,7 +17,8 @@ var errControlStoreUnavailable = errors.New("store: control store is unavailable
 
 // ControlStore persists operator control mutations.
 type ControlStore struct {
-	pool database.Beginner
+	pool      database.Beginner
+	automatic AutomaticCrawlConfig
 }
 
 // NewControlStore constructs a control adapter using a caller-owned pool.
@@ -27,6 +28,27 @@ func NewControlStore(pool *pgxpool.Pool) (*ControlStore, error) {
 	}
 
 	return newControlStore(pool)
+}
+
+// ValidateCrawlExcludedHosts checks the shared configured host exclusion syntax.
+func ValidateCrawlExcludedHosts(value string) error {
+	if !validExcludedHostSuffixes(value) {
+		return fmt.Errorf("store: invalid excluded crawl hosts")
+	}
+	return nil
+}
+
+// NewControlStoreWithExcludedHosts preserves configured exclusions during operator mutations.
+func NewControlStoreWithExcludedHosts(pool *pgxpool.Pool, excludedHosts string) (*ControlStore, error) {
+	storage, err := NewControlStore(pool)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateCrawlExcludedHosts(excludedHosts); err != nil {
+		return nil, err
+	}
+	storage.automatic.ExcludedHostSuffixes = excludedHosts
+	return storage, nil
 }
 
 func newControlStore(
@@ -163,7 +185,7 @@ func (s *ControlStore) SetAutomaticExpansionPaused(
 }
 
 // AddDomainAvoid inserts a domain policy, reconciles matching automatic
-// non-seed sources, removes their non-recurring verification work, and
+// non-seed sources, suspends their non-recurring verification work, and
 // atomically appends the audit.
 func (s *ControlStore) AddDomainAvoid(
 	ctx context.Context,
@@ -214,7 +236,7 @@ func (s *ControlStore) AddDomainAvoid(
 			if _, err := recomputeAutomaticCrawlBlocksTransaction(
 				ctx,
 				tx,
-				AutomaticCrawlConfig{},
+				s.automatic,
 			); err != nil {
 				return fmt.Errorf(
 					"reconcile domain avoid rule: %w",
@@ -273,7 +295,7 @@ func (s *ControlStore) RemoveDomainAvoid(
 			if _, err := recomputeAutomaticCrawlBlocksTransaction(
 				ctx,
 				tx,
-				AutomaticCrawlConfig{},
+				s.automatic,
 			); err != nil {
 				return fmt.Errorf(
 					"reconcile removed domain avoid rule: %w",
@@ -324,7 +346,7 @@ func (s *ControlStore) SetOriginBlocked(
 				tx,
 				source,
 				blocked,
-				AutomaticCrawlConfig{},
+				s.automatic,
 			); err != nil {
 				return fmt.Errorf(
 					"set origin block: %w",

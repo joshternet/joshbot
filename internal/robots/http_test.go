@@ -859,6 +859,7 @@ func TestGuardedTransportDisablesProxyAndTLSBypass(t *testing.T) {
 		destination,
 		&recordingDialer{},
 		nil,
+		DefaultHTTPConfig(),
 	)
 	t.Cleanup(transport.CloseIdleConnections)
 

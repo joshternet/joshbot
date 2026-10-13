@@ -98,51 +98,6 @@ func TestRunOnceJoinsHardVerifyAndAbandonFailures(
 	}
 }
 
-func TestRunOnceSurfacesRetryBackoffWaitFailure(
-	t *testing.T,
-) {
-	source := mustWorkerOrigin(t)
-	queue := &fakeQueue{claims: []fakeClaim{{
-		lease: workerTestLease(source), found: true,
-	}}}
-	verifier := &fakeVerifier{}
-	verifier.verify = func(
-		context.Context,
-		origin.Origin,
-	) (declaration.Result, error) {
-		return declaration.Result{
-			Outcome:         declaration.OutcomeUnavailable,
-			Origin:          source,
-			FailureCategory: retry.CategoryHTTP5xx,
-			RetryAfter:      time.Second,
-		}, nil
-	}
-	want := errors.New("backoff wait canceled")
-	waiter := waitStrategyFunc(
-		func(context.Context, time.Duration) error {
-			return want
-		},
-	)
-	runtime, err := newWorker(
-		queue,
-		verifier,
-		workerTestConfig(),
-		waiter,
-		contextTimeoutFactory{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	worked, runErr := runtime.RunOnce(context.Background())
-	if !worked {
-		t.Fatal("RunOnce() worked = false, want true")
-	}
-	if !errors.Is(runErr, want) {
-		t.Fatalf("RunOnce() error = %v, want %v", runErr, want)
-	}
-}
-
 func TestAbandonHardVerifyFailurePreservesParentCancellation(
 	t *testing.T,
 ) {

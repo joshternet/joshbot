@@ -115,10 +115,12 @@ than its latest authoritative declaration observation. Rediscovery preserves
 the existing classification, verification history, and provenance rather than
 creating a new source identity.
 
-Outbound robots-aware requests use a shared per-origin schedule. The effective
-delay for an origin is the greater of `JOSHBOT_CRAWL_REQUEST_DELAY` and the
-applicable robots `Crawl-delay`. Before an origin's robots policy is known, the
-configured request delay is used as the minimum for retrieving that policy.
+Outbound robots-aware requests use a shared per-origin schedule. The
+applicable robots `Crawl-delay` is capped by `JOSHBOT_ROBOTS_MAX_CRAWL_DELAY`
+before calculating spacing. The effective delay is the greater of that capped
+robots delay and `JOSHBOT_CRAWL_REQUEST_DELAY`. The operator minimum is not
+capped. Before an origin's robots policy is known, the configured request
+delay is used as the minimum for retrieving that policy.
 
 The same scheduling boundary covers robots retrieval, declaration
 verification, discovery pages, and redirect hops. Requests to different
@@ -191,6 +193,10 @@ The runtime exposes these controls:
 | `JOSHBOT_CRAWL_MAX_PAGES` | `32` | Maximum frontier pages selected for guarded retrieval |
 | `JOSHBOT_CRAWL_MAX_PAGE_BYTES` | `1048576` | Maximum accepted page body size |
 | `JOSHBOT_CRAWL_REQUEST_DELAY` | `1s` | Minimum per-origin delay for robots, verification, and discovery requests |
+| `JOSHBOT_ROBOTS_MAX_CRAWL_DELAY` | `30s` | Maximum valid robots-directed delay |
+| `JOSHBOT_HTTP_DIAL_TIMEOUT` | `5s` | Timeout for each validated-address dial attempt |
+| `JOSHBOT_HTTP_TLS_HANDSHAKE_TIMEOUT` | `10s` | TLS handshake timeout |
+| `JOSHBOT_HTTP_RESPONSE_HEADER_TIMEOUT` | `15s` | Response-header timeout |
 | `JOSHBOT_CRAWL_REDIRECT_LIMIT` | `5` | Maximum redirects for a page request |
 
 Additional discovery controls are:
@@ -221,6 +227,17 @@ verification.
 
 Maximum pages, maximum page bytes, and redirect limit must be positive.
 Request delay may be zero.
+
+The four robots/HTTP limits are shared by verification, discovery, and Web
+Bot Auth conformance. Unset limits use the defaults above; explicit values
+must be positive Go durations. Zero does not disable a limit.
+
+Each validated destination address has its own dial deadline. A failed dial
+may fall back to a later validated address while the request context remains
+active. TLS and response headers have separate deadlines. Existing page and
+job deadlines always take precedence and are not extended by these settings.
+The default robots cap equals the default discovery page timeout; a page
+deadline can therefore expire while waiting for robots-directed spacing.
 
 An applicable robots `Crawl-delay` may increase the effective per-origin delay
 but cannot reduce the configured minimum. Malformed applicable `Crawl-delay`
@@ -442,6 +459,14 @@ candidate from deferred to admitted without resolving an unbounded batch.
 
 Private discovery state does not appear in the public registry.
 
+Blocked probe and reprobe work remains queued with its existing mode, retry
+state, and availability. It cannot be claimed, renewed, or completed while
+blocked. Removing the effective block makes it eligible again. Suspended
+probes still count toward the pending-probe capacity limit. The control
+service receives `JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS` alongside discovery,
+so operator mutations preserve configured exclusions. The source CLI uses
+the same setting when applying an explicit block or allow.
+
 ## Retry behavior
 
 Only transient failures are retried. The transient categories are `dns`,
@@ -451,12 +476,15 @@ including unsafe addresses, policy blocks, robots denials, malformed or
 unsupported origins, unsupported or oversized content, and exhausted budgets,
 are terminal for retry scheduling.
 
-Declaration verification, the root page of a source crawl, and
+Declaration verification, each frontier page of a source crawl, and
 automatic-admission DNS resolution make at most three immediate attempts in a
-processing cycle. Non-root pages are attempted once. The normal durable
+processing cycle. The normal durable
 consecutive-failure schedule is `5m`, `30m`, `2h`, `12h`, then `24h` for each
-later failure. Valid `Retry-After` values can extend verification and root-page
-delays up to the same `24h` cap.
+later failure. Valid `Retry-After` values can extend verification and source-crawl
+delays up to the same `24h` cap. A positive server-requested delay ends the
+current verification cycle or source crawl and is persisted for later work;
+it never holds a worker or crawl lease in a long sleep. Retry deadlines take
+precedence over the normal successful-source recrawl interval.
 
 A previously valid Joshternet participant uses that normal schedule for its
 first five consecutive transient declaration-check failures. Beginning with the
@@ -466,16 +494,21 @@ authoritative valid declaration remains current until an authoritative result
 establishes otherwise. Unreachability therefore changes check freshness, not
 participation state.
 
-An exhausted three-attempt cycle is one logical queue claim, one root
+An exhausted three-attempt cycle is one logical queue claim, one
 frontier-page attempt, or one admission decision. Verification writes one
 observation, crawling writes one page-attempt row, and admission writes one
 batch outcome. The applicable durable failure streak increments once, not once
 per physical network attempt.
 
-A successful or terminal result clears the durable streak. If at least one
-page parsed successfully, the crawl source is considered successful for retry
-scheduling even when a later page failed; the failed page remains visible in
-telemetry.
+A successful or terminal result clears the durable streak. A failed child
+page remains part of the crawl result even when other pages parsed
+successfully. Transient child failures schedule a durable source retry, and
+partial runs are reported as failed with a `partial_failure` stop reason.
+Candidate evidence from successful pages is still persisted.
+
+Final crawl telemetry and service heartbeat writes have a five-second limit.
+Shutdown writes use an independent deadline so cancellation can still be
+recorded without waiting indefinitely for PostgreSQL.
 
 ## How to control JoshBot
 

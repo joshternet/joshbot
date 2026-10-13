@@ -83,6 +83,7 @@ type MultiPageCrawler struct {
 	timeoutFactory timeoutFactory
 	telemetry      CrawlTelemetry
 	clock          retry.Clock
+	finishTimeout  time.Duration
 }
 
 type crawlFrontierEntry struct {
@@ -154,6 +155,7 @@ func newMultiPageCrawler(
 		waiter:         waiter,
 		timeoutFactory: timeoutFactory,
 		telemetry:      telemetry,
+		finishTimeout:  5 * time.Second,
 		clock:          crawlRetryClock(config.RetryClock),
 	}, nil
 }
@@ -191,12 +193,15 @@ func (c *MultiPageCrawler) Crawl(
 		} else if result.BudgetExhausted {
 			outcome = CrawlRunBudgetExhausted
 			reason = "crawl_budget"
-		} else if result.PagesParsed == 0 &&
-			result.FailureCategory != retry.CategoryNone {
+		} else if result.FailureCategory != retry.CategoryNone {
 			outcome = CrawlRunFailed
 			reason = "root_failure"
+			if result.PagesParsed > 0 {
+				reason = "partial_failure"
+			}
 		}
-		finishContext := context.WithoutCancel(ctx)
+		finishContext, cancelFinish := context.WithTimeout(context.WithoutCancel(ctx), c.finishTimeout)
+		defer cancelFinish()
 		var finishErr error
 		if summaryTelemetry, ok := c.telemetry.(crawlSummaryTelemetry); ok {
 			finishErr = summaryTelemetry.FinishCrawlSummary(
@@ -277,20 +282,12 @@ func (c *MultiPageCrawler) Crawl(
 			)
 			pageContextErr = pageContext.Err()
 			cancelPage()
-			if result.PagesAttempted != 1 ||
-				!page.failureCategory.Transient() {
+			if !page.failureCategory.Transient() {
 				break
 			}
-			if attempt == retry.MaxAttemptsPerCycle {
+			// Defer Retry-After durably instead of holding a crawl lease.
+			if attempt == retry.MaxAttemptsPerCycle || page.retryAfter > 0 {
 				break
-			}
-			if page.retryAfter > 0 {
-				if err := c.waiter.Wait(
-					ctx,
-					page.retryAfter,
-				); err != nil {
-					return result, err
-				}
 			}
 		}
 		page.attempt.Sequence = result.PagesAttempted
@@ -299,9 +296,15 @@ func (c *MultiPageCrawler) Crawl(
 		if parentErr := ctx.Err(); parentErr != nil {
 			return result, parentErr
 		}
-		if result.PagesAttempted == 1 {
-			result.FailureCategory = page.failureCategory
-			result.RetryAfter = page.retryAfter
+		if page.failureCategory != retry.CategoryNone {
+			// Prefer transient failures so a failed child page is retried by
+			// the source scheduler even when other pages parsed successfully.
+			if result.FailureCategory == retry.CategoryNone || page.failureCategory.Transient() {
+				result.FailureCategory = page.failureCategory
+			}
+			if page.retryAfter > result.RetryAfter {
+				result.RetryAfter = page.retryAfter
+			}
 		}
 
 		page.attempt.FailureCategory = page.failureCategory
@@ -330,6 +333,10 @@ func (c *MultiPageCrawler) Crawl(
 				"discovery: record crawl telemetry: %w",
 				err,
 			)
+		}
+
+		if page.failureCategory.Transient() && page.retryAfter > 0 {
+			break
 		}
 
 		if pageContextErr != nil {
@@ -429,10 +436,6 @@ func (c *MultiPageCrawler) Crawl(
 				)
 			}
 		}
-	}
-	if result.PagesParsed > 0 {
-		result.FailureCategory = retry.CategoryNone
-		result.RetryAfter = 0
 	}
 
 	return result, nil

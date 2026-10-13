@@ -13,7 +13,6 @@ import (
 	"github.com/joshternet/joshbot/internal/netguard"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/retry"
-	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 )
 
@@ -285,14 +284,18 @@ func newDiscoveryRuntimeWithStoreFactory(
 		)
 	}
 
-	checker := robots.NewCheckerWithRequestDelayAndSigner(
+	checker, err := newRuntimeHTTPChecker(
 		net.DefaultResolver,
 		&net.Dialer{
-			Timeout: settings.crawl.PageTimeout,
+			Timeout: settings.http.DialTimeout,
 		},
 		settings.crawl.RequestDelay,
 		settings.signer,
+		settings.http,
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	crawler, err := discovery.NewMultiPageCrawlerWithTelemetry(
 		checker,

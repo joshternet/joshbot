@@ -302,6 +302,14 @@ func (q *Queue) Claim(
 						FROM verification_queue
 						WHERE available_at <= $1
 							AND (
+								mode = 'recurring'
+								OR NOT EXISTS (
+									SELECT 1 FROM discovery_source_state
+									WHERE source_origin = verification_queue.origin
+										AND crawl_blocked
+								)
+							)
+							AND (
 								next_attempt_at IS NULL
 								OR next_attempt_at <= $1
 							)
@@ -428,6 +436,14 @@ func (q *Queue) Renew(
 				AND lease_owner = $2
 				AND lease_generation = $3
 				AND lease_expires_at > $4
+				AND (
+					mode = 'recurring'
+					OR NOT EXISTS (
+						SELECT 1 FROM discovery_source_state
+						WHERE source_origin = verification_queue.origin
+							AND crawl_blocked
+					)
+				)
 			RETURNING
 				lease_owner,
 				lease_generation,
@@ -627,6 +643,14 @@ func (q *Queue) CompleteVerification(
 						AND queued.lease_owner = $2
 						AND queued.lease_generation = $3
 						AND queued.lease_expires_at > $4
+						AND (
+							queued.mode = 'recurring'
+							OR NOT EXISTS (
+								SELECT 1 FROM discovery_source_state
+								WHERE source_origin = queued.origin
+									AND crawl_blocked
+							)
+						)
 					FOR UPDATE OF queued
 				`,
 				lease.Origin.String(),

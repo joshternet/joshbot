@@ -17,7 +17,7 @@ func TestSourceRuntimeIntegrationFailureBoundaries(
 	source := runtimeBoundaryIntegrationOrigin(t)
 
 	t.Run("production store construction", func(t *testing.T) {
-		sourceStore, err := newRuntimeCrawlSourceStore(nil)
+		sourceStore, err := newRuntimeCrawlSourceStore(nil, "")
 		if err == nil {
 			t.Fatal(
 				"newRuntimeCrawlSourceStore(nil) error = nil, want failure",
@@ -37,6 +37,7 @@ func TestSourceRuntimeIntegrationFailureBoundaries(
 
 		operations.newCrawlSourceStore = func(
 			*pgxpool.Pool,
+			string,
 		) (crawlSourceStore, error) {
 			return nil, errRuntimeBoundaryIntegration
 		}
@@ -75,6 +76,7 @@ func TestSourceRuntimeIntegrationFailureBoundaries(
 
 		operations.newCrawlSourceStore = func(
 			*pgxpool.Pool,
+			string,
 		) (crawlSourceStore, error) {
 			return &fakeRuntimeCrawlSourceStore{
 				err: errRuntimeBoundaryIntegration,
@@ -115,6 +117,7 @@ func TestSourceRuntimeIntegrationFailureBoundaries(
 
 		operations.newCrawlSourceStore = func(
 			*pgxpool.Pool,
+			string,
 		) (crawlSourceStore, error) {
 			return &fakeRuntimeCrawlSourceStore{
 				err: errRuntimeBoundaryIntegration,
@@ -205,5 +208,25 @@ func TestSourceRuntimeIntegrationFormatsDiscoveryTimes(
 			"formatCrawlSource() = %q, want last discovery timestamp",
 			got,
 		)
+	}
+}
+
+func TestSourceRuntimeIntegrationValidatesExclusionsBeforeDatabase(t *testing.T) {
+	operations, _ := runtimeBoundaryIntegrationOperations(t)
+	baseGetenv := operations.getenv
+	operations.getenv = func(name string) string {
+		if name == automaticCrawlExcludedHostsEnvironment {
+			return "https://invalid.example"
+		}
+		return baseGetenv(name)
+	}
+	opened := false
+	operations.newDatabase = func(context.Context, *pgxpool.Config) (databaseConnection, error) {
+		opened = true
+		return nil, errRuntimeBoundaryIntegration
+	}
+	err := operations.setCrawlBlocked(context.Background(), runtimeBoundaryIntegrationOrigin(t), false)
+	if err == nil || opened || !strings.Contains(err.Error(), automaticCrawlExcludedHostsEnvironment) {
+		t.Fatalf("opened database=%v configuration error=%v", opened, err)
 	}
 }

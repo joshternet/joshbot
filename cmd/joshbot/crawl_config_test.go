@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/joshternet/joshbot/internal/discovery"
+	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 )
 
@@ -24,6 +25,7 @@ func TestCrawlRuntimeConfigurationUsesExplicitBudgets(
 	}
 
 	want := crawlRuntimeSettings{
+		http:               robots.DefaultHTTPConfig(),
 		telemetryRetention: defaultCrawlTelemetryRetention,
 		automatic: store.AutomaticCrawlConfig{
 			MaxAutomaticPromotionsPerRun: defaultAutomaticCrawlMaxPromotionsPerRun,
@@ -82,6 +84,7 @@ func TestCrawlRuntimeConfigurationOverridesEverySetting(
 	}
 
 	want := crawlRuntimeSettings{
+		http:               robots.DefaultHTTPConfig(),
 		telemetryRetention: 7 * 24 * time.Hour,
 		runner: discovery.CrawlRunnerConfig{
 			DiscoveryInterval: 336 * time.Hour,

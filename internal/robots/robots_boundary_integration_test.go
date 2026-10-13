@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joshternet/joshbot/internal/netguard"
 	"github.com/joshternet/joshbot/internal/origin"
 )
 
@@ -1390,6 +1391,57 @@ func TestRobotsBoundaryIntegrationEvictOverflowEmptyCache(
 	checker.mu.Lock()
 	checker.evictOverflowLocked(clock.Now())
 	checker.mu.Unlock()
+}
+
+func TestRobotsBoundaryIntegrationHTTPConfigValidation(
+	t *testing.T,
+) {
+	config := DefaultHTTPConfig()
+	config.DialTimeout = 0
+	if _, err := NewCheckerWithHTTPConfig(
+		nil,
+		nil,
+		0,
+		nil,
+		config,
+	); !errors.Is(err, ErrInvalidHTTPConfig) {
+		t.Fatalf(
+			"NewCheckerWithHTTPConfig() error = %v, want %v",
+			err,
+			ErrInvalidHTTPConfig,
+		)
+	}
+
+	if _, err := NewCheckerWithHTTPConfig(
+		nil,
+		nil,
+		-time.Second,
+		nil,
+		DefaultHTTPConfig(),
+	); !errors.Is(err, errInvalidRequestDelay) {
+		t.Fatalf(
+			"NewCheckerWithHTTPConfig() error = %v, want %v",
+			err,
+			errInvalidRequestDelay,
+		)
+	}
+
+	transport := newGuardedTransport(
+		netguard.Destination{},
+		nil,
+		nil,
+		HTTPConfig{},
+	)
+	t.Cleanup(transport.CloseIdleConnections)
+
+	if transport.TLSHandshakeTimeout !=
+		DefaultHTTPConfig().TLSHandshakeTimeout {
+		t.Fatalf(
+			"TLSHandshakeTimeout = %v, want %v",
+			transport.TLSHandshakeTimeout,
+			DefaultHTTPConfig().TLSHandshakeTimeout,
+		)
+	}
 }
 
 func robotsBoundaryIntegrationResponse(

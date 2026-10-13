@@ -63,10 +63,6 @@ func TestWorkerRetryIntegrationRecoversWithinVerificationCycle(
 					declarationAttempts.Add(1)
 
 				if attempt < 3 {
-					writer.Header().Set(
-						"Retry-After",
-						"1",
-					)
 					writer.WriteHeader(
 						http.StatusServiceUnavailable,
 					)
@@ -195,8 +191,8 @@ func TestWorkerRetryIntegrationPersistsTransientBackoffAfterCycleExhaustion(
 
 				// Durable completion still schedules from the
 				// shared retry policy when Retry-After is absent.
-				// In-cycle waits honor Retry-After when present,
-				// so keep this response without a long delay.
+				// A Retry-After response ends the cycle, so this
+				// fixture exercises immediate retries without one.
 				writer.WriteHeader(
 					http.StatusServiceUnavailable,
 				)

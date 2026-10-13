@@ -458,12 +458,12 @@ func TestCrawlerFailureIntegrationRedirectBoundaries(t *testing.T) {
 	})
 }
 
-func TestCrawlerFailureIntegrationRetryAfterWaitAndError(
+func TestCrawlerFailureIntegrationDefersRetryAfter(
 	t *testing.T,
 ) {
 	source := crawlerFailureIntegrationOrigin(t, "https://source.example")
 
-	t.Run("retryAfter wait succeeds then breaks", func(t *testing.T) {
+	t.Run("retryAfter is returned for durable scheduling", func(t *testing.T) {
 		calls := 0
 		getter := crawlerFailureIntegrationGetterFunc(
 			func(context.Context, *url.URL) (*http.Response, error) {
@@ -489,51 +489,13 @@ func TestCrawlerFailureIntegrationRetryAfterWaitAndError(
 			t.Fatalf("Crawl() error = %v", err)
 		}
 
-		if calls != retry.MaxAttemptsPerCycle {
-			t.Errorf("fetch calls = %d, want %d", calls, retry.MaxAttemptsPerCycle)
+		if calls != 1 {
+			t.Errorf("fetch calls = %d, want 1", calls)
 		}
 		if result.FailureCategory != retry.CategoryHTTP429 {
 			t.Errorf("FailureCategory = %q, want %q", result.FailureCategory, retry.CategoryHTTP429)
 		}
 	})
-
-	t.Run("retryAfter wait error", func(t *testing.T) {
-		waitErr := errors.New("integration retry wait failure")
-		getter := crawlerFailureIntegrationGetterFunc(
-			func(context.Context, *url.URL) (*http.Response, error) {
-				response := crawlerFailureIntegrationResponse(
-					http.StatusTooManyRequests, "text/html", "slow down",
-				)
-				response.Header.Set("Retry-After", "1")
-				return response, nil
-			},
-		)
-
-		config := crawlerFailureIntegrationConfig()
-		waiter := &crawlerFailureIntegrationWaiter{err: waitErr}
-		crawler, err := newMultiPageCrawler(
-			getter, &crawlerFailureIntegrationSink{}, config,
-			waiter, contextTimeoutFactory{}, discardCrawlTelemetry{},
-		)
-		if err != nil {
-			t.Fatalf("newMultiPageCrawler() error = %v", err)
-		}
-
-		_, err = crawler.Crawl(context.Background(), source)
-		if !errors.Is(err, waitErr) {
-			t.Errorf("Crawl() error = %v, want %v", err, waitErr)
-		}
-	})
-}
-
-type crawlerFailureIntegrationWaiter struct {
-	err error
-}
-
-func (waiter *crawlerFailureIntegrationWaiter) Wait(
-	context.Context, time.Duration,
-) error {
-	return waiter.err
 }
 
 func TestCrawlerFailureIntegrationExtractStatusTooLargeFromDecode(

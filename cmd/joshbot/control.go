@@ -46,6 +46,7 @@ var (
 type controlSettings struct {
 	listenAddress string
 	tokenFile     string
+	excludedHosts string
 
 	readHeaderTimeout time.Duration
 	readTimeout       time.Duration
@@ -58,7 +59,7 @@ type controlRuntimeDependencies struct {
 	getenv       environmentGetter
 	withDatabase func(context.Context, func(databaseConnection) error) error
 	readToken    func(string) (string, error)
-	newCommander func(*pgxpool.Pool) (control.Commander, error)
+	newCommander func(*pgxpool.Pool, string) (control.Commander, error)
 	newHandler   func(control.Commander, string) (http.Handler, error)
 	listen       func(string, string) (net.Listener, error)
 	newServer    func(controlSettings, http.Handler) reportHTTPServer
@@ -95,7 +96,7 @@ func runControl(ctx context.Context, dependencies controlRuntimeDependencies) er
 		if connection == nil {
 			return errControlDatabaseUnavailable
 		}
-		commander, err := dependencies.newCommander(connection.Pool())
+		commander, err := dependencies.newCommander(connection.Pool(), settings.excludedHosts)
 		if err != nil {
 			return fmt.Errorf("construct control store: %w", err)
 		}
@@ -149,9 +150,14 @@ func loadControlSettings(getenv environmentGetter) (controlSettings, error) {
 			controlTokenFileEnvironment,
 		)
 	}
+	excludedHosts := settingOrDefault(getenv, automaticCrawlExcludedHostsEnvironment, defaultAutomaticCrawlExcludedHosts)
+	if err := store.ValidateCrawlExcludedHosts(excludedHosts); err != nil {
+		return controlSettings{}, fmt.Errorf("%w: %s: %w", errInvalidControlConfiguration, automaticCrawlExcludedHostsEnvironment, err)
+	}
 	return controlSettings{
 		listenAddress:     listenAddress,
 		tokenFile:         tokenFile,
+		excludedHosts:     excludedHosts,
 		readHeaderTimeout: defaultControlReadHeaderTimeout,
 		readTimeout:       defaultControlReadTimeout,
 		writeTimeout:      defaultControlWriteTimeout,
@@ -194,8 +200,8 @@ func validControlToken(token string) bool {
 	return operatortoken.Valid(token)
 }
 
-func newControlCommander(pool *pgxpool.Pool) (control.Commander, error) {
-	return store.NewControlStore(pool)
+func newControlCommander(pool *pgxpool.Pool, excludedHosts string) (control.Commander, error) {
+	return store.NewControlStoreWithExcludedHosts(pool, excludedHosts)
 }
 
 func newControlHTTPServer(settings controlSettings, handler http.Handler) reportHTTPServer {
