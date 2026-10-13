@@ -478,3 +478,11 @@ func validCrawlRuntimeEnvironment() mapEnvironment {
 func stringPointer(value string) *string {
 	return &value
 }
+
+func TestCrawlRuntimeConfigurationRejectsExcessivePageBudget(t *testing.T) {
+	environment := validCrawlRuntimeEnvironment()
+	environment[crawlMaxPagesEnvironment] = "10001"
+	if _, err := loadCrawlRuntimeSettings(environment.get); !errors.Is(err, errInvalidRuntimeConfiguration) {
+		t.Fatalf("excessive page budget error=%v", err)
+	}
+}

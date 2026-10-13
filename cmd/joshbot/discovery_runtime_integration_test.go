@@ -409,3 +409,7 @@ func TestDiscoveryRuntimeIntegrationFailedHeartbeatState(
 		)
 	}
 }
+
+func TestDiscoveryRuntimeIntegrationRejectsExcessivePageBudget(t *testing.T) {
+	TestCrawlRuntimeConfigurationRejectsExcessivePageBudget(t)
+}

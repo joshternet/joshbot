@@ -10,8 +10,6 @@ import (
 	"github.com/joshternet/joshbot/internal/database"
 )
 
-const maxCrawlPageAttempts = 10000
-
 var (
 	errPostgresPoolUnavailable = errors.New(
 		"reporting: PostgreSQL pool is unavailable",
@@ -450,6 +448,17 @@ func (reader *PostgresReader) Crawl(
 	ctx context.Context,
 	id int64,
 ) (CrawlDetail, bool, error) {
+	return reader.CrawlPage(ctx, id, defaultLimit, 0)
+}
+
+// CrawlPage reads one bounded page of ordered sanitized attempts.
+func (reader *PostgresReader) CrawlPage(ctx context.Context, id int64, limit int, after int64) (CrawlDetail, bool, error) {
+	if !validReaderLimit(limit) {
+		return CrawlDetail{}, false, errInvalidLimit
+	}
+	if after < 0 {
+		return CrawlDetail{}, false, errInvalidCursor
+	}
 	if id <= 0 {
 		return CrawlDetail{},
 			false,
@@ -508,7 +517,7 @@ func (reader *PostgresReader) Crawl(
 
 	pages, err := reader.crawlPages(
 		ctx,
-		id,
+		id, limit+1, after,
 	)
 	if err != nil {
 		return CrawlDetail{},
@@ -516,15 +525,12 @@ func (reader *PostgresReader) Crawl(
 			err
 	}
 
-	return CrawlDetail{
-		Run:   run,
-		Pages: pages,
-	}, true, nil
+	return boundedCrawlDetail(CrawlDetail{Run: run, Pages: pages}, id, limit, after), true, nil
 }
 
 func (reader *PostgresReader) crawlPages(
 	ctx context.Context,
-	id int64,
+	id int64, limit int, after int64,
 ) ([]PageAttempt, error) {
 	rows, err := reader.pool.Query(
 		ctx,
@@ -548,12 +554,12 @@ func (reader *PostgresReader) crawlPages(
 				urls_found,
 				urls_enqueued
 			FROM crawl_page_attempts
-			WHERE run_id = $1
+			WHERE run_id = $1 AND sequence > $3::bigint
 			ORDER BY sequence
 			LIMIT $2
 		`,
 		id,
-		maxCrawlPageAttempts,
+		limit, after,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(

@@ -1041,10 +1041,12 @@ func TestRobotsBoundaryIntegrationSchedulerBoundaries(
 		t,
 		"https://example.com",
 	)
-	scheduler.setCrawlDelay(
-		source,
-		3*time.Second,
-	)
+	schedule, err := scheduler.acquire(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule.setCrawlDelay(3 * time.Second)
+	scheduler.release(schedule)
 
 	if err := scheduler.wait(
 		context.Background(),

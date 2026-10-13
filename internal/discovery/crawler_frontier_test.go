@@ -2211,3 +2211,11 @@ func mustNewMultiPageCrawler(
 
 	return crawler
 }
+
+func TestMultiPageCrawlerRejectsExcessivePageBudget(t *testing.T) {
+	config := frontierCrawlConfig()
+	config.MaxPages = 10001
+	if _, err := NewMultiPageCrawler(newFrontierGetter(nil), &frontierCandidateSink{}, config); !errors.Is(err, errInvalidCrawlConfig) {
+		t.Fatalf("excessive page budget error=%v", err)
+	}
+}

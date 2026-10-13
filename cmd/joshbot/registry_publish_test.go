@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -590,31 +591,43 @@ func TestRegistryExportLoopReportsFailures(t *testing.T) {
 	}
 }
 
-func TestRegistryExportLoopContinuesAfterCleanupFailure(t *testing.T) {
+func TestRegistryExportLoopStopsAfterCleanupFailure(t *testing.T) {
 	root := t.TempDir()
-	err := runRegistryExport(
-		context.Background(),
-		time.Millisecond,
-		root,
-		func(_ context.Context, path string) error {
-			return os.Mkdir(path, 0o755)
-		},
-		time.Now,
-		func(context.Context, time.Duration) error {
-			return errors.New("stop")
-		},
+	failure := errors.New("cleanup failed")
+	cleanupCalls := 0
+	exports := 0
+	err := runRegistryExport(context.Background(), time.Millisecond, root,
+		func(_ context.Context, path string) error { exports++; return os.Mkdir(path, 0755) }, time.Now,
+		func(context.Context, time.Duration) error { t.Fatal("slept after failed cleanup"); return nil },
 		func(string, string, string) error {
-			return errors.New("cleanup failed")
+			cleanupCalls++
+			if cleanupCalls == 2 {
+				return failure
+			}
+			return nil
 		},
-		strings.NewReader(strings.Repeat("a", 16)),
-		discardRegistryLogger(),
-	)
-	if err != nil {
-		t.Fatal(err)
+		&registryEntropy{}, discardRegistryLogger())
+	if !errors.Is(err, failure) || exports != 1 {
+		t.Fatalf("exports=%d error=%v", exports, err)
 	}
-
 	if _, err := readRegistryPointer(root); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRegistryExportStopsAfterIntervalCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	exports := 0
+	err := runRegistryExport(ctx, time.Millisecond, t.TempDir(),
+		func(_ context.Context, path string) error { exports++; return os.Mkdir(path, 0o755) }, time.Now,
+		func(context.Context, time.Duration) error {
+			// Cancellation may race with a successfully elapsed interval.
+			cancel()
+			return nil
+		}, removeOldAutomaticSnapshots, &registryEntropy{}, discardRegistryLogger())
+	if err != nil || exports != 1 {
+		t.Fatalf("exports=%d error=%v", exports, err)
 	}
 }
 
@@ -1177,4 +1190,137 @@ func TestPublishRegistryPublishesTheCurrentSnapshot(t *testing.T) {
 
 func discardRegistryLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func TestRegistryExportStopsWhenCleanupFails(t *testing.T) {
+	root := t.TempDir()
+	cleanupErr := errors.New("cleanup failed")
+	exports := 0
+	err := runRegistryExport(context.Background(), time.Millisecond, root,
+		func(_ context.Context, path string) error { exports++; return os.Mkdir(path, 0755) }, time.Now,
+		func(context.Context, time.Duration) error {
+			if exports > 1 {
+				return errors.New("stop")
+			}
+			return nil
+		},
+		func(string, string, string) error { return cleanupErr }, &registryEntropy{}, discardRegistryLogger())
+	if !errors.Is(err, cleanupErr) || exports > 1 {
+		t.Fatalf("exports=%d cleanup error=%v", exports, err)
+	}
+}
+
+func TestRegistryExportRemovesPartialBeforeRetry(t *testing.T) {
+	root := t.TempDir()
+	var partial string
+	exports := 0
+	err := runRegistryExport(context.Background(), time.Millisecond, root,
+		func(_ context.Context, path string) error {
+			exports++
+			partial = path
+			if err := os.Mkdir(path, 0755); err != nil {
+				return err
+			}
+			return errors.New("export failed")
+		}, time.Now,
+		func(context.Context, time.Duration) error {
+			if _, err := os.Stat(partial); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("partial snapshot retained before retry: %v", err)
+			}
+			return errors.New("stop")
+		},
+		removeOldAutomaticSnapshots, &registryEntropy{}, discardRegistryLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exports != 1 {
+		t.Fatalf("exports=%d", exports)
+	}
+}
+
+func TestRegistryExportRejectsInvalidStartupPointer(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		t.Run(fmt.Sprint(directory), func(t *testing.T) {
+			root := t.TempDir()
+			pointer := filepath.Join(root, registryCurrentName)
+			if directory {
+				if err := os.Mkdir(pointer, 0755); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.WriteFile(pointer, []byte("invalid\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := runRegistryExport(context.Background(), time.Millisecond, root,
+				func(context.Context, string) error { t.Fatal("exported with invalid pointer"); return nil }, time.Now,
+				func(context.Context, time.Duration) error { t.Fatal("slept with invalid pointer"); return nil }, removeOldAutomaticSnapshots, &registryEntropy{}, discardRegistryLogger())
+			if err == nil {
+				t.Fatal("invalid startup pointer accepted")
+			}
+		})
+	}
+}
+
+func TestRegistryExportFailedCleanupPreventsRestartGrowth(t *testing.T) {
+	root := t.TempDir()
+	original := removeSnapshotDirectory
+	cleanupErr := errors.New("cannot remove snapshot")
+	exportErr := errors.New("export incomplete")
+	removeSnapshotDirectory = func(string) error { return cleanupErr }
+	t.Cleanup(func() { removeSnapshotDirectory = original })
+	exports := 0
+	for run := 0; run < 2; run++ {
+		err := runRegistryExport(context.Background(), time.Millisecond, root,
+			func(_ context.Context, path string) error {
+				exports++
+				if err := os.Mkdir(path, 0755); err != nil {
+					return err
+				}
+				return exportErr
+			}, time.Now,
+			func(context.Context, time.Duration) error { t.Fatal("slept after cleanup failure"); return nil }, removeOldAutomaticSnapshots, &registryEntropy{}, discardRegistryLogger())
+		if !errors.Is(err, cleanupErr) {
+			t.Fatalf("cleanup error=%v", err)
+		}
+		if run == 0 && !errors.Is(err, exportErr) {
+			t.Fatalf("export error lost: %v", err)
+		}
+	}
+	if exports != 1 {
+		t.Fatalf("exports across restart=%d", exports)
+	}
+}
+
+func TestRegistryExportCreatesInitiallyMissingRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "exports")
+	exports := 0
+	err := runRegistryExport(context.Background(), time.Millisecond, root,
+		func(_ context.Context, path string) error { exports++; return os.MkdirAll(path, 0755) }, time.Now,
+		func(context.Context, time.Duration) error { return errors.New("stop") }, removeOldAutomaticSnapshots, &registryEntropy{}, discardRegistryLogger())
+	if err != nil || exports != 1 {
+		t.Fatalf("exports=%d error=%v", exports, err)
+	}
+}
+
+func TestRegistryExportPointerFailureRemovesSnapshot(t *testing.T) {
+	root := t.TempDir()
+	var snapshot string
+	err := runRegistryExport(context.Background(), time.Millisecond, root,
+		func(_ context.Context, path string) error {
+			snapshot = path
+			if err := os.Mkdir(path, 0755); err != nil {
+				return err
+			}
+			return os.Mkdir(filepath.Join(root, registryCurrentName), 0755)
+		}, time.Now,
+		func(context.Context, time.Duration) error {
+			if _, err := os.Stat(snapshot); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("unpublished snapshot retained: %v", err)
+			}
+			return errors.New("stop")
+		}, removeOldAutomaticSnapshots, &registryEntropy{}, discardRegistryLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
 }

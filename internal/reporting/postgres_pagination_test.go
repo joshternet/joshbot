@@ -2,7 +2,11 @@ package reporting
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -1102,5 +1106,69 @@ func TestPostgresReaderPaginationReturnsEmptyPages(
 			"AuditsPage() = %#v, want empty page",
 			audits,
 		)
+	}
+}
+
+func TestPostgresReaderPaginatesCrawlAttempts(t *testing.T) {
+	ctx := context.Background()
+	pool := newReportingTestPool(t)
+	fixture := seedReportingFixture(t, pool)
+	if _, err := pool.Exec(ctx, `
+  INSERT INTO crawl_page_attempts(run_id,sequence,requested_url,final_url,depth,started_at,duration_milliseconds,status_code,response_bytes,content_type,redirect_count,robots_decision,internal_link_count,external_link_count,outcome)
+  SELECT run_id,additional.sequence,requested_url,final_url,depth,started_at,duration_milliseconds,status_code,response_bytes,content_type,redirect_count,robots_decision,internal_link_count,external_link_count,outcome
+  FROM crawl_page_attempts CROSS JOIN generate_series(2,5) AS additional(sequence)
+  WHERE run_id=$1 AND crawl_page_attempts.sequence=1`, fixture.crawlID); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewPostgresReader(pool, PostgresConfig{MaxPendingProbes: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after int64
+	total := 0
+	for pageIndex := 0; pageIndex < 3; pageIndex++ {
+		detail, found, err := reader.CrawlPage(ctx, fixture.crawlID, 2, after)
+		if err != nil || !found || len(detail.Pages) > 2 {
+			t.Fatalf("page=%#v found=%v err=%v", detail, found, err)
+		}
+		for _, attempt := range detail.Pages {
+			total++
+			if attempt.Sequence != total {
+				t.Fatalf("sequence=%d, want %d", attempt.Sequence, total)
+			}
+		}
+		if pageIndex == 2 {
+			if detail.NextCursor != "" {
+				t.Fatal("final page has continuation")
+			}
+		} else {
+			cursor, err := decodeCursor(detail.NextCursor, "crawl_pages")
+			if err != nil || cursor.ID != int64(total) {
+				t.Fatalf("cursor=%#v err=%v", cursor, err)
+			}
+			after = cursor.ID
+		}
+	}
+	if total != 5 {
+		t.Fatalf("attempts traversed=%d, want 5", total)
+	}
+	// The legacy entry point also bounds its first page.
+	if _, found, err := reader.CrawlPage(ctx, fixture.crawlID, 2, int64(1<<62)); err != nil || !found {
+		t.Fatalf("large sequence cursor found=%v error=%v", found, err)
+	}
+	handler, err := NewHandler(reader, testToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/crawls/%d?limit=2", fixture.crawlID), nil)
+	request.Header.Set("Authorization", "Bearer "+testToken)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var payload CrawlDetail
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || len(payload.Pages) != 2 || payload.NextCursor == "" || response.Header().Get(nextCursorHeader) != payload.NextCursor {
+		t.Fatalf("status=%d payload=%#v", response.Code, payload)
 	}
 }

@@ -88,6 +88,12 @@ The Compose deployment includes:
 - `publisher`: one-shot GitHub registry publication;
 - `backup`: logical PostgreSQL backups.
 
+Before exporting, `registry-export` removes abandoned automatic snapshots and
+retains the current snapshot. Failed exports and pointer writes remove their
+partial snapshot before retrying. After a successful export it retains the
+current and previous snapshots. Any removal failure stops the process; a
+restart must complete cleanup before creating another snapshot.
+
 Logical restoration uses [`deploy/restore.sh`](restore.sh) against a
 **disposable** database only (`JOSHBOT_RESTORE_DISPOSABLE=yes`). There is no
 Compose service that restores into the live application database.
@@ -301,7 +307,7 @@ Review crawl budgets:
 
 ```text
 JOSHBOT_CRAWL_MAX_DEPTH >= 0
-JOSHBOT_CRAWL_MAX_PAGES > 0
+1 <= JOSHBOT_CRAWL_MAX_PAGES <= 10000
 JOSHBOT_CRAWL_MAX_PAGE_BYTES > 0
 JOSHBOT_CRAWL_REQUEST_DELAY >= 0
 JOSHBOT_CRAWL_REDIRECT_LIMIT > 0
@@ -679,6 +685,13 @@ events use stable keyset pagination. `limit` defaults to `100` and accepts
 `1` through `1000`; `cursor` is opaque and route-specific. The body is always
 a JSON array. When another page exists, the response carries
 `X-JoshBot-Next-Cursor`.
+
+`GET /api/v1/crawls/{id}` applies the same limit to page attempts, ordered by
+sequence. It returns an object containing `run`, `pages`, and, when more attempts
+exist, `next_cursor`. The same cursor is also in `X-JoshBot-Next-Cursor`; pass it
+as `cursor` to retrieve the next page. A cursor belongs to one crawl run and
+cannot be used with another. Each database query retrieves at most the requested
+limit plus one attempt to detect continuation.
 
 ## Operator control configuration
 

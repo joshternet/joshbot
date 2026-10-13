@@ -14,6 +14,9 @@ import (
 	"github.com/joshternet/joshbot/internal/robots"
 )
 
+// MaxCrawlPages bounds a configured source crawl.
+const MaxCrawlPages = 10000
+
 var (
 	errMultiPageCrawlerUnavailable = errors.New(
 		"discovery: multi-page crawler unavailable",
@@ -704,6 +707,7 @@ func validCrawlConfig(
 ) bool {
 	return config.MaxDepth >= 0 &&
 		config.MaxPages > 0 &&
+		config.MaxPages <= MaxCrawlPages &&
 		config.MaxPageBytes > 0 &&
 		config.RequestDelay >= 0 &&
 		config.RedirectLimit > 0 &&

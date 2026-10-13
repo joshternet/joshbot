@@ -828,7 +828,7 @@ func TestPostgresReaderPreservesDatabaseFailures(
 			call: func() error {
 				_, err := reader.crawlPages(
 					ctx,
-					1,
+					1, defaultLimit+1, 0,
 				)
 
 				return err

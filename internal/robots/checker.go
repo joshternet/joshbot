@@ -35,6 +35,7 @@ var (
 
 type cacheEntry struct {
 	policy     Policy
+	crawlDelay time.Duration
 	expiresAt  time.Time
 	lastAccess time.Time
 }
@@ -109,47 +110,58 @@ func (c *Checker) Allowed(
 	ctx context.Context,
 	target *url.URL,
 ) (bool, error) {
-	if c == nil {
-		return false, errCheckerUnavailable
-	}
-
-	if ctx == nil {
-		return false, errInvalidContext
-	}
-
-	if err := ctx.Err(); err != nil {
+	initial, err := c.requestOrigin(ctx, target)
+	if err != nil {
 		return false, err
 	}
-
-	if target == nil {
-		return false, errInvalidHTTPTarget
-	}
-
-	initial, err := origin.Parse(target.String())
-	if err != nil {
-		return false, errInvalidHTTPTarget
-	}
-
-	if c.getter == nil {
-		return false, errHTTPGetterUnavailable
-	}
-
-	if c.now == nil {
-		return false, errClockUnavailable
-	}
-
 	policy, err := c.policyFor(ctx, initial)
 	if err != nil {
 		return false, err
 	}
-
 	return policy.Allowed(target), nil
+}
+
+func (c *Checker) requestOrigin(ctx context.Context, target *url.URL) (origin.Origin, error) {
+	if c == nil {
+		return origin.Origin{}, errCheckerUnavailable
+	}
+
+	if ctx == nil {
+		return origin.Origin{}, errInvalidContext
+	}
+
+	if err := ctx.Err(); err != nil {
+		return origin.Origin{}, err
+	}
+
+	if target == nil {
+		return origin.Origin{}, errInvalidHTTPTarget
+	}
+
+	initial, err := origin.Parse(target.String())
+	if err != nil {
+		return origin.Origin{}, errInvalidHTTPTarget
+	}
+
+	if c.getter == nil {
+		return origin.Origin{}, errHTTPGetterUnavailable
+	}
+
+	if c.now == nil {
+		return origin.Origin{}, errClockUnavailable
+	}
+	return initial, nil
 }
 
 func (c *Checker) policyFor(
 	ctx context.Context,
 	initial origin.Origin,
 ) (Policy, error) {
+	schedule, err := c.scheduler.acquire(initial)
+	if err != nil {
+		return Policy{}, fmt.Errorf("%w: %w", ErrTemporary, err)
+	}
+	defer c.scheduler.release(schedule)
 	c.mu.Lock()
 	now := c.now()
 	c.evictExpiredLocked(now)
@@ -160,6 +172,7 @@ func (c *Checker) policyFor(
 		entry.lastAccess = now
 		c.cache[initial] = entry
 		c.mu.Unlock()
+		schedule.setCrawlDelay(entry.crawlDelay)
 		return entry.policy, nil
 	}
 
@@ -203,7 +216,7 @@ func (c *Checker) policyFor(
 		return Policy{}, err
 	}
 
-	c.scheduler.setCrawlDelay(initial, crawlDelay)
+	schedule.setCrawlDelay(crawlDelay)
 
 	c.mu.Lock()
 	delete(c.inflight, initial)
@@ -212,6 +225,7 @@ func (c *Checker) policyFor(
 	c.evictOverflowLocked(now)
 	c.cache[initial] = cacheEntry{
 		policy:     policy,
+		crawlDelay: crawlDelay,
 		expiresAt:  now.Add(maxCacheLifetime),
 		lastAccess: now,
 	}
@@ -263,12 +277,23 @@ func (c *Checker) Get(
 	ctx context.Context,
 	target *url.URL,
 ) (*http.Response, error) {
-	allowed, err := c.Allowed(ctx, target)
+	initial, err := c.requestOrigin(ctx, target)
 	if err != nil {
 		return nil, err
 	}
+	// Preserve the schedule through policy lookup, waiting, and the request.
+	// Eviction between these steps would lose the origin's learned delay.
+	schedule, err := c.scheduler.acquire(initial)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrTemporary, err)
+	}
+	defer c.scheduler.release(schedule)
 
-	if !allowed {
+	policy, err := c.policyFor(ctx, initial)
+	if err != nil {
+		return nil, err
+	}
+	if !policy.Allowed(target) {
 		return nil, ErrDisallowed
 	}
 
