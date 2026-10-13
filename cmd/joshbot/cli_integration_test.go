@@ -630,3 +630,36 @@ func TestCLIIntegrationMainEntrypoint(
 		)
 	}
 }
+
+func TestCLIIntegrationAllowPreservesConfiguredHostExclusion(t *testing.T) {
+	ctx := context.Background()
+	operations, pool := newCLIIntegrationEnvironment(t)
+	if err := operations.migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	source, err := origin.Parse("https://host.excluded.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO discovery_source_state(source_origin,automatically_discovered,crawl_blocked)VALUES($1,true,true)`, source.String()); err != nil {
+		t.Fatal(err)
+	}
+	baseGetenv := operations.getenv
+	operations.getenv = func(name string) string {
+		if name == automaticCrawlExcludedHostsEnvironment {
+			return "excluded.example"
+		}
+		return baseGetenv(name)
+	}
+	if err := operations.setCrawlBlocked(ctx, source, false); err != nil {
+		t.Fatal(err)
+	}
+	var blocked bool
+	if err := pool.QueryRow(ctx, `SELECT crawl_blocked FROM discovery_source_state WHERE source_origin=$1`, source.String()).Scan(&blocked); err != nil {
+		t.Fatal(err)
+	}
+	if !blocked {
+		t.Fatal("source allow cleared configured exclusion")
+	}
+}

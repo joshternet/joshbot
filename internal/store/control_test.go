@@ -268,7 +268,7 @@ func TestControlStoreDomainAvoidReconcilesAutomaticSources(t *testing.T) {
 	`).Scan(&autoProbe, &seedProbe); err != nil {
 		t.Fatal(err)
 	}
-	if autoProbe || !seedProbe {
+	if !autoProbe || !seedProbe {
 		t.Errorf("probe state = automatic:%v seed:%v", autoProbe, seedProbe)
 	}
 

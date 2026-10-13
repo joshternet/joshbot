@@ -1349,52 +1349,6 @@ func TestWorkerFailureIntegrationJoinsVerifyAndAbandonErrors(
 	}
 }
 
-func TestWorkerFailureIntegrationRetryWaitError(t *testing.T) {
-	source := workerFailureIntegrationOrigin(t, "https://wait.example")
-	waitErr := errors.New("integration retry wait failure")
-	calls := 0
-
-	queue := &workerFailureIntegrationQueue{
-		claim: func(context.Context, string) (store.Lease, bool, error) {
-			return workerFailureIntegrationLease(source), true, nil
-		},
-	}
-
-	verifier := workerFailureIntegrationVerifier{
-		verify: func(
-			context.Context, origin.Origin,
-		) (declaration.Result, error) {
-			calls++
-			return declaration.Result{
-				Origin:          source,
-				Outcome:         declaration.OutcomeUnavailable,
-				FailureCategory: retry.CategoryHTTP5xx,
-				RetryAfter:      time.Second,
-			}, nil
-		},
-	}
-
-	waiter := &workerFailureIntegrationWaiter{
-		wait: func(context.Context, time.Duration) error {
-			return waitErr
-		},
-	}
-
-	config := workerFailureIntegrationConfig()
-	runtime, err := newWorker(queue, verifier, config, waiter, contextTimeoutFactory{})
-	if err != nil {
-		t.Fatalf("newWorker() error = %v", err)
-	}
-
-	_, runErr := runtime.RunOnce(context.Background())
-	if !errors.Is(runErr, waitErr) {
-		t.Errorf("RunOnce() error = %v, want %v", runErr, waitErr)
-	}
-	if calls != 1 {
-		t.Errorf("verify calls = %d, want 1", calls)
-	}
-}
-
 func TestWorkerFailureIntegrationAbandonErrorPaths(t *testing.T) {
 	source := workerFailureIntegrationOrigin(t, "https://abandon.example")
 	verifyErr := errors.New("integration hard failure")

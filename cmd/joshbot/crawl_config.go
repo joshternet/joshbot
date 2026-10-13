@@ -47,6 +47,7 @@ type crawlRuntimeSettings struct {
 	crawl              discovery.CrawlConfig
 	automatic          store.AutomaticCrawlConfig
 	telemetryRetention time.Duration
+	http               robots.HTTPConfig
 	signer             robots.RequestSigner
 	leaseOwner         string
 }
@@ -54,6 +55,10 @@ type crawlRuntimeSettings struct {
 func loadCrawlRuntimeSettings(
 	getenv environmentGetter,
 ) (crawlRuntimeSettings, error) {
+	httpConfig, err := loadHTTPConfig(getenv)
+	if err != nil {
+		return crawlRuntimeSettings{}, err
+	}
 	discoveryInterval, err := positiveDurationSetting(
 		getenv,
 		discoveryIntervalEnvironment,
@@ -186,6 +191,7 @@ func loadCrawlRuntimeSettings(
 			PageTimeout:                  pageTimeout,
 			MaxAutomaticPromotionsPerRun: automaticConfig.MaxAutomaticPromotionsPerRun,
 		},
+		http:               httpConfig,
 		automatic:          automaticConfig,
 		telemetryRetention: telemetryRetention,
 	}, nil

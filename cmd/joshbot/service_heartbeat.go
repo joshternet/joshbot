@@ -14,6 +14,8 @@ import (
 
 const maxServiceHeartbeatMessageBytes = 256
 
+const serviceHeartbeatWriteTimeout = 5 * time.Second
+
 const serviceHeartbeatInterval = 5 * time.Second
 
 type heartbeatStore interface {
@@ -24,6 +26,7 @@ type heartbeatStore interface {
 
 type serviceHeartbeat struct {
 	store         heartbeatStore
+	writeTimeout  time.Duration
 	service       string
 	instanceID    string
 	startedAt     time.Time
@@ -58,7 +61,8 @@ func startServiceHeartbeatWithReporter(
 ) (*serviceHeartbeat, error) {
 	startedAt := time.Now().UTC()
 	monitor := &serviceHeartbeat{
-		store: storage, service: service, instanceID: instanceID,
+		writeTimeout: serviceHeartbeatWriteTimeout,
+		store:        storage, service: service, instanceID: instanceID,
 		startedAt: startedAt, done: make(chan struct{}), state: "starting",
 		reportError: reportError,
 	}
@@ -99,6 +103,8 @@ func (heartbeat *serviceHeartbeat) stop(ctx context.Context, state string) error
 }
 
 func (heartbeat *serviceHeartbeat) write(ctx context.Context, state string) error {
+	writeContext, cancel := context.WithTimeout(ctx, heartbeat.writeTimeout)
+	defer cancel()
 	heartbeat.mu.RLock()
 	currentState := heartbeat.state
 	currentOrigin := heartbeat.current
@@ -108,7 +114,7 @@ func (heartbeat *serviceHeartbeat) write(ctx context.Context, state string) erro
 		currentState = state
 	}
 	now := time.Now().UTC()
-	err := heartbeat.store.UpsertServiceHeartbeat(ctx, store.ServiceHeartbeat{
+	err := heartbeat.store.UpsertServiceHeartbeat(writeContext, store.ServiceHeartbeat{
 		Service: heartbeat.service, InstanceID: heartbeat.instanceID,
 		State: currentState, CurrentOrigin: currentOrigin, Message: message,
 		StartedAt: heartbeat.startedAt, UpdatedAt: now,

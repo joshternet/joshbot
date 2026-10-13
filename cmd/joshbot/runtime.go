@@ -17,7 +17,6 @@ import (
 	"github.com/joshternet/joshbot/internal/githubpublish"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/publicdata"
-	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 	"github.com/joshternet/joshbot/internal/worker"
 )
@@ -85,6 +84,7 @@ type runtimeOperations struct {
 
 	newCrawlSourceStore func(
 		*pgxpool.Pool,
+		string,
 	) (crawlSourceStore, error)
 
 	newHeartbeatStore func(
@@ -459,6 +459,10 @@ func (operations runtimeOperations) publish(
 func (operations runtimeOperations) worker(
 	ctx context.Context,
 ) error {
+	httpConfig, err := loadHTTPConfig(operations.getenv)
+	if err != nil {
+		return err
+	}
 	settings, err := loadWorkerSettings(
 		operations.getenv,
 		operations.random,
@@ -528,14 +532,18 @@ func (operations runtimeOperations) worker(
 				)
 			}
 
-			checker := robots.NewCheckerWithRequestDelayAndSigner(
+			checker, err := newRuntimeHTTPChecker(
 				net.DefaultResolver,
 				&net.Dialer{
-					Timeout: settings.worker.JobTimeout,
+					Timeout: httpConfig.DialTimeout,
 				},
 				requestDelay,
 				signer,
+				httpConfig,
 			)
+			if err != nil {
+				return err
+			}
 			verifier := declaration.NewVerifier(
 				checker,
 			)

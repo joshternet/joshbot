@@ -7,10 +7,14 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"time"
 
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/retry"
 )
+
+// DefaultDialTimeout bounds each individual validated-address connection attempt.
+const DefaultDialTimeout = 5 * time.Second
 
 var (
 	errUnsafeAddress       = errors.New("netguard: unsafe address")
@@ -23,6 +27,7 @@ var (
 	)
 	errDialerUnavailable  = errors.New("netguard: dialer unavailable")
 	errInvalidDestination = errors.New("netguard: invalid destination")
+	errInvalidDialTimeout = errors.New("netguard: dial timeout must be positive")
 	errDialFailed         = errors.New("netguard: dial failed")
 )
 
@@ -238,6 +243,16 @@ func (d Destination) DialContext(
 	ctx context.Context,
 	dialer Dialer,
 ) (net.Conn, error) {
+	return d.DialContextWithTimeout(ctx, dialer, DefaultDialTimeout)
+}
+
+// DialContextWithTimeout bounds each validated-address attempt independently.
+// A failed attempt may fall back while the parent context still has time.
+func (d Destination) DialContextWithTimeout(
+	ctx context.Context,
+	dialer Dialer,
+	timeout time.Duration,
+) (net.Conn, error) {
 	if ctx == nil {
 		return nil, errInvalidContext
 	}
@@ -254,17 +269,23 @@ func (d Destination) DialContext(
 		return nil, errInvalidDestination
 	}
 
+	if timeout <= 0 {
+		return nil, errInvalidDialTimeout
+	}
+
 	for _, address := range d.addresses {
 		if ValidateAddr(address) != nil {
 			return nil, errUnsafeAddress
 		}
 
 		target := netip.AddrPortFrom(address, d.port).String()
+		attemptContext, cancel := context.WithTimeout(ctx, timeout)
 		connection, err := dialer.DialContext(
-			ctx,
+			attemptContext,
 			"tcp",
 			target,
 		)
+		cancel()
 		if err == nil {
 			if connection == nil {
 				return nil, errDialFailed

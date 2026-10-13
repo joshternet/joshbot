@@ -87,7 +87,7 @@ func TestRuntimeCrawlSourceOperations(t *testing.T) {
 	operations, state := newTestRuntimeOperations(t)
 	stored := []store.CrawlSource{{Origin: mustCommandSeedOrigin(t, "https://example.com")}}
 	fakeStore := &fakeRuntimeCrawlSourceStore{sources: stored}
-	operations.newCrawlSourceStore = func(pool *pgxpool.Pool) (crawlSourceStore, error) {
+	operations.newCrawlSourceStore = func(pool *pgxpool.Pool, _ string) (crawlSourceStore, error) {
 		if pool != state.database.Pool() {
 			t.Error("unexpected pool")
 		}
@@ -111,7 +111,7 @@ func TestRuntimeCrawlSourceFailures(t *testing.T) {
 	source := mustCommandSeedOrigin(t, "https://example.com")
 	for _, construction := range []bool{false, true} {
 		operations, _ := newTestRuntimeOperations(t)
-		operations.newCrawlSourceStore = func(*pgxpool.Pool) (crawlSourceStore, error) {
+		operations.newCrawlSourceStore = func(*pgxpool.Pool, string) (crawlSourceStore, error) {
 			if construction {
 				return nil, want
 			}
@@ -126,12 +126,41 @@ func TestRuntimeCrawlSourceFailures(t *testing.T) {
 	}
 }
 
+func TestRuntimeCrawlSourceRejectsInvalidExclusionsBeforeDatabase(t *testing.T) {
+	for _, action := range []string{"block", "allow", "list"} {
+		t.Run(action, func(t *testing.T) {
+			operations, _ := newTestRuntimeOperations(t)
+			baseGetenv := operations.getenv
+			operations.getenv = func(name string) string {
+				if name == automaticCrawlExcludedHostsEnvironment {
+					return "https://invalid.example"
+				}
+				return baseGetenv(name)
+			}
+			operations.newDatabase = func(context.Context, *pgxpool.Config) (databaseConnection, error) {
+				t.Fatal("opened database before validating excluded hosts")
+				return nil, nil
+			}
+			var err error
+			if action == "list" {
+				_, err = operations.crawlSources(context.Background())
+			} else {
+				err = operations.setCrawlBlocked(context.Background(),
+					mustCommandSeedOrigin(t, "https://example.com"), action == "block")
+			}
+			if err == nil || !strings.Contains(err.Error(), automaticCrawlExcludedHostsEnvironment) {
+				t.Fatalf("invalid excluded hosts error=%v", err)
+			}
+		})
+	}
+}
+
 func TestProductionRuntimeIncludesCrawlSourceStore(t *testing.T) {
 	operations := newRuntimeOperations(testWriter{t: t})
 	if operations.newCrawlSourceStore == nil {
 		t.Fatal("crawl source factory is nil")
 	}
-	if sourceStore, err := newRuntimeCrawlSourceStore(nil); err == nil || sourceStore != nil {
+	if sourceStore, err := newRuntimeCrawlSourceStore(nil, ""); err == nil || sourceStore != nil {
 		t.Fatalf("newRuntimeCrawlSourceStore(nil)=(%#v,%v)", sourceStore, err)
 	}
 }

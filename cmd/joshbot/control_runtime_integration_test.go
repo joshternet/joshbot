@@ -137,6 +137,7 @@ func TestControlRuntimeIntegrationServesOperatorAPI(
 		readToken: readControlTokenFile,
 		newCommander: func(
 			*pgxpool.Pool,
+			string,
 		) (control.Commander, error) {
 			return commander, nil
 		},
@@ -324,6 +325,7 @@ func TestControlRuntimeIntegrationRejectsInvalidTokenFile(
 		readToken: readControlTokenFile,
 		newCommander: func(
 			*pgxpool.Pool,
+			string,
 		) (control.Commander, error) {
 			return nil, nil
 		},

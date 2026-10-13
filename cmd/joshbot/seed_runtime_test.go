@@ -25,7 +25,7 @@ func TestNewRuntimeCrawlSeedStoreUsesPool(
 func TestNewRuntimeCrawlSourceStoreUsesPool(t *testing.T) {
 	_, pool := newCLIIntegrationEnvironment(t)
 
-	sourceStore, err := newRuntimeCrawlSourceStore(pool)
+	sourceStore, err := newRuntimeCrawlSourceStore(pool, "")
 	if err != nil {
 		t.Fatalf("newRuntimeCrawlSourceStore() error = %v, want nil", err)
 	}

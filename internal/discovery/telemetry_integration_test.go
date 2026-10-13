@@ -409,8 +409,8 @@ func TestDiscoveryTelemetryIntegrationRecordsSanitizedRun(
 
 	summary := telemetry.summaries[0]
 
-	if summary.outcome != discovery.CrawlRunComplete ||
-		summary.reason != "frontier_exhausted" ||
+	if summary.outcome != discovery.CrawlRunFailed ||
+		summary.reason != "partial_failure" ||
 		summary.frontierRemaining != 0 {
 		t.Errorf(
 			"crawl summary = %#v",

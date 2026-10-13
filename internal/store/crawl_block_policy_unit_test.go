@@ -32,11 +32,6 @@ func TestSetExactCrawlBlockTransactionWithoutDatabase(
 							"UPDATE 1",
 						),
 					},
-					{
-						tag: pgconn.NewCommandTag(
-							"DELETE 1",
-						),
-					},
 				},
 			}
 
@@ -124,11 +119,6 @@ func TestSetExactCrawlBlockTransactionWithoutDatabase(
 					{
 						tag: pgconn.NewCommandTag(
 							"UPDATE 1",
-						),
-					},
-					{
-						tag: pgconn.NewCommandTag(
-							"DELETE 1",
 						),
 					},
 				},
@@ -431,60 +421,6 @@ func TestSetExactCrawlBlockTransactionFailuresWithoutDatabase(
 		},
 	)
 
-	t.Run(
-		"blocked probe removal",
-		func(t *testing.T) {
-			testErr := errors.New(
-				"test blocked probe removal failure",
-			)
-
-			tx := &controlUnitTx{
-				rowResults: []storeFakeRow{
-					{
-						values: []any{
-							false,
-							false,
-						},
-					},
-				},
-				execResults: []controlUnitExecResult{
-					{
-						tag: pgconn.NewCommandTag(
-							"UPDATE 1",
-						),
-					},
-					{
-						err: testErr,
-					},
-				},
-			}
-
-			err := setExactCrawlBlockTransaction(
-				ctx,
-				tx,
-				mustStoreOrigin(
-					t,
-					"https://example.com",
-				),
-				true,
-				AutomaticCrawlConfig{},
-			)
-
-			if !errors.Is(
-				err,
-				testErr,
-			) ||
-				!strings.Contains(
-					err.Error(),
-					"remove blocked origin probe",
-				) {
-				t.Fatalf(
-					"setExactCrawlBlockTransaction() error = %v",
-					err,
-				)
-			}
-		},
-	)
 }
 
 func TestRecomputeAutomaticCrawlBlocksTransactionWithoutDatabase(
@@ -748,6 +684,114 @@ func TestRecomputeAutomaticCrawlBlocksTransactionFailuresWithoutDatabase(
 						),
 					},
 				},
+				execResults: []controlUnitExecResult{
+					{
+						tag: pgconn.NewCommandTag(
+							"UPDATE 1",
+						),
+					},
+				},
+			}
+
+			changed, err := recomputeAutomaticCrawlBlocksTransaction(
+				ctx,
+				tx,
+				AutomaticCrawlConfig{},
+			)
+
+			if err != nil || changed != 1 ||
+				tx.execIndex != len(tx.execResults) {
+				t.Fatalf(
+					"recomputeAutomaticCrawlBlocksTransaction() = %d, %v, execs %d",
+					changed,
+					err,
+					tx.execIndex,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"invalid origin does not stop a valid block update",
+		func(t *testing.T) {
+			tx := &controlUnitTx{
+				queryResults: []storeFakeQueryResult{
+					{
+						rows: newStoreFakeRows(),
+					},
+					{
+						rows: newStoreFakeRows(
+							[]any{
+								"not-an-origin",
+								false,
+								false,
+							},
+							[]any{
+								"https://operator.test",
+								true,
+								false,
+							},
+						),
+					},
+				},
+				execResults: []controlUnitExecResult{
+					{
+						tag: pgconn.NewCommandTag(
+							"UPDATE 1",
+						),
+					},
+					{
+						tag: pgconn.NewCommandTag(
+							"UPDATE 1",
+						),
+					},
+				},
+			}
+
+			changed, err := recomputeAutomaticCrawlBlocksTransaction(
+				ctx,
+				tx,
+				AutomaticCrawlConfig{},
+			)
+
+			if err != nil || changed != 2 ||
+				tx.execIndex != len(tx.execResults) {
+				t.Fatalf(
+					"recomputeAutomaticCrawlBlocksTransaction() = %d, %v, execs %d",
+					changed,
+					err,
+					tx.execIndex,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"invalid stored origin update",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test invalid automatic block update failure",
+			)
+			tx := &controlUnitTx{
+				queryResults: []storeFakeQueryResult{
+					{
+						rows: newStoreFakeRows(),
+					},
+					{
+						rows: newStoreFakeRows(
+							[]any{
+								"not-an-origin",
+								false,
+								false,
+							},
+						),
+					},
+				},
+				execResults: []controlUnitExecResult{
+					{
+						err: testErr,
+					},
+				},
 			}
 
 			changed, err := recomputeAutomaticCrawlBlocksTransaction(
@@ -757,10 +801,10 @@ func TestRecomputeAutomaticCrawlBlocksTransactionFailuresWithoutDatabase(
 			)
 
 			if changed != 0 ||
-				err == nil ||
+				!errors.Is(err, testErr) ||
 				!strings.Contains(
 					err.Error(),
-					"invalid automatic crawl source",
+					"update automatic crawl block",
 				) {
 				t.Fatalf(
 					"recomputeAutomaticCrawlBlocksTransaction() = %d, %v",
@@ -814,68 +858,6 @@ func TestRecomputeAutomaticCrawlBlocksTransactionFailuresWithoutDatabase(
 				!strings.Contains(
 					err.Error(),
 					"update automatic crawl block",
-				) {
-				t.Fatalf(
-					"recomputeAutomaticCrawlBlocksTransaction() = %d, %v",
-					changed,
-					err,
-				)
-			}
-		},
-	)
-
-	t.Run(
-		"blocked probe cleanup",
-		func(t *testing.T) {
-			testErr := errors.New(
-				"test automatic probe cleanup failure",
-			)
-
-			tx := &controlUnitTx{
-				queryResults: []storeFakeQueryResult{
-					{
-						rows: newStoreFakeRows(
-							[]any{
-								"example.com",
-							},
-						),
-					},
-					{
-						rows: newStoreFakeRows(
-							[]any{
-								"https://auto.example.com",
-								false,
-								false,
-							},
-						),
-					},
-				},
-				execResults: []controlUnitExecResult{
-					{
-						tag: pgconn.NewCommandTag(
-							"UPDATE 1",
-						),
-					},
-					{
-						err: testErr,
-					},
-				},
-			}
-
-			changed, err := recomputeAutomaticCrawlBlocksTransaction(
-				ctx,
-				tx,
-				AutomaticCrawlConfig{},
-			)
-
-			if changed != 0 ||
-				!errors.Is(
-					err,
-					testErr,
-				) ||
-				!strings.Contains(
-					err.Error(),
-					"remove blocked automatic probes",
 				) {
 				t.Fatalf(
 					"recomputeAutomaticCrawlBlocksTransaction() = %d, %v",

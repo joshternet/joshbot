@@ -397,7 +397,7 @@ func TestRunOncePreservesVerificationFailure(
 	}
 }
 
-func TestRunOnceBacksOffBetweenTransientVerifyRetries(
+func TestRunOnceDefersServerRequestedRetry(
 	t *testing.T,
 ) {
 	source := mustWorkerOrigin(t)
@@ -445,7 +445,7 @@ func TestRunOnceBacksOffBetweenTransientVerifyRetries(
 		t.Fatalf("RunOnce() = %v, %v", worked, runErr)
 	}
 
-	wantWaits := retry.MaxAttemptsPerCycle - 1
+	wantWaits := 0
 	if len(waits) != wantWaits {
 		t.Fatalf(
 			"backoff waits = %v, want %d entries",
@@ -453,13 +453,8 @@ func TestRunOnceBacksOffBetweenTransientVerifyRetries(
 			wantWaits,
 		)
 	}
-	for _, delay := range waits {
-		if delay != 3*time.Second {
-			t.Fatalf(
-				"backoff delay = %v, want 3s",
-				delay,
-			)
-		}
+	if verifier.calls != 1 || queue.completeCalls != 1 || queue.completedResults[0].RetryAfter != 3*time.Second {
+		t.Fatalf("retry was not deferred: calls=%d completed=%v", verifier.calls, queue.completedResults)
 	}
 }
 

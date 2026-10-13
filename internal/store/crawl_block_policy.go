@@ -50,15 +50,6 @@ func setExactCrawlBlockTransaction(
 	`, source.String(), effectiveBlocked); err != nil {
 		return fmt.Errorf("update effective crawl block: %w", err)
 	}
-	if effectiveBlocked {
-		if _, err := tx.Exec(ctx, `
-			DELETE FROM verification_queue
-			WHERE origin = $1
-				AND mode IN ('probe', 'reprobe')
-		`, source.String()); err != nil {
-			return fmt.Errorf("remove blocked origin probe: %w", err)
-		}
-	}
 	return nil
 }
 
@@ -97,17 +88,26 @@ func recomputeAutomaticCrawlBlocksTransaction(
 		return 0, fmt.Errorf("collect automatic crawl blocks: %w", err)
 	}
 	changed := 0
-	blockedOrigins := make([]string, 0, len(states))
 	for _, state := range states {
 		source, err := origin.Parse(state.rawOrigin)
 		if err != nil {
-			return 0, fmt.Errorf("invalid automatic crawl source: %w", err)
+			// Older crawls stored automatic sources that current
+			// origin parsing rejects. Block those rows and continue
+			// so one legacy value cannot stop discovery startup.
+			if !state.crawlBlocked {
+				if _, err := tx.Exec(ctx, `
+					UPDATE discovery_source_state
+					SET crawl_blocked = $2
+					WHERE source_origin = $1
+				`, state.rawOrigin, true); err != nil {
+					return 0, fmt.Errorf("update automatic crawl block: %w", err)
+				}
+				changed++
+			}
+			continue
 		}
 		effectiveBlocked := state.operatorBlocked ||
 			exclusions.excludes(source.Hostname())
-		if effectiveBlocked {
-			blockedOrigins = append(blockedOrigins, state.rawOrigin)
-		}
 		if effectiveBlocked == state.crawlBlocked {
 			continue
 		}
@@ -119,15 +119,6 @@ func recomputeAutomaticCrawlBlocksTransaction(
 			return 0, fmt.Errorf("update automatic crawl block: %w", err)
 		}
 		changed++
-	}
-	if len(blockedOrigins) > 0 {
-		if _, err := tx.Exec(ctx, `
-			DELETE FROM verification_queue
-			WHERE origin = ANY($1::text[])
-				AND mode IN ('probe', 'reprobe')
-		`, blockedOrigins); err != nil {
-			return 0, fmt.Errorf("remove blocked automatic probes: %w", err)
-		}
 	}
 	return changed, nil
 }

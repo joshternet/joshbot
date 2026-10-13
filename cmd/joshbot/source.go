@@ -15,8 +15,8 @@ type crawlSourceStore interface {
 	CrawlSources(context.Context) ([]store.CrawlSource, error)
 }
 
-func newRuntimeCrawlSourceStore(pool *pgxpool.Pool) (crawlSourceStore, error) {
-	sourceStore, err := store.NewDiscoveryStore(pool)
+func newRuntimeCrawlSourceStore(pool *pgxpool.Pool, excludedHosts string) (crawlSourceStore, error) {
+	sourceStore, err := store.NewDiscoveryStoreWithAutomaticCrawling(pool, store.AutomaticCrawlConfig{ExcludedHostSuffixes: excludedHosts})
 	if err != nil {
 		return nil, err
 	}
@@ -55,8 +55,12 @@ func (operations runtimeOperations) withCrawlSourceStore(
 	ctx context.Context,
 	action func(crawlSourceStore) error,
 ) error {
+	excludedHosts := settingOrDefault(operations.getenv, automaticCrawlExcludedHostsEnvironment, defaultAutomaticCrawlExcludedHosts)
+	if err := store.ValidateCrawlExcludedHosts(excludedHosts); err != nil {
+		return fmt.Errorf("%s: %w", automaticCrawlExcludedHostsEnvironment, err)
+	}
 	return operations.withDatabase(ctx, func(connection databaseConnection) error {
-		sourceStore, err := operations.newCrawlSourceStore(connection.Pool())
+		sourceStore, err := operations.newCrawlSourceStore(connection.Pool(), excludedHosts)
 		if err != nil {
 			return fmt.Errorf("construct crawl source store: %w", err)
 		}

@@ -69,6 +69,7 @@ type guardedHTTP struct {
 	dialer   netguard.Dialer
 	rootCAs  *x509.CertPool
 	signer   RequestSigner
+	config   HTTPConfig
 }
 
 func (g *guardedHTTP) get(
@@ -96,6 +97,7 @@ func (g *guardedHTTP) get(
 		destination,
 		g.dialer,
 		g.rootCAs,
+		g.config,
 	)
 
 	logicalTarget := *target
@@ -144,7 +146,11 @@ func newGuardedTransport(
 	destination netguard.Destination,
 	dialer netguard.Dialer,
 	rootCAs *x509.CertPool,
+	config HTTPConfig,
 ) *http.Transport {
+	if config == (HTTPConfig{}) {
+		config = DefaultHTTPConfig()
+	}
 	return &http.Transport{
 		Proxy: nil,
 		DialContext: func(
@@ -152,9 +158,11 @@ func newGuardedTransport(
 			_ string,
 			_ string,
 		) (net.Conn, error) {
-			return destination.DialContext(ctx, dialer)
+			return destination.DialContextWithTimeout(ctx, dialer, config.DialTimeout)
 		},
-		DialTLSContext: nil,
+		DialTLSContext:        nil,
+		TLSHandshakeTimeout:   config.TLSHandshakeTimeout,
+		ResponseHeaderTimeout: config.ResponseHeaderTimeout,
 		TLSClientConfig: &tls.Config{
 			RootCAs: rootCAs,
 		},

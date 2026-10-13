@@ -280,7 +280,7 @@ func TestControlBoundaryIntegrationSettingsAndTokenFailures(t *testing.T) {
 		}
 	}
 
-	if _, err := newControlCommander(nil); err == nil {
+	if _, err := newControlCommander(nil, ""); err == nil {
 		t.Error(
 			"newControlCommander(nil) error = nil, want error",
 		)
@@ -381,6 +381,7 @@ func TestControlBoundaryIntegrationRunControlFailures(t *testing.T) {
 			) {
 				dependencies.newCommander = func(
 					*pgxpool.Pool,
+					string,
 				) (control.Commander, error) {
 					return nil,
 						errControlBoundaryIntegrationFailure
@@ -730,6 +731,7 @@ func controlBoundaryIntegrationDependencies() controlRuntimeDependencies {
 
 		newCommander: func(
 			*pgxpool.Pool,
+			string,
 		) (control.Commander, error) {
 			return &controlBoundaryIntegrationCommander{},
 				nil
@@ -790,5 +792,40 @@ func controlBoundaryIntegrationErrorName(
 
 	default:
 		return "failure"
+	}
+}
+
+func TestControlBoundaryIntegrationPropagatesConfiguredExclusions(t *testing.T) {
+	dependencies := controlBoundaryIntegrationDependencies()
+	dependencies.getenv = controlBoundaryIntegrationEnvironment{
+		controlTokenFileEnvironment:            "/secret/operator-token",
+		automaticCrawlExcludedHostsEnvironment: "excluded.example,blogspot.*",
+	}.get
+	called := false
+	dependencies.newCommander = func(_ *pgxpool.Pool, hosts string) (control.Commander, error) {
+		called = true
+		if hosts != "excluded.example,blogspot.*" {
+			t.Fatalf("configured exclusions=%q", hosts)
+		}
+		return nil, errControlBoundaryIntegrationFailure
+	}
+	if err := runControl(context.Background(), dependencies); !errors.Is(err, errControlBoundaryIntegrationFailure) || !called {
+		t.Fatalf("commander called=%v error=%v", called, err)
+	}
+}
+
+func TestControlBoundaryIntegrationRejectsInvalidExclusionsBeforeIO(t *testing.T) {
+	dependencies := controlBoundaryIntegrationDependencies()
+	dependencies.getenv = controlBoundaryIntegrationEnvironment{
+		controlTokenFileEnvironment:            "/secret/operator-token",
+		automaticCrawlExcludedHostsEnvironment: "https://invalid.example",
+	}.get
+	dependencies.readToken = func(string) (string, error) { t.Fatal("read token before validating exclusions"); return "", nil }
+	dependencies.withDatabase = func(context.Context, func(databaseConnection) error) error {
+		t.Fatal("opened database before validating exclusions")
+		return nil
+	}
+	if err := runControl(context.Background(), dependencies); !errors.Is(err, errInvalidControlConfiguration) {
+		t.Fatalf("invalid exclusions error=%v", err)
 	}
 }

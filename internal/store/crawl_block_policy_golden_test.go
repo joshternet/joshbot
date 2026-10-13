@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -99,37 +98,6 @@ func (tx *crawlBlockGoldenTx) Exec(
 			), nil
 		}
 
-	case len(args) == 1:
-		if source, ok := args[0].(string); ok {
-			tx.operations = append(
-				tx.operations,
-				fmt.Sprintf(
-					"remove_probe source=%s",
-					source,
-				),
-			)
-
-			return pgconn.NewCommandTag(
-				"DELETE 1",
-			), nil
-		}
-
-		if sources, ok := args[0].([]string); ok {
-			tx.operations = append(
-				tx.operations,
-				fmt.Sprintf(
-					"remove_probes sources=%s",
-					strings.Join(
-						sources,
-						",",
-					),
-				),
-			)
-
-			return pgconn.NewCommandTag(
-				"DELETE 1",
-			), nil
-		}
 	}
 
 	return pgconn.CommandTag{},
