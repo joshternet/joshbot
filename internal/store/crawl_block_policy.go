@@ -101,7 +101,21 @@ func recomputeAutomaticCrawlBlocksTransaction(
 	for _, state := range states {
 		source, err := origin.Parse(state.rawOrigin)
 		if err != nil {
-			return 0, fmt.Errorf("invalid automatic crawl source: %w", err)
+			// Older crawls stored automatic sources that current
+			// origin parsing rejects. Block those rows and continue
+			// so one legacy value cannot stop discovery startup.
+			if !state.crawlBlocked {
+				if _, err := tx.Exec(ctx, `
+					UPDATE discovery_source_state
+					SET crawl_blocked = $2
+					WHERE source_origin = $1
+				`, state.rawOrigin, true); err != nil {
+					return 0, fmt.Errorf("update automatic crawl block: %w", err)
+				}
+				changed++
+			}
+			blockedOrigins = append(blockedOrigins, state.rawOrigin)
+			continue
 		}
 		effectiveBlocked := state.operatorBlocked ||
 			exclusions.excludes(source.Hostname())

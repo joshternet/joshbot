@@ -2,10 +2,12 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/origin"
 )
@@ -513,11 +515,38 @@ func TestAutomaticCrawlPolicyEmptyAndUnavailableRules(t *testing.T) {
 		if _, err := pool.Exec(ctx, `ALTER TABLE discovery_source_state DROP CONSTRAINT discovery_source_state_origin_check`); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pool.Exec(ctx, `INSERT INTO discovery_source_state (source_origin, automatically_discovered) VALUES ('bad', true)`); err != nil {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO discovery_source_state (source_origin, automatically_discovered)
+			VALUES ('bad', true), ('https://valid.example', true)
+		`); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.ReconcileAutomaticCrawlPolicy(ctx); err == nil {
-			t.Error("ReconcileAutomaticCrawlPolicy() corrupt-source error = nil")
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO verification_queue (origin, available_at, mode)
+			VALUES ('bad', now(), 'probe'), ('https://valid.example', now(), 'probe')
+		`); err != nil {
+			t.Fatal(err)
+		}
+		if changed, err := store.ReconcileAutomaticCrawlPolicy(ctx); err != nil || changed != 1 {
+			t.Fatalf("invalid-source reconciliation = (%d, %v), want (1, nil)", changed, err)
+		}
+		var invalidBlocked, validBlocked bool
+		var invalidProbes, validProbes int
+		if err := pool.QueryRow(ctx, `
+			SELECT
+				(SELECT crawl_blocked FROM discovery_source_state WHERE source_origin = 'bad'),
+				(SELECT crawl_blocked FROM discovery_source_state WHERE source_origin = 'https://valid.example'),
+				(SELECT count(*) FROM verification_queue WHERE origin = 'bad'),
+				(SELECT count(*) FROM verification_queue WHERE origin = 'https://valid.example')
+		`).Scan(&invalidBlocked, &validBlocked, &invalidProbes, &validProbes); err != nil {
+			t.Fatal(err)
+		}
+		if !invalidBlocked || validBlocked || invalidProbes != 0 || validProbes != 1 {
+			t.Fatalf("invalid/valid blocked = %t/%t, probes = %d/%d; want true/false, 0/1",
+				invalidBlocked, validBlocked, invalidProbes, validProbes)
+		}
+		if changed, err := store.ReconcileAutomaticCrawlPolicy(ctx); err != nil || changed != 0 {
+			t.Fatalf("repeat invalid-source reconciliation = (%d, %v), want (0, nil)", changed, err)
 		}
 	})
 
@@ -654,6 +683,62 @@ func TestReconcileAutomaticCrawlPolicyFailures(t *testing.T) {
 		}
 		if _, err := store.ReconcileAutomaticCrawlPolicy(ctx); err == nil {
 			t.Error("ReconcileAutomaticCrawlPolicy() block failure = nil")
+		}
+	})
+
+	t.Run("invalid source block failure rolls back reconciliation", func(t *testing.T) {
+		ctx := context.Background()
+		pool := newCrawlSourceMigrationTestPool(t)
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO discovery_source_state (source_origin, automatically_discovered)
+			VALUES ('https://writer.blogspot.com', true), ('not-an-origin', true)
+		`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO verification_queue (origin, available_at, mode)
+			VALUES ('https://writer.blogspot.com', CURRENT_TIMESTAMP, 'probe'),
+				('not-an-origin', CURRENT_TIMESTAMP, 'probe')
+		`); err != nil {
+			t.Fatal(err)
+		}
+		// The valid source sorts first and is updated before the invalid
+		// source fails, so this also verifies rollback of earlier changes.
+		if _, err := pool.Exec(ctx, `
+			CREATE FUNCTION reject_invalid_source_block() RETURNS trigger
+			LANGUAGE plpgsql AS $$ BEGIN
+				RAISE EXCEPTION 'invalid source block rejected';
+			END $$;
+			CREATE TRIGGER reject_invalid_source_block
+			BEFORE UPDATE ON discovery_source_state FOR EACH ROW
+			WHEN (OLD.source_origin = 'not-an-origin')
+			EXECUTE FUNCTION reject_invalid_source_block()
+		`); err != nil {
+			t.Fatal(err)
+		}
+		store, err := NewDiscoveryStoreWithAutomaticCrawling(pool, AutomaticCrawlConfig{
+			Enabled: true, ExcludedHostSuffixes: "blogspot.com",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		changed, err := store.ReconcileAutomaticCrawlPolicy(ctx)
+		var postgresError *pgconn.PgError
+		if changed != 0 || !errors.As(err, &postgresError) ||
+			postgresError.Code != "P0001" ||
+			!strings.Contains(err.Error(), "update automatic crawl block") {
+			t.Fatalf("failed reconciliation = (%d, %v), want (0, wrapped PostgreSQL block error)", changed, err)
+		}
+		var blocked, queued int
+		if err := pool.QueryRow(ctx, `
+			SELECT
+				(SELECT count(*) FROM discovery_source_state WHERE crawl_blocked),
+				(SELECT count(*) FROM verification_queue)
+		`).Scan(&blocked, &queued); err != nil {
+			t.Fatal(err)
+		}
+		if blocked != 0 || queued != 2 {
+			t.Fatalf("after rollback: blocked = %d, queued = %d; want 0, 2", blocked, queued)
 		}
 	})
 

@@ -47,12 +47,13 @@ type inflightPolicy struct {
 
 // Checker obtains, caches, evaluates, and schedules robots-aware requests.
 type Checker struct {
-	mu        sync.Mutex
-	getter    hopGetter
-	now       func() time.Time
-	cache     map[origin.Origin]cacheEntry
-	inflight  map[origin.Origin]*inflightPolicy
-	scheduler *originRequestScheduler
+	mu            sync.Mutex
+	getter        hopGetter
+	now           func() time.Time
+	cache         map[origin.Origin]cacheEntry
+	inflight      map[origin.Origin]*inflightPolicy
+	scheduler     *originRequestScheduler
+	maxCrawlDelay time.Duration
 }
 
 // NewCheckerWithRequestDelayAndSigner constructs the shared JoshBot outbound
@@ -68,16 +69,7 @@ func NewCheckerWithRequestDelayAndSigner(
 	requestDelay time.Duration,
 	signer RequestSigner,
 ) *Checker {
-	return newCheckerWithRequestDelay(
-		&guardedHTTP{
-			resolver: resolver,
-			dialer:   dialer,
-			signer:   signer,
-		},
-		time.Now,
-		requestDelay,
-		timerRequestDelayWaiter{},
-	)
+	return newCheckerWithHTTPConfig(resolver, dialer, requestDelay, signer, DefaultHTTPConfig())
 }
 
 func newCheckerWithRequestDelay(
@@ -101,11 +93,12 @@ func newCheckerWithRequestDelay(
 	}
 
 	return &Checker{
-		getter:    scheduledGetter,
-		now:       now,
-		cache:     make(map[origin.Origin]cacheEntry),
-		inflight:  make(map[origin.Origin]*inflightPolicy),
-		scheduler: scheduler,
+		maxCrawlDelay: DefaultMaxCrawlDelay,
+		getter:        scheduledGetter,
+		now:           now,
+		cache:         make(map[origin.Origin]cacheEntry),
+		inflight:      make(map[origin.Origin]*inflightPolicy),
+		scheduler:     scheduler,
 	}
 }
 
@@ -198,7 +191,7 @@ func (c *Checker) policyFor(
 		return Policy{}, err
 	}
 
-	crawlDelay, err := policy.CrawlDelay()
+	crawlDelay, err := policy.crawlDelay(c.maxCrawlDelay)
 	if err != nil {
 		err = fmt.Errorf("%w: %w", ErrTemporary, err)
 		pending.err = err

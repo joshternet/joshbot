@@ -118,6 +118,10 @@ func executeWebBotAuthConformance(
 	getenv environmentGetter,
 	client webBotAuthConformanceClient,
 ) error {
+	httpConfig, err := loadHTTPConfig(getenv)
+	if err != nil {
+		return err
+	}
 	config, err := loadWebBotAuthConfig(getenv)
 	if err != nil {
 		return err
@@ -144,10 +148,14 @@ func executeWebBotAuthConformance(
 	}
 
 	if client == nil {
-		client = newWebBotAuthConformanceClient(
+		client, err = newWebBotAuthConformanceClient(
 			requestDelay,
 			signer,
+			httpConfig,
 		)
+		if err != nil {
+			return err
+		}
 	}
 
 	directoryURL, probeURL, err :=
@@ -253,14 +261,16 @@ var webBotAuthConformanceSigner = func(
 func newWebBotAuthConformanceClient(
 	requestDelay time.Duration,
 	signer *webbotauth.Signer,
-) webBotAuthConformanceClient {
-	return robots.NewCheckerWithRequestDelayAndSigner(
+	config robots.HTTPConfig,
+) (webBotAuthConformanceClient, error) {
+	return newRuntimeHTTPChecker(
 		net.DefaultResolver,
 		&net.Dialer{
-			Timeout: defaultDiscoveryPageTimeout,
+			Timeout: config.DialTimeout,
 		},
 		requestDelay,
 		signer,
+		config,
 	)
 }
 

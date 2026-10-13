@@ -115,10 +115,12 @@ than its latest authoritative declaration observation. Rediscovery preserves
 the existing classification, verification history, and provenance rather than
 creating a new source identity.
 
-Outbound robots-aware requests use a shared per-origin schedule. The effective
-delay for an origin is the greater of `JOSHBOT_CRAWL_REQUEST_DELAY` and the
-applicable robots `Crawl-delay`. Before an origin's robots policy is known, the
-configured request delay is used as the minimum for retrieving that policy.
+Outbound robots-aware requests use a shared per-origin schedule. The
+applicable robots `Crawl-delay` is capped by `JOSHBOT_ROBOTS_MAX_CRAWL_DELAY`
+before calculating spacing. The effective delay is the greater of that capped
+robots delay and `JOSHBOT_CRAWL_REQUEST_DELAY`. The operator minimum is not
+capped. Before an origin's robots policy is known, the configured request
+delay is used as the minimum for retrieving that policy.
 
 The same scheduling boundary covers robots retrieval, declaration
 verification, discovery pages, and redirect hops. Requests to different
@@ -191,6 +193,10 @@ The runtime exposes these controls:
 | `JOSHBOT_CRAWL_MAX_PAGES` | `32` | Maximum frontier pages selected for guarded retrieval |
 | `JOSHBOT_CRAWL_MAX_PAGE_BYTES` | `1048576` | Maximum accepted page body size |
 | `JOSHBOT_CRAWL_REQUEST_DELAY` | `1s` | Minimum per-origin delay for robots, verification, and discovery requests |
+| `JOSHBOT_ROBOTS_MAX_CRAWL_DELAY` | `30s` | Maximum valid robots-directed delay |
+| `JOSHBOT_HTTP_DIAL_TIMEOUT` | `5s` | Timeout for each validated-address dial attempt |
+| `JOSHBOT_HTTP_TLS_HANDSHAKE_TIMEOUT` | `10s` | TLS handshake timeout |
+| `JOSHBOT_HTTP_RESPONSE_HEADER_TIMEOUT` | `15s` | Response-header timeout |
 | `JOSHBOT_CRAWL_REDIRECT_LIMIT` | `5` | Maximum redirects for a page request |
 
 Additional discovery controls are:
@@ -221,6 +227,17 @@ verification.
 
 Maximum pages, maximum page bytes, and redirect limit must be positive.
 Request delay may be zero.
+
+The four robots/HTTP limits are shared by verification, discovery, and Web
+Bot Auth conformance. Unset limits use the defaults above; explicit values
+must be positive Go durations. Zero does not disable a limit.
+
+Each validated destination address has its own dial deadline. A failed dial
+may fall back to a later validated address while the request context remains
+active. TLS and response headers have separate deadlines. Existing page and
+job deadlines always take precedence and are not extended by these settings.
+The default robots cap equals the default discovery page timeout; a page
+deadline can therefore expire while waiting for robots-directed spacing.
 
 An applicable robots `Crawl-delay` may increase the effective per-origin delay
 but cannot reduce the configured minimum. Malformed applicable `Crawl-delay`

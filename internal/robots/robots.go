@@ -219,9 +219,14 @@ func validProductToken(token string) bool {
 //
 // A nil error means every applicable Crawl-delay directive was valid. Zero
 // means either no applicable delay was present or the applicable delay
-// resolves to zero. Malformed applicable directives return
+// resolves to zero. Valid delays are capped at DefaultMaxCrawlDelay.
+// Malformed applicable directives return
 // ErrInvalidCrawlDelay instead of being treated as zero.
 func (p Policy) CrawlDelay() (time.Duration, error) {
+	return p.crawlDelay(DefaultMaxCrawlDelay)
+}
+
+func (p Policy) crawlDelay(limit time.Duration) (time.Duration, error) {
 	var delay time.Duration
 
 	for _, value := range p.crawlDelays {
@@ -235,7 +240,7 @@ func (p Policy) CrawlDelay() (time.Duration, error) {
 		}
 	}
 
-	return delay, nil
+	return min(delay, limit), nil
 }
 
 // parseCrawlDelay accepts non-negative decimal seconds with an optional

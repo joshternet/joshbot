@@ -42,7 +42,7 @@ Crawl-delay: 0.123456789
 User-agent: Joshternet-Joshbot
 Crawl-delay: 9223372036.854775807
 `,
-			want: time.Duration(1<<63 - 1),
+			want: robots.DefaultMaxCrawlDelay,
 		},
 		{
 			name: "invalid decimal syntax",
