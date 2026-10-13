@@ -1052,3 +1052,13 @@ func unitCrawlRunValues() []any {
 		0,
 	}
 }
+
+func TestPostgresReaderCrawlPageRejectsInvalidQueryWithoutDatabase(t *testing.T) {
+	reader := mustUnitPostgresReader(t, &fakeQueryer{}, PostgresConfig{MaxPendingProbes: 1})
+	if _, _, err := reader.CrawlPage(context.Background(), 1, 0, 0); !errors.Is(err, errInvalidLimit) {
+		t.Fatalf("limit error=%v", err)
+	}
+	if _, _, err := reader.CrawlPage(context.Background(), 1, 1, -1); !errors.Is(err, errInvalidCursor) {
+		t.Fatalf("cursor error=%v", err)
+	}
+}

@@ -635,3 +635,7 @@ func crawlerFailureIntegrationOrigin(t *testing.T, raw string) origin.Origin {
 	}
 	return source
 }
+
+func TestCrawlerFailureIntegrationRejectsExcessivePageBudget(t *testing.T) {
+	TestMultiPageCrawlerRejectsExcessivePageBudget(t)
+}

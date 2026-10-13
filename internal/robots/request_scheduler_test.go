@@ -778,6 +778,12 @@ func TestScheduledHopGetterStopsWhenWaitFails(
 			time.Second,
 		),
 	}
+	for _, invalid := range []*url.URL{nil, {Scheme: "file", Path: "/private"}} {
+		response, err := scheduled.get(context.Background(), invalid)
+		if response != nil || !errors.Is(err, errInvalidHTTPTarget) {
+			t.Fatalf("invalid scheduled request = %v, %v", response, err)
+		}
+	}
 
 	target := requestDelayTarget(
 		t,
@@ -1049,5 +1055,164 @@ func assertRequestDelayOffsets(
 				want[index],
 			)
 		}
+	}
+}
+
+func TestRequestSchedulerBoundsInactiveOrigins(t *testing.T) {
+	clock := &requestDelayTestClock{current: time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)}
+	scheduler := newOriginRequestScheduler(clock.Now, &requestDelayRecordingWaiter{clock: clock}, 0)
+	for i := 0; i < 1025; i++ {
+		if err := scheduler.wait(context.Background(), requestDelayTarget(t, fmt.Sprintf("https://host-%d.example/", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(scheduler.schedules) > 1024 {
+		t.Fatalf("retained schedules=%d, want at most 1024", len(scheduler.schedules))
+	}
+	clock.Advance(25 * time.Hour)
+	if err := scheduler.wait(context.Background(), requestDelayTarget(t, "https://fresh.example/")); err != nil {
+		t.Fatal(err)
+	}
+	if len(scheduler.schedules) != 1 {
+		t.Fatalf("expired schedules retained=%d, want 1", len(scheduler.schedules))
+	}
+}
+
+func TestSchedulerCapacityPreservesPendingSpacing(t *testing.T) {
+	clock := &requestDelayTestClock{current: time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)}
+	scheduler := newOriginRequestScheduler(clock.Now, &requestDelayRecordingWaiter{clock: clock}, time.Second)
+	scheduler.capacity = 1
+	first := requestDelayTarget(t, "https://first.example/")
+	if err := scheduler.wait(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduler.wait(context.Background(), requestDelayTarget(t, "https://second.example/")); !errors.Is(err, errScheduleCapacity) {
+		t.Fatalf("protected schedule error=%v", err)
+	}
+	if len(scheduler.schedules) != 1 {
+		t.Fatalf("schedule cap exceeded=%d", len(scheduler.schedules))
+	}
+	clock.Advance(time.Second)
+	if err := scheduler.wait(context.Background(), requestDelayTarget(t, "https://second.example/")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSchedulerCapacityPreservesActivePolicy(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	checker := newChecker(&blockingFirstHopGetter{started: started, release: release}, time.Now)
+	checker.scheduler.capacity = 1
+	done := make(chan error, 1)
+	go func() {
+		_, err := checker.Allowed(context.Background(), requestDelayTarget(t, "https://first.example/"))
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("policy lookup did not start")
+	}
+	allowed, err := checker.Allowed(context.Background(), requestDelayTarget(t, "https://second.example/"))
+	response, getErr := checker.Get(context.Background(), requestDelayTarget(t, "https://second.example/"))
+	close(release)
+	if firstErr := <-done; firstErr != nil {
+		t.Fatal(firstErr)
+	}
+	if allowed || !errors.Is(err, ErrTemporary) || !errors.Is(err, errScheduleCapacity) {
+		t.Fatalf("capacity allowed=%v error=%v", allowed, err)
+	}
+	if response != nil || !errors.Is(getErr, ErrTemporary) || !errors.Is(getErr, errScheduleCapacity) {
+		t.Fatalf("capacity response=%v error=%v", response, getErr)
+	}
+}
+
+func TestCheckerRestoresCachedDelayAfterScheduleEviction(t *testing.T) {
+	clock := &requestDelayTestClock{current: time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)}
+	getter := &requestDelayTestGetter{clock: clock, respond: func(target *url.URL) (*http.Response, error) {
+		body := "ok"
+		if target.Path == "/robots.txt" {
+			body = "User-agent: *\nAllow: /\nCrawl-delay: 3\n"
+		}
+		return requestDelayResponse(http.StatusOK, body), nil
+	}}
+	checker := newCheckerWithRequestDelay(getter, clock.Now, 0, &requestDelayRecordingWaiter{clock: clock})
+	checker.scheduler.capacity = 1
+	fetch := func(raw string) {
+		response, err := checker.Get(context.Background(), requestDelayTarget(t, raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := response.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fetch("https://first.example/one")
+	clock.Advance(4 * time.Second)
+	fetch("https://second.example/one")
+	clock.Advance(4 * time.Second)
+	fetch("https://first.example/two")
+	fetch("https://first.example/three")
+	last := getter.requests[len(getter.requests)-2:]
+	if last[1].at.Sub(last[0].at) != 3*time.Second {
+		t.Fatalf("cached delay lost: %v", last)
+	}
+	robots := 0
+	for _, request := range getter.requests {
+		if request.target == "https://first.example/robots.txt" {
+			robots++
+		}
+	}
+	if robots != 1 {
+		t.Fatalf("cached robots fetched %d times", robots)
+	}
+}
+
+func TestCheckerPinsScheduleDuringProtectedRequest(t *testing.T) {
+	clock := &requestDelayTestClock{current: time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)}
+	var checker *Checker
+	getter := &requestDelayTestGetter{clock: clock, respond: func(target *url.URL) (*http.Response, error) {
+		if target.Path == "/robots.txt" {
+			return requestDelayResponse(http.StatusOK, "User-agent: *\nAllow: /\nCrawl-delay: 3\n"), nil
+		}
+		clock.Advance(10 * time.Second)
+		allowed, err := checker.Allowed(context.Background(), requestDelayTarget(t, "https://other.example/"))
+		if allowed || !errors.Is(err, errScheduleCapacity) {
+			t.Errorf("evicted active request schedule: allowed=%v err=%v", allowed, err)
+		}
+		return requestDelayResponse(http.StatusOK, "ok"), nil
+	}}
+	checker = newCheckerWithRequestDelay(getter, clock.Now, 0, &requestDelayRecordingWaiter{clock: clock})
+	checker.scheduler.capacity = 1
+	response, err := checker.Get(context.Background(), requestDelayTarget(t, "https://first.example/protected"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckerPinsRedirectedRobotsSchedule(t *testing.T) {
+	clock := &requestDelayTestClock{current: time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)}
+	var checker *Checker
+	getter := &requestDelayTestGetter{clock: clock, respond: func(target *url.URL) (*http.Response, error) {
+		if target.Host == "first.example" {
+			return requestDelayRedirect("https://redirect.example/robots.txt"), nil
+		}
+		if target.Host == "redirect.example" {
+			clock.Advance(10 * time.Second)
+			allowed, err := checker.Allowed(context.Background(), requestDelayTarget(t, "https://other.example/"))
+			if allowed || !errors.Is(err, errScheduleCapacity) {
+				t.Errorf("evicted active robots redirect: allowed=%v err=%v", allowed, err)
+			}
+		}
+		return requestDelayResponse(http.StatusOK, "User-agent: *\nAllow: /\n"), nil
+	}}
+	checker = newCheckerWithRequestDelay(getter, clock.Now, time.Second, &requestDelayRecordingWaiter{clock: clock})
+	checker.scheduler.capacity = 2
+	allowed, err := checker.Allowed(context.Background(), requestDelayTarget(t, "https://first.example/protected"))
+	if err != nil || !allowed {
+		t.Fatalf("redirect policy allowed=%v err=%v", allowed, err)
 	}
 }

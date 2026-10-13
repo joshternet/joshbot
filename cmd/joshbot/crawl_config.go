@@ -104,6 +104,10 @@ func loadCrawlRuntimeSettings(
 		return crawlRuntimeSettings{}, err
 	}
 
+	if maxPages > discovery.MaxCrawlPages {
+		return crawlRuntimeSettings{}, fmt.Errorf("%w: %s must not exceed %d", errInvalidRuntimeConfiguration, crawlMaxPagesEnvironment, discovery.MaxCrawlPages)
+	}
+
 	maxPageBytes, err := requiredIntegerSetting(
 		getenv,
 		crawlMaxPageBytesEnvironment,

@@ -166,8 +166,9 @@ type PageAttempt struct {
 
 // CrawlDetail is a run together with its ordered page attempts.
 type CrawlDetail struct {
-	Run   CrawlRun      `json:"run"`
-	Pages []PageAttempt `json:"pages"`
+	Run        CrawlRun      `json:"run"`
+	Pages      []PageAttempt `json:"pages"`
+	NextCursor string        `json:"next_cursor,omitempty"`
 }
 
 // QueueItem is one current verification queue entry.
@@ -560,10 +561,19 @@ func (h *handler) crawl(
 		return
 	}
 
-	detail, found, err := h.reader.Crawl(
-		request.Context(),
-		id,
-	)
+	limit, after, err := crawlDetailQuery(request, id)
+	if err != nil {
+		writeQueryError(writer, err)
+		return
+	}
+	var detail CrawlDetail
+	var found bool
+	if reader, ok := h.reader.(crawlDetailReader); ok {
+		detail, found, err = reader.CrawlPage(request.Context(), id, limit, after)
+	} else {
+		detail, found, err = h.reader.Crawl(request.Context(), id)
+		detail = boundedCrawlDetail(detail, id, limit, after)
+	}
 	if err != nil {
 		writeInternalError(writer)
 
@@ -580,6 +590,9 @@ func (h *handler) crawl(
 		return
 	}
 
+	if detail.NextCursor != "" {
+		writer.Header().Set(nextCursorHeader, detail.NextCursor)
+	}
 	writeJSON(
 		writer,
 		http.StatusOK,

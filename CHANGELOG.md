@@ -45,6 +45,21 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- Partial discovery crawls retain page failures and retry transient
+  failures on non-root pages as well as the root (#150, #71).
+- Blocking an origin preserves its verification and reprobe queue state;
+  claims skip blocked origins and resume after unblocking (#151).
+- Control recomputation and source curation honor configured host exclusions
+  alongside durable domain-avoid rules (#152).
+- Report handlers and token files reject weak bearer tokens using the same
+  strength rules as operator control (#153).
+- Crawl detail paginates page attempts with a scoped continuation cursor, and
+  startup rejects page budgets above 10,000 (#154).
+- Origin schedules have a 1,024-entry cap with idle eviction and expiry.
+  Active requests and pending spacing survive eviction pressure, and cached
+  robots policies restore their learned delay (#155).
+- Registry export removes failed partial snapshots before retrying and stops
+  on cleanup failures, including after a restart (#156).
 - Integration coverage includes HTTP limit rejection, a zero dial timeout, and the default guarded transport used when no HTTP limits are set.
 - Discovery startup blocks automatic sources that no longer parse as origins, instead of exiting when reconciliation finds one.
 - staticcheck v0.8.2 understands Go 1.27.2 export data.
@@ -72,7 +87,6 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 - Source detail `LatestCrawl` includes the same crawl telemetry columns as the
   crawl list (promotions, failure category, URL/frontier counters).
 - Reporting keyset pagination treats `HEAD` like `GET`.
-- Crawl detail loads at most 10,000 page attempts per run.
 - Control audit truncation is UTF-8 safe, and optional JSON bodies with unknown
   length and an empty body are accepted as empty.
 - Retry-After second values are clamped before duration multiply to avoid
@@ -90,13 +104,13 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   call, and the policy cache is bounded with idle eviction.
 - Per-origin request scheduling releases the origin lock while waiting for the
   delay, without weakening politeness.
-- Discovery maps oversized and unavailable page extraction correctly, honors
-  Retry-After between root in-cycle retries, treats HTML parse failures as
+- Discovery maps oversized and unavailable page extraction correctly, retains
+  Retry-After as durable retry eligibility, treats HTML parse failures as
   unavailable, and classifies canceled body reads as timeouts.
 - Crawl runner rejects a nil context, and a non-zero pages-parsed count no
   longer clears finalize, store, or processor failure categories.
 - Hard verification errors abandon the lease before return, and transient
-  verification retries wait for Retry-After backoff between attempts.
+  verification failures retain Retry-After as durable retry eligibility.
 - Unfinished crawl runs whose discovery source lease is no longer active are
   closed as `canceled` with `stop_reason` `abandoned` (or `lease_reclaimed` on
   same-origin reclaim). Zero-page runs no longer stay `outcome=running` for

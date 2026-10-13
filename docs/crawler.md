@@ -127,6 +127,15 @@ verification, discovery pages, and redirect hops. Requests to different
 origins use independent schedules. Requests within one source crawl remain
 sequential.
 
+Each checker retains at most 1,024 robots policies and 1,024 origin schedules.
+Policies expire after 24 hours. Idle schedules expire after 24 hours and may
+be evicted earlier to make room, once their required spacing has elapsed.
+Policy lookups, scheduler waits, and requests awaiting response headers keep
+their schedules until they finish. If every schedule is still in use or
+protecting a pending delay, a new origin receives a temporary failure rather
+than bypassing spacing.
+Reusing a cached policy restores its validated delay after schedule eviction.
+
 JoshBot parses supported response content for links. It does not run a browser,
 execute JavaScript, save screenshots, or render pages.
 
@@ -190,7 +199,7 @@ The runtime exposes these controls:
 | Variable | Default | Meaning |
 | --- | ---: | --- |
 | `JOSHBOT_CRAWL_MAX_DEPTH` | `4` | Deepest same-origin page depth, with the root at zero |
-| `JOSHBOT_CRAWL_MAX_PAGES` | `32` | Maximum frontier pages selected for guarded retrieval |
+| `JOSHBOT_CRAWL_MAX_PAGES` | `32` | Maximum frontier pages selected for guarded retrieval, from 1 through 10,000 |
 | `JOSHBOT_CRAWL_MAX_PAGE_BYTES` | `1048576` | Maximum accepted page body size |
 | `JOSHBOT_CRAWL_REQUEST_DELAY` | `1s` | Minimum per-origin delay for robots, verification, and discovery requests |
 | `JOSHBOT_ROBOTS_MAX_CRAWL_DELAY` | `30s` | Maximum valid robots-directed delay |
@@ -226,7 +235,7 @@ verification.
 `JOSHBOT_CRAWL_MAX_DEPTH` may be zero, limiting the crawl to its root page.
 
 Maximum pages, maximum page bytes, and redirect limit must be positive.
-Request delay may be zero.
+Maximum pages cannot exceed 10,000. Request delay may be zero.
 
 The four robots/HTTP limits are shared by verification, discovery, and Web
 Bot Auth conformance. Unset limits use the defaults above; explicit values

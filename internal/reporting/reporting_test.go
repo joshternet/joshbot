@@ -136,6 +136,7 @@ func TestNewHandlerValidatesDependencies(
 
 	for _, token := range []string{
 		"",
+		"x",
 		"short",
 		strings.Repeat("x", 32),
 		"test-reporting-token",
@@ -1140,4 +1141,87 @@ func performRequest(
 	)
 
 	return response
+}
+
+func TestCrawlDetailProvidesBoundedContinuation(t *testing.T) {
+	reader := &fakeReader{crawlFound: true, crawl: CrawlDetail{Run: CrawlRun{ID: 42}, Pages: []PageAttempt{{Sequence: 1}, {Sequence: 2}, {Sequence: 3}}}}
+	runtime, err := NewHandler(reader, testToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/crawls/42?limit=2", nil)
+	request.Header.Set("Authorization", "Bearer "+testToken)
+	response := httptest.NewRecorder()
+	runtime.ServeHTTP(response, request)
+	var detail struct {
+		Pages      []PageAttempt `json:"pages"`
+		NextCursor string        `json:"next_cursor"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || len(detail.Pages) != 2 || detail.NextCursor == "" {
+		t.Fatalf("status=%d detail=%#v", response.Code, detail)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/crawls/42?limit=2&cursor="+detail.NextCursor, nil)
+	request.Header.Set("Authorization", "Bearer "+testToken)
+	response = httptest.NewRecorder()
+	runtime.ServeHTTP(response, request)
+	detail.NextCursor = ""
+	if err := json.Unmarshal(response.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || len(detail.Pages) != 1 || detail.Pages[0].Sequence != 3 || detail.NextCursor != "" {
+		t.Fatalf("continuation status=%d detail=%#v", response.Code, detail)
+	}
+}
+
+type crawlPageTestReader struct {
+	*fakeReader
+	detail CrawlDetail
+	id     int64
+	limit  int
+	after  int64
+}
+
+func (reader *crawlPageTestReader) CrawlPage(_ context.Context, id int64, limit int, after int64) (CrawlDetail, bool, error) {
+	reader.id = id
+	reader.limit = limit
+	reader.after = after
+	return reader.detail, true, nil
+}
+
+func TestCrawlDetailPaginationQueriesPagedReader(t *testing.T) {
+	cursor := encodeCursor(cursorPayload{Version: cursorVersion, Kind: "crawl_pages", Origin: "42", ID: 3})
+	reader := &crawlPageTestReader{fakeReader: &fakeReader{crawlErr: errors.New("legacy path used")}, detail: CrawlDetail{Run: CrawlRun{ID: 42}, Pages: []PageAttempt{{Sequence: 4}}}}
+	runtime, err := NewHandler(reader, testToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/crawls/42?limit=2&cursor="+cursor, nil)
+	request.Header.Set("Authorization", "Bearer "+testToken)
+	response := httptest.NewRecorder()
+	runtime.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || reader.id != 42 || reader.limit != 2 || reader.after != 3 {
+		t.Fatalf("status=%d query=%d/%d/%d", response.Code, reader.id, reader.limit, reader.after)
+	}
+}
+
+func TestCrawlDetailPaginationRejectsInvalidQuery(t *testing.T) {
+	runtime, err := NewHandler(&fakeReader{crawlErr: errors.New("reader must not be called")}, testToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cross := encodeCursor(cursorPayload{Version: cursorVersion, Kind: "crawl_pages", Origin: "43", ID: 2})
+	for _, query := range []string{"limit=0", "limit=1001", "limit=nope", "cursor=broken", "cursor=" + cross,
+		"cursor=" + encodeCursor(cursorPayload{Version: cursorVersion, Kind: "crawl_pages", Origin: "42", ID: 0}),
+		"cursor=" + encodeCursor(cursorPayload{Version: cursorVersion, Kind: "crawl_pages", Origin: "42", ID: 2, At: "unexpected"})} {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/crawls/42?"+query, nil)
+		request.Header.Set("Authorization", "Bearer "+testToken)
+		response := httptest.NewRecorder()
+		runtime.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("query=%q status=%d body=%s", query, response.Code, response.Body.String())
+		}
+	}
 }

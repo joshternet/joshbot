@@ -578,6 +578,10 @@ func TestCheckerRejectsInvalidInputs(t *testing.T) {
 				err,
 			)
 		}
+		response, err := checker.Get(nilContext, target)
+		if response != nil || !errors.Is(err, errInvalidContext) {
+			t.Fatalf("Checker.Get(nil context) = %v, %v", response, err)
+		}
 	})
 
 	t.Run("canceled context", func(t *testing.T) {

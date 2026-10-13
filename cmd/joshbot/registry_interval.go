@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -199,7 +200,18 @@ func runRegistryExport(
 		interval,
 	)
 
-	var previous string
+	if ctx.Err() != nil {
+		logger.Info("registry export stopped")
+		return nil
+	}
+	previous, err := readRegistryPointer(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read registry snapshot before export: %w", err)
+	}
+	// Clean abandoned snapshots before creating another, including on restart.
+	if err := removeOld(root, previous, ""); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("registry snapshot cleanup failed: %w", err)
+	}
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -217,48 +229,28 @@ func runRegistryExport(
 				"error",
 				err,
 			)
-		} else if err := export(
-			ctx,
-			filepath.Join(root, name),
-		); err != nil {
-			if ctx.Err() != nil {
-				logger.Info("registry export stopped")
-				return nil
-			}
-
-			logger.Error(
-				"registry export failed",
-				"error",
-				err,
-			)
-		} else if err := writeRegistryPointer(
-			root,
-			name,
-		); err != nil {
-			logger.Error(
-				"registry snapshot pointer failed",
-				"error",
-				err,
-			)
 		} else {
-			if err := removeOld(
-				root,
-				name,
-				previous,
-			); err != nil {
-				logger.Error(
-					"registry snapshot cleanup failed",
-					"error",
-					err,
-				)
+			path := filepath.Join(root, name)
+			exportErr := export(ctx, path)
+			if exportErr == nil {
+				exportErr = writeRegistryPointer(root, name)
 			}
-
-			logger.Info(
-				"registry snapshot exported",
-				"snapshot",
-				name,
-			)
-			previous = name
+			if exportErr != nil {
+				if cleanupErr := removeSnapshotDirectory(path); cleanupErr != nil {
+					return errors.Join(exportErr, fmt.Errorf("remove failed registry snapshot: %w", cleanupErr))
+				}
+				if ctx.Err() != nil {
+					logger.Info("registry export stopped")
+					return nil
+				}
+				logger.Error("registry export failed", "error", exportErr)
+			} else {
+				if err := removeOld(root, name, previous); err != nil {
+					return fmt.Errorf("registry snapshot cleanup failed: %w", err)
+				}
+				logger.Info("registry snapshot exported", "snapshot", name)
+				previous = name
+			}
 		}
 
 		if err := sleep(ctx, interval); err != nil {
