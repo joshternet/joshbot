@@ -7,11 +7,14 @@ RUN go mod download
 
 COPY . .
 
+ARG VERSION=dev
+ARG VCS_REF=unknown
+
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -mod=readonly \
     -trimpath \
     -buildvcs=false \
-    -ldflags="-s -w -buildid=" \
+    -ldflags="-s -w -buildid= -X main.buildVersion=${VERSION} -X main.buildCommit=${VCS_REF}" \
     -o /out/joshbot \
     ./cmd/joshbot
 

@@ -858,6 +858,210 @@ func TestCrawlSeedRemovalPreservesVerifiedEligibilityAndState(
 	}
 }
 
+func TestEnsureSeededSourcesScheduledRepairsMissingRows(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newCrawlSourceMigrationTestPool(t)
+	crawlStore, err := NewDiscoveryStore(pool)
+	if err != nil {
+		t.Fatalf(
+			"NewDiscoveryStore() error = %v, want nil",
+			err,
+		)
+	}
+
+	const (
+		missingSeed = "https://missing-seed.example"
+		keptSeed    = "https://kept-seed.example"
+		unseeded    = "https://unseeded.example"
+	)
+	attemptedAt := time.Date(
+		2026, 10, 1, 12, 0, 0, 0, time.UTC,
+	)
+
+	if _, err := pool.Exec(
+		ctx,
+		`
+			INSERT INTO discovery_source_state (
+				source_origin,
+				seeded
+			)
+			VALUES
+				($1, true),
+				($2, true),
+				($3, false)
+		`,
+		missingSeed,
+		keptSeed,
+		unseeded,
+	); err != nil {
+		t.Fatalf(
+			"insert source state: %v",
+			err,
+		)
+	}
+
+	if _, err := pool.Exec(
+		ctx,
+		`
+			INSERT INTO discovery_source_schedule (
+				source_origin
+			)
+			VALUES ($1)
+		`,
+		keptSeed,
+	); err != nil {
+		t.Fatalf(
+			"insert existing schedule: %v",
+			err,
+		)
+	}
+
+	if _, err := pool.Exec(
+		ctx,
+		`
+			UPDATE discovery_source_state
+			SET last_attempted_at = $2
+			WHERE source_origin = $1
+		`,
+		keptSeed,
+		attemptedAt,
+	); err != nil {
+		t.Fatalf(
+			"set last attempt: %v",
+			err,
+		)
+	}
+
+	inserted, err :=
+		crawlStore.EnsureSeededSourcesScheduled(ctx)
+	if err != nil {
+		t.Fatalf(
+			"EnsureSeededSourcesScheduled() error = %v, want nil",
+			err,
+		)
+	}
+
+	if inserted != 1 {
+		t.Errorf(
+			"inserted schedule rows = %d, want 1",
+			inserted,
+		)
+	}
+
+	insertedAgain, err :=
+		crawlStore.EnsureSeededSourcesScheduled(ctx)
+	if err != nil {
+		t.Fatalf(
+			"second EnsureSeededSourcesScheduled() error = %v, want nil",
+			err,
+		)
+	}
+
+	if insertedAgain != 0 {
+		t.Errorf(
+			"second inserted schedule rows = %d, want 0",
+			insertedAgain,
+		)
+	}
+
+	if !discoverySourceIsScheduled(
+		t,
+		ctx,
+		pool,
+		missingSeed,
+	) {
+		t.Error(
+			"seeded origin without a schedule row stayed unscheduled",
+		)
+	}
+
+	if discoverySourceIsScheduled(
+		t,
+		ctx,
+		pool,
+		unseeded,
+	) {
+		t.Error(
+			"unseeded origin was scheduled",
+		)
+	}
+
+	if !discoverySourceIsScheduled(
+		t,
+		ctx,
+		pool,
+		keptSeed,
+	) {
+		t.Error(
+			"existing schedule row was removed",
+		)
+	}
+
+	var storedAttempt *time.Time
+	if err := pool.QueryRow(
+		ctx,
+		`
+			SELECT last_attempted_at
+			FROM discovery_source_state
+			WHERE source_origin = $1
+		`,
+		keptSeed,
+	).Scan(&storedAttempt); err != nil {
+		t.Fatalf(
+			"query kept seed attempt: %v",
+			err,
+		)
+	}
+
+	if storedAttempt == nil ||
+		!storedAttempt.Equal(attemptedAt) {
+		t.Errorf(
+			"last_attempted_at = %v, want %v",
+			storedAttempt,
+			attemptedAt,
+		)
+	}
+}
+
+func TestEnsureSeededSourcesScheduledRejectsUnavailableStore(
+	t *testing.T,
+) {
+	var nilStore *DiscoveryStore
+
+	if _, err := nilStore.EnsureSeededSourcesScheduled(
+		context.Background(),
+	); !errors.Is(
+		err,
+		errDiscoveryStoreUnavailable,
+	) {
+		t.Errorf(
+			"nil EnsureSeededSourcesScheduled() error = %v, want errDiscoveryStoreUnavailable",
+			err,
+		)
+	}
+
+	pool := newCrawlSourceMigrationTestPool(t)
+	crawlStore, err := NewDiscoveryStore(pool)
+	if err != nil {
+		t.Fatalf(
+			"NewDiscoveryStore() error = %v, want nil",
+			err,
+		)
+	}
+
+	pool.Close()
+
+	if _, err := crawlStore.EnsureSeededSourcesScheduled(
+		context.Background(),
+	); err == nil {
+		t.Fatal(
+			"EnsureSeededSourcesScheduled() error = nil, want closed pool",
+		)
+	}
+}
+
 func TestCrawlSeedOperationsValidateInputs(
 	t *testing.T,
 ) {
