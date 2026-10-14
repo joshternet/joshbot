@@ -99,6 +99,16 @@ func TestServiceHeartbeatWritesLifecycle(t *testing.T) {
 	if storage.writes[0].InstanceID != "worker-one" {
 		t.Errorf("instance = %q", storage.writes[0].InstanceID)
 	}
+	if storage.writes[0].BuildVersion != buildVersion ||
+		storage.writes[0].BuildCommit != buildCommit {
+		t.Errorf(
+			"build = %q %q, want %q %q",
+			storage.writes[0].BuildVersion,
+			storage.writes[0].BuildCommit,
+			buildVersion,
+			buildCommit,
+		)
+	}
 }
 
 func TestServiceHeartbeatHandlesUnavailablePersistence(t *testing.T) {

@@ -24,6 +24,8 @@ func TestServiceHeartbeatReplacesProcessGeneration(t *testing.T) {
 		State:         "running",
 		CurrentOrigin: mustStoreOrigin(t, "https://first.example"),
 		Message:       "first",
+		BuildVersion:  "dev",
+		BuildCommit:   "abc123",
 		StartedAt:     t1,
 		UpdatedAt:     t1.Add(5 * time.Second),
 	}
@@ -37,6 +39,8 @@ func TestServiceHeartbeatReplacesProcessGeneration(t *testing.T) {
 		State:         "starting",
 		CurrentOrigin: mustStoreOrigin(t, "https://second.example"),
 		Message:       "second",
+		BuildVersion:  "a814a578083e",
+		BuildCommit:   "a814a578083e438c914df12aeb988d8005832d8d",
 		StartedAt:     t2,
 		UpdatedAt:     t2,
 	}
@@ -142,9 +146,10 @@ func assertStoredHeartbeat(
 	t.Helper()
 
 	var (
-		count                  int
-		state, origin, message string
-		startedAt, updatedAt   time.Time
+		count                                 int
+		state, origin, message                string
+		storedBuildVersion, storedBuildCommit string
+		startedAt, updatedAt                  time.Time
 	)
 	if err := pool.QueryRow(ctx, `
 		SELECT count(*) FROM crawl_service_heartbeats
@@ -156,20 +161,23 @@ func assertStoredHeartbeat(
 		t.Fatalf("rows for %s/%s = %d, want 1", want.Service, want.InstanceID, count)
 	}
 	if err := pool.QueryRow(ctx, `
-		SELECT state, current_origin, message, started_at, updated_at
+		SELECT state, current_origin, message, build_version, build_commit,
+			started_at, updated_at
 		FROM crawl_service_heartbeats
 		WHERE service = $1 AND instance_id = $2
 	`, want.Service, want.InstanceID).Scan(
-		&state, &origin, &message, &startedAt, &updatedAt,
+		&state, &origin, &message, &storedBuildVersion, &storedBuildCommit,
+		&startedAt, &updatedAt,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if state != want.State || origin != want.CurrentOrigin.String() || message != want.Message ||
+		storedBuildVersion != want.BuildVersion || storedBuildCommit != want.BuildCommit ||
 		!startedAt.Equal(want.StartedAt) || !updatedAt.Equal(want.UpdatedAt) {
 		t.Fatalf(
-			"heartbeat = state %q origin %q message %q started %s updated %s, want state %q origin %q message %q started %s updated %s",
-			state, origin, message, startedAt, updatedAt,
-			want.State, want.CurrentOrigin.String(), want.Message, want.StartedAt, want.UpdatedAt,
+			"heartbeat = state %q origin %q message %q version %q commit %q started %s updated %s, want state %q origin %q message %q version %q commit %q started %s updated %s",
+			state, origin, message, storedBuildVersion, storedBuildCommit, startedAt, updatedAt,
+			want.State, want.CurrentOrigin.String(), want.Message, want.BuildVersion, want.BuildCommit, want.StartedAt, want.UpdatedAt,
 		)
 	}
 }

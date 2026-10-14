@@ -35,6 +35,8 @@ type ServiceHeartbeat struct {
 	State         string
 	CurrentOrigin origin.Origin
 	Message       string
+	BuildVersion  string
+	BuildCommit   string
 	StartedAt     time.Time
 	UpdatedAt     time.Time
 }
@@ -298,13 +300,15 @@ func (s *DiscoveryStore) UpsertServiceHeartbeat(
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO crawl_service_heartbeats (
 			service, instance_id, state, current_origin, message,
-			started_at, updated_at
+			build_version, build_commit, started_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (service, instance_id) DO UPDATE
 		SET state = EXCLUDED.state,
 			current_origin = EXCLUDED.current_origin,
 			message = EXCLUDED.message,
+			build_version = EXCLUDED.build_version,
+			build_commit = EXCLUDED.build_commit,
 			started_at = EXCLUDED.started_at,
 			updated_at = EXCLUDED.updated_at
 		WHERE EXCLUDED.started_at > crawl_service_heartbeats.started_at
@@ -314,6 +318,7 @@ func (s *DiscoveryStore) UpsertServiceHeartbeat(
 			)
 	`, heartbeat.Service, heartbeat.InstanceID, heartbeat.State,
 		heartbeat.CurrentOrigin.String(), heartbeat.Message,
+		heartbeat.BuildVersion, heartbeat.BuildCommit,
 		heartbeat.StartedAt.UTC(), heartbeat.UpdatedAt.UTC())
 	if err != nil {
 		return fmt.Errorf("store: write service heartbeat: %w", err)

@@ -53,21 +53,19 @@ func TestRuntimeStoreConstructorsCoverSuccessPaths(
 func TestNewDiscoveryRuntimeCoversProductionStoreFactory(
 	t *testing.T,
 ) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
 	runner, err := newDiscoveryRuntime(
-		context.Background(),
+		ctx,
 		new(pgxpool.Pool),
 		testCrawlRuntimeSettings(t),
 	)
-	if err != nil {
+	if runner != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf(
-			"newDiscoveryRuntime() error = %v, want nil",
+			"newDiscoveryRuntime() = %#v, %v; want nil, context canceled",
+			runner,
 			err,
-		)
-	}
-
-	if runner == nil {
-		t.Fatal(
-			"newDiscoveryRuntime() runner = nil, want runner",
 		)
 	}
 }
@@ -77,6 +75,9 @@ func TestNewDiscoveryRuntimeWithStoreFactory(
 ) {
 	storeFailure := errors.New(
 		"store construction failure",
+	)
+	scheduleFailure := errors.New(
+		"seed schedule repair failure",
 	)
 	reconcileFailure := errors.New(
 		"reconcile failure",
@@ -138,6 +139,48 @@ func TestNewDiscoveryRuntimeWithStoreFactory(
 				t.Fatalf(
 					"newDiscoveryRuntimeWithStoreFactory() = %#v, %v; want nil, reconcile failure",
 					runner,
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"seed schedule repair failure",
+		func(t *testing.T) {
+			runner, err :=
+				newDiscoveryRuntimeWithStoreFactory(
+					context.Background(),
+					nil,
+					testCrawlRuntimeSettings(t),
+					func(
+						*pgxpool.Pool,
+						store.AutomaticCrawlConfig,
+					) (discoveryRuntimeStore, error) {
+						return &coverageDiscoveryRuntimeStore{
+							scheduleErr: scheduleFailure,
+						}, nil
+					},
+				)
+
+			if runner != nil ||
+				!errors.Is(
+					err,
+					scheduleFailure,
+				) {
+				t.Fatalf(
+					"newDiscoveryRuntimeWithStoreFactory() = %#v, %v; want nil, seed schedule failure",
+					runner,
+					err,
+				)
+			}
+
+			if !strings.Contains(
+				err.Error(),
+				"ensure seeded sources scheduled",
+			) {
+				t.Errorf(
+					"error = %v, want seed schedule context",
 					err,
 				)
 			}
@@ -251,6 +294,7 @@ func TestNewDiscoveryRuntimeWithStoreFactory(
 
 type coverageDiscoveryRuntimeStore struct {
 	reconcileErr error
+	scheduleErr  error
 }
 
 func (
@@ -259,6 +303,14 @@ func (
 	context.Context,
 ) (int, error) {
 	return 0, runtimeStore.reconcileErr
+}
+
+func (
+	runtimeStore *coverageDiscoveryRuntimeStore,
+) EnsureSeededSourcesScheduled(
+	context.Context,
+) (int, error) {
+	return 0, runtimeStore.scheduleErr
 }
 
 func (

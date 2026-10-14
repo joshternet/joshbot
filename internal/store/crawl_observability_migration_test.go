@@ -367,6 +367,13 @@ func TestEphemeralServiceHeartbeatMigrationClearsGhostRows(t *testing.T) {
 		t.Fatalf("preserved operational rows = %d, want 8", preserved)
 	}
 
+	applyRawStoreMigration(
+		t,
+		ctx,
+		pool,
+		"migrations/0029_service_heartbeat_build_identity.sql",
+	)
+
 	observability, err := NewDiscoveryStore(pool)
 	if err != nil {
 		t.Fatal(err)

@@ -117,6 +117,7 @@ func (heartbeat *serviceHeartbeat) write(ctx context.Context, state string) erro
 	err := heartbeat.store.UpsertServiceHeartbeat(writeContext, store.ServiceHeartbeat{
 		Service: heartbeat.service, InstanceID: heartbeat.instanceID,
 		State: currentState, CurrentOrigin: currentOrigin, Message: message,
+		BuildVersion: buildVersion, BuildCommit: buildCommit,
 		StartedAt: heartbeat.startedAt, UpdatedAt: now,
 	})
 	heartbeat.recordWriteResult(err)

@@ -72,11 +72,23 @@ Active scheduling can result from:
 
 A curated seed grants permission to use that origin as a discovery source and
 creates scheduling intent. It does not assert that the origin participates in
-the Joshternet.
+the Joshternet. Adding a seed inserts both the curated flag and a
+`discovery_source_schedule` row, so the next discovery poll can claim it.
+The crawl is the normal one: the root page, the same-origin frontier, and
+external links recorded as candidates. Those candidates still wait for
+verification and automatic admission, including while the probe queue is at
+its cap.
+
+Discovery startup inserts a schedule row for every curated seed that is
+missing one, after the crawler and runner have been constructed. An existing
+schedule row, including its attempt time and lease, is left in place.
+Unseeded origins are not scheduled. This repair runs even when automatic
+crawling is off.
 
 Removing a seed removes that scheduling reason. Existing verification
 observations, automatic-source classification, candidate evidence, and
-discovery provenance are not erased.
+discovery provenance are not erased. The schedule row is removed only when
+the origin has no other reason to stay scheduled.
 
 Automatic sources remain distinct from curated seeds and verified
 participants. Automatic promotion records durable classification and active
@@ -230,7 +242,9 @@ forms including `blogspot.co.uk` and `blogspot.no`. Avoided origins remain in
 private discovery evidence but are not promoted or probed automatically.
 `wordpress.com` and `wordpress.org` are not on that list, so a site that
 installs the official Joshternet plugin stays eligible for discovery and
-verification.
+verification. The operator dashboard counts matches for each avoid rule in
+SQL after it finishes reading the rules, and the empty input example is not
+a WordPress host.
 
 `JOSHBOT_CRAWL_MAX_DEPTH` may be zero, limiting the crawl to its root page.
 
@@ -408,7 +422,11 @@ JoshBot retains origin-level semantic and operational data:
 - worker and discovery service heartbeats with idle, paused, failed,
   current-origin, and bounded-message state; the instance ID is a stable
   logical service slot, and `started_at` marks the process generation
-  currently occupying that slot;
+  currently occupying that slot. Each heartbeat also records the process
+  `build_version` and `build_commit`, stamped into the binary at image build
+  time, so the operator dashboard can show the commit that is actually
+  running. One live commit is that version. More than one live commit is a
+  rollout in progress.
 - persistent discovery, verification, and automatic-expansion pause state;
 - migration metadata.
 

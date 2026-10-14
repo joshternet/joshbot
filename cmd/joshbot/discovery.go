@@ -190,6 +190,9 @@ type discoveryRuntimeStore interface {
 	ReconcileAutomaticCrawlPolicy(
 		context.Context,
 	) (int, error)
+	EnsureSeededSourcesScheduled(
+		context.Context,
+	) (int, error)
 }
 
 type ownedDiscoveryRuntimeStore struct {
@@ -321,6 +324,15 @@ func newDiscoveryRuntimeWithStoreFactory(
 	if err != nil {
 		return nil, fmt.Errorf(
 			"construct discovery runner: %w",
+			err,
+		)
+	}
+
+	if _, err := discoveryStore.EnsureSeededSourcesScheduled(
+		ctx,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"ensure seeded sources scheduled: %w",
 			err,
 		)
 	}

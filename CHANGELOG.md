@@ -28,10 +28,13 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   access and no GitHub token.
 - `registry-publish` publishes each new snapshot. An unchanged registry
   does not create a commit. It has the GitHub token and no database access.
-- The embedded schema now contains twenty-eight migrations, `0001` through
-  `0028`, including durable candidate admission state, domain-avoid LIKE
-  hardening, verification-queue `abandoned` events, and removal of the
-  WordPress domain-avoid rules.
+- The embedded schema now contains twenty-nine migrations, `0001` through
+  `0029`, including durable candidate admission state, domain-avoid LIKE
+  hardening, verification-queue `abandoned` events, removal of the WordPress
+  domain-avoid rules, and the running build identity on service heartbeats.
+- Discovery and worker heartbeats record `build_version` and `build_commit`
+  for the process that is running. The image build stamps those values from
+  `VERSION` and `VCS_REF`.
 
 ### Changed
 
@@ -45,6 +48,11 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- Curated seeds are scheduled when they are added, and discovery startup
+  inserts a schedule row for any seeded origin that is missing one after the
+  crawler and runner have been constructed. Removing a seed drops that
+  schedule row only when the origin has no other reason to stay scheduled.
+  Claim order is unchanged.
 - Partial discovery crawls retain page failures and retry transient
   failures on non-root pages as well as the root (#150, #71).
 - Blocking an origin preserves its verification and reprobe queue state;

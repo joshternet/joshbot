@@ -394,6 +394,76 @@ func TestAutomaticExclusionsDatabasePathsWithoutDatabase(
 	)
 }
 
+func TestEnsureSeededSourcesScheduledDatabasePathsWithoutDatabase(
+	t *testing.T,
+) {
+	ctx := context.Background()
+
+	t.Run(
+		"success",
+		func(t *testing.T) {
+			store := discoverySimpleDatabaseStore(
+				&discoveryUnitDatabase{
+					execResults: []discoveryUnitExecResult{
+						{
+							tag: pgconn.NewCommandTag(
+								"INSERT 0 1",
+							),
+						},
+					},
+				},
+			)
+
+			inserted, err :=
+				store.EnsureSeededSourcesScheduled(ctx)
+			if err != nil {
+				t.Fatalf(
+					"EnsureSeededSourcesScheduled() error = %v",
+					err,
+				)
+			}
+
+			if inserted != 1 {
+				t.Errorf(
+					"inserted = %d, want 1",
+					inserted,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"database failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test ensure seeded schedule failure",
+			)
+			store := discoverySimpleDatabaseStore(
+				&discoveryUnitDatabase{
+					execResults: []discoveryUnitExecResult{
+						{err: testErr},
+					},
+				},
+			)
+
+			inserted, err :=
+				store.EnsureSeededSourcesScheduled(ctx)
+			if inserted != 0 ||
+				!errors.Is(err, testErr) ||
+				!strings.Contains(
+					err.Error(),
+					"store: ensure seeded sources scheduled",
+				) {
+				t.Fatalf(
+					"EnsureSeededSourcesScheduled() = %d, %v",
+					inserted,
+					err,
+				)
+			}
+		},
+	)
+}
+
 func TestAddCrawlSeedDatabasePathsWithoutDatabase(
 	t *testing.T,
 ) {

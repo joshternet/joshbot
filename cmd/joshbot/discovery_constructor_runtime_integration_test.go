@@ -126,6 +126,52 @@ func TestDiscoveryConstructorRuntimeIntegrationFailures(
 		}
 	})
 
+	t.Run("seed schedule repair", func(t *testing.T) {
+		scheduleErr := errors.New(
+			"integration seed schedule repair failure",
+		)
+
+		runner, err :=
+			newDiscoveryRuntimeWithStoreFactory(
+				context.Background(),
+				nil,
+				testCrawlRuntimeSettings(t),
+				func(
+					*pgxpool.Pool,
+					store.AutomaticCrawlConfig,
+				) (discoveryRuntimeStore, error) {
+					return &coverageDiscoveryRuntimeStore{
+						scheduleErr: scheduleErr,
+					}, nil
+				},
+			)
+
+		if runner != nil {
+			t.Errorf(
+				"runner = %#v, want nil",
+				runner,
+			)
+		}
+
+		if !errors.Is(err, scheduleErr) {
+			t.Fatalf(
+				"error = %v, want %v",
+				err,
+				scheduleErr,
+			)
+		}
+
+		if !strings.Contains(
+			err.Error(),
+			"ensure seeded sources scheduled",
+		) {
+			t.Errorf(
+				"error = %v, want seed schedule context",
+				err,
+			)
+		}
+	})
+
 	t.Run("crawler construction", func(t *testing.T) {
 		settings := testCrawlRuntimeSettings(t)
 		settings.crawl.MaxPages = 0
@@ -209,4 +255,31 @@ func TestDiscoveryConstructorRuntimeIntegrationFailures(
 			)
 		}
 	})
+}
+
+func TestDiscoveryConstructorRuntimeIntegrationRepairsSeeds(
+	t *testing.T,
+) {
+	runner, err := newDiscoveryRuntimeWithStoreFactory(
+		context.Background(),
+		nil,
+		testCrawlRuntimeSettings(t),
+		func(
+			*pgxpool.Pool,
+			store.AutomaticCrawlConfig,
+		) (discoveryRuntimeStore, error) {
+			return &coverageDiscoveryRuntimeStore{}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"newDiscoveryRuntimeWithStoreFactory() error = %v, want nil",
+			err,
+		)
+	}
+	if runner == nil {
+		t.Fatal(
+			"newDiscoveryRuntimeWithStoreFactory() runner = nil, want runner",
+		)
+	}
 }

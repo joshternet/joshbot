@@ -570,6 +570,41 @@ func (s *DiscoveryStore) CrawlSeeds(
 	return seeds, nil
 }
 
+// EnsureSeededSourcesScheduled inserts a discovery schedule row for every
+// curated seed that does not already have one.
+//
+// Existing schedule rows, attempt times, and leases stay as they are.
+// Unseeded origins are not scheduled. This repair runs even when automatic
+// crawling is disabled, so a curated seed remains claimable either way.
+func (s *DiscoveryStore) EnsureSeededSourcesScheduled(
+	ctx context.Context,
+) (int, error) {
+	if err := s.validate(ctx); err != nil {
+		return 0, err
+	}
+
+	tag, err := s.pool.Exec(
+		ctx,
+		`
+			INSERT INTO discovery_source_schedule (
+				source_origin
+			)
+			SELECT source_origin
+			FROM discovery_source_state
+			WHERE seeded
+			ON CONFLICT (source_origin) DO NOTHING
+		`,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"store: ensure seeded sources scheduled: %w",
+			err,
+		)
+	}
+
+	return int(tag.RowsAffected()), nil
+}
+
 func (config AutomaticCrawlConfig) maxPendingProbes() int {
 	if config.MaxPendingProbes > 0 {
 		return config.MaxPendingProbes
