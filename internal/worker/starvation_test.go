@@ -94,7 +94,7 @@ func TestRunRepeatedTimeoutsDoNotStarveLaterWork(
 			timeoutCalls++
 
 			switch timeoutCalls {
-			case 1, 2, 3, 5, 6, 7, 9, 10, 11:
+			case 1, 2, 4, 5, 7, 8:
 				return context.WithDeadline(
 					parent,
 					time.Unix(0, 0),

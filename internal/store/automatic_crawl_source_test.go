@@ -521,6 +521,117 @@ func TestAutomaticCrawlingWaitsForProbeQueueBackpressure(
 	}
 }
 
+func TestFutureProbeRetryDoesNotBlockCurrentWork(t *testing.T) {
+	ctx := context.Background()
+	pool := newStoreTestPool(t)
+	seed := mustStoreOrigin(t, "https://seed.example")
+	candidate := mustStoreOrigin(t, "https://candidate.example")
+	waiting := mustStoreOrigin(t, "https://waiting.example")
+
+	discoveryStore, err := NewDiscoveryStoreWithAutomaticCrawling(
+		pool,
+		AutomaticCrawlConfig{
+			Enabled:          true,
+			MaxPendingProbes: 1,
+		},
+	)
+	if err != nil {
+		t.Fatalf("construct discovery store: %v", err)
+	}
+	if err := discoveryStore.AddCrawlSeed(ctx, seed); err != nil {
+		t.Fatalf("add crawl seed: %v", err)
+	}
+
+	lease, found, err := discoveryStore.ClaimDiscoverySourceLease(
+		ctx,
+		testDiscoveryLeaseOwner,
+		time.Hour,
+		time.Minute,
+	)
+	if err != nil || !found || lease.Origin != seed {
+		t.Fatalf(
+			"claim seed = %q, %v, %v, want %q, true, nil",
+			lease.Origin.String(),
+			found,
+			err,
+			seed.String(),
+		)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO verification_queue (origin, available_at, mode)
+		VALUES ($1, statement_timestamp() + interval '1 day', 'probe')
+	`, waiting.String()); err != nil {
+		t.Fatalf("insert future probe: %v", err)
+	}
+
+	if _, err := discoveryStore.RecordDiscovery(
+		ctx,
+		seed,
+		[]discovery.Candidate{{
+			Origin: candidate,
+			Kind:   discovery.KindLink,
+		}},
+	); err != nil {
+		t.Fatalf("record discovery: %v", err)
+	}
+	admitResolvedAutomaticCandidates(t, ctx, discoveryStore, seed)
+
+	var queued bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM verification_queue
+			WHERE origin = $1 AND mode = 'probe'
+		)
+	`, candidate.String()).Scan(&queued); err != nil {
+		t.Fatalf("read admitted probe: %v", err)
+	}
+	if !queued {
+		t.Fatal("future probe blocked admission of a new site")
+	}
+
+	lease, found, err = discoveryStore.ClaimDiscoverySourceLease(
+		ctx,
+		testDiscoveryLeaseOwner,
+		time.Hour,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatalf("claim while a new probe is due: %v", err)
+	}
+	if found || lease.Origin.String() != "" {
+		t.Fatalf(
+			"claim while a new probe is due = %q, %v, want zero, false",
+			lease.Origin.String(),
+			found,
+		)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE verification_queue
+		SET available_at = statement_timestamp() + interval '1 day'
+		WHERE origin = $1
+	`, candidate.String()); err != nil {
+		t.Fatalf("defer admitted probe: %v", err)
+	}
+
+	lease, found, err = discoveryStore.ClaimDiscoverySourceLease(
+		ctx,
+		testDiscoveryLeaseOwner,
+		time.Hour,
+		time.Minute,
+	)
+	if err != nil || !found || lease.Origin != candidate {
+		t.Fatalf(
+			"claim after both probes were deferred = %q, %v, %v, want %q, true, nil",
+			lease.Origin.String(),
+			found,
+			err,
+			candidate.String(),
+		)
+	}
+}
+
 func admitResolvedAutomaticCandidates(
 	t *testing.T,
 	ctx context.Context,

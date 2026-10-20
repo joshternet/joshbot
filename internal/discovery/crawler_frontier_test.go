@@ -886,7 +886,6 @@ func TestMultiPageCrawlerSkipsRemotePageFailuresAndContinues(
 		"https://example.com/denied",
 		"https://example.com/failed",
 		"https://example.com/failed",
-		"https://example.com/failed",
 		"https://example.com/ok",
 	}
 	if !reflect.DeepEqual(
@@ -1372,7 +1371,7 @@ func TestMultiPageCrawlerContinuesAfterChildTimeoutRetriesExhausted(t *testing.T
 		"https://example.com/ok": {frontierHTML(`<a href="https://external.example/">external</a>`)},
 	})
 	timeouts := &frontierTimeoutFactory{cancelCalls: map[int]bool{
-		2: true, 3: true, 4: true,
+		2: true, 3: true,
 	}}
 	sink := &frontierCandidateSink{}
 	telemetry := &recordingTelemetry{runID: 1}
@@ -1387,7 +1386,6 @@ func TestMultiPageCrawlerContinuesAfterChildTimeoutRetriesExhausted(t *testing.T
 	}
 	wantCalls := []string{
 		"https://example.com/",
-		"https://example.com/timeout",
 		"https://example.com/timeout",
 		"https://example.com/timeout",
 		"https://example.com/ok",

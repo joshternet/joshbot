@@ -605,6 +605,19 @@ func (s *DiscoveryStore) EnsureSeededSourcesScheduled(
 	return int(tag.RowsAffected()), nil
 }
 
+// activeProbeCapacityWhere selects probes that occupy the pending-probe
+// high-water mark. A probe whose next try is in the future does not occupy
+// capacity, so a new site can be checked while that retry waits.
+func activeProbeCapacityWhere(nowExpr string) string {
+	return `mode = 'probe' AND (
+		available_at <= ` + nowExpr + `
+		OR (
+			lease_expires_at IS NOT NULL
+			AND lease_expires_at > ` + nowExpr + `
+		)
+	)`
+}
+
 func (config AutomaticCrawlConfig) maxPendingProbes() int {
 	if config.MaxPendingProbes > 0 {
 		return config.MaxPendingProbes
@@ -1013,7 +1026,7 @@ func (s *DiscoveryStore) scheduleProbeCandidates(
 			LIMIT GREATEST(
 				$3::bigint - (
 					SELECT count(*) FROM verification_queue
-					WHERE mode = 'probe'
+					WHERE `+activeProbeCapacityWhere("statement_timestamp()")+`
 				),
 				0
 			)
@@ -1227,7 +1240,7 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 		var pendingProbes int
 		if err := tx.QueryRow(
 			ctx,
-			`SELECT count(*) FROM verification_queue WHERE mode = 'probe'`,
+			`SELECT count(*) FROM verification_queue WHERE `+activeProbeCapacityWhere("statement_timestamp()"),
 		).Scan(&pendingProbes); err != nil {
 			return fmt.Errorf("count pending probes: %w", err)
 		}
@@ -1451,7 +1464,7 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 		var pendingProbes int
 		if err := tx.QueryRow(
 			ctx,
-			`SELECT count(*) FROM verification_queue WHERE mode = 'probe'`,
+			`SELECT count(*) FROM verification_queue WHERE `+activeProbeCapacityWhere("statement_timestamp()"),
 		).Scan(&pendingProbes); err != nil {
 			return fmt.Errorf("count pending probes: %w", err)
 		}

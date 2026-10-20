@@ -361,12 +361,12 @@ Each admission run allocates candidates in canonical-origin order up to its
 snapshotted promotion limit; overflow remains durable and unbatched until a
 later run. Immediately before admission, each allocated origin receives a
 fresh DNS resolution and every returned address must pass netguard. Transient
-resolution failures are retried at most three times immediately and then
-deferred durably. Unsafe addresses remain in private evidence but are recorded
+resolution failures are retried once immediately and then deferred durably. Unsafe addresses remain in private evidence but are recorded
 as network-rejected.
 
-Verification, root-page crawling, and automatic-admission resolution make at
-most three immediate attempts for transient failures in one cycle. The normal
+Verification, root-page crawling, and automatic-admission resolution make one
+immediate retry for transient failures in one cycle. A second failure waits
+for a later try and does not block new sites. The normal
 durable consecutive-failure delays are exactly `5m`, `30m`, `2h`, `12h`, then
 `24h`. Valid `Retry-After` values can extend verification or root-page delays
 to the `24h` cap.

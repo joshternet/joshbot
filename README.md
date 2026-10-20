@@ -418,7 +418,8 @@ activity, and automatic-crawl backpressure observable without changing the
 public registry format.
 
 Transient verification, root-page crawl, and automatic-admission resolution
-failures receive at most three immediate attempts in one processing cycle.
+failures receive one immediate retry in a processing cycle. A second failure
+is scheduled for later, and that future retry does not block new sites.
 Durable consecutive-failure delays are `5m`, `30m`, `2h`, `12h`, then `24h`
 for later failures. `Retry-After` can extend a verification or root-page delay
 but is capped at `24h`. Successful or terminal outcomes reset the durable

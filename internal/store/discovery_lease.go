@@ -176,7 +176,7 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 							FROM (
 								SELECT 1
 								FROM verification_queue
-								WHERE mode = 'probe'
+								WHERE `+activeProbeCapacityWhere("$1")+`
 								LIMIT $4::bigint
 							) AS pending_probe
 						) AS pending_probes
