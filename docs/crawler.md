@@ -228,7 +228,7 @@ Additional discovery controls are:
 | `JOSHBOT_DISCOVERY_POLL_INTERVAL` | `30s` | Idle polling interval |
 | `JOSHBOT_DISCOVERY_PAGE_TIMEOUT` | `30s` | Per-page operation timeout |
 | `JOSHBOT_AUTOMATIC_CRAWL_ENABLED` | `false` | Admit discovered origins as private crawl sources |
-| `JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES` | `1000` | Pause automatic source claims at this pending-probe high-water mark |
+| `JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES` | `1000` | Pause automatic source claims when this many probes are due or in progress. Future retries do not count |
 | `JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN` | `100` | Maximum newly promoted automatic sources in one durable crawl-run admission batch |
 | `JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS` | empty | Add emergency domain patterns beyond the durable operator-managed avoid list |
 
@@ -280,8 +280,8 @@ promotion limit; overflow remains unbatched and available to a later run.
 Canonical origin deduplication keeps repeated links from creating duplicate
 sources.
 
-Each allocated candidate receives at most three immediate resolution attempts
-when the failure is transient. Capacity, policy, transient-network, and
+Each allocated candidate receives one immediate retry when the failure is
+transient. A second failure is scheduled for later, and the worker moves on. Capacity, policy, transient-network, and
 operator-pause deferrals are durable outcomes and do not delete evidence. A
 candidate is promoted only after fresh network validation, applicable
 avoid/block policy, probe-queue capacity, the automatic-expansion control
@@ -291,12 +291,13 @@ Automatic expansion continues across crawl generations until the operator
 disables it, blocks a source, pauses automatic expansion, pauses discovery, or
 no eligible source is due.
 
-When the pending verification probe queue reaches the configured high-water
-mark, JoshBot temporarily delays scheduled sources that are neither curated
-seeds nor currently verified. Curated seeds and verified participants remain
-eligible, and those claims resume after the worker drains the probe queue. This
-backpressure bounds active verification work without discarding durable source
-knowledge or imposing a lifetime limit on discovery.
+When probes that are due now, or already being checked, reach the configured
+high-water mark, JoshBot temporarily delays scheduled sources that are neither
+curated seeds nor currently verified. A probe waiting for a future retry does
+not consume that capacity. Curated seeds and verified participants remain
+eligible, and automatic claims resume after the worker drains the probes that
+are due. This backpressure bounds active verification work without discarding
+durable source knowledge or imposing a lifetime limit on discovery.
 
 ### Pausing automatic expansion
 
@@ -504,8 +505,9 @@ unsupported origins, unsupported or oversized content, and exhausted budgets,
 are terminal for retry scheduling.
 
 Declaration verification, each frontier page of a source crawl, and
-automatic-admission DNS resolution make at most three immediate attempts in a
-processing cycle. The normal durable
+automatic-admission DNS resolution make one immediate retry in a processing
+cycle. A second failure is scheduled for later and the current worker moves on.
+The normal durable
 consecutive-failure schedule is `5m`, `30m`, `2h`, `12h`, then `24h` for each
 later failure. Valid `Retry-After` values can extend verification and source-crawl
 delays up to the same `24h` cap. A positive server-requested delay ends the
@@ -521,7 +523,7 @@ authoritative valid declaration remains current until an authoritative result
 establishes otherwise. Unreachability therefore changes check freshness, not
 participation state.
 
-An exhausted three-attempt cycle is one logical queue claim, one
+An exhausted retry cycle is one logical queue claim, one
 frontier-page attempt, or one admission decision. Verification writes one
 observation, crawling writes one page-attempt row, and admission writes one
 batch outcome. The applicable durable failure streak increments once, not once

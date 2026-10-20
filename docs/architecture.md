@@ -221,8 +221,8 @@ schedules future work.
 Execution is at least once. A network request may occur more than once after a
 crash or expired lease. Only the current lease owner may commit completion.
 
-Within one claim, transient verification outcomes receive up to three immediate
-attempts. Before each attempt the worker checks remaining wall-clock lease time
+Within one claim, a transient verification outcome receives one immediate
+retry. A second failure is scheduled for later and the worker moves on. Before each attempt the worker checks remaining wall-clock lease time
 against one `JobTimeout` plus `CompletionGrace`, renewing only when that budget
 is insufficient. Completion always uses the latest authoritative lease.
 
@@ -240,7 +240,7 @@ occur transactionally.
 
 ### `internal/retry`
 
-Defines the shared typed failure categories, three-attempt in-cycle bound,
+Defines the shared typed failure categories, one-immediate-retry bound,
 `Retry-After` parsing and cap, and durable delay schedule of `5m`, `30m`,
 `2h`, `12h`, then `24h`.
 
@@ -257,7 +257,7 @@ Every request uses the robots-aware guarded HTTP path.
 The frontier is intentionally in memory. A stopped crawl starts from the root
 during its next attempt.
 
-Each transient frontier-page failure receives up to three immediate attempts
+Each transient frontier-page failure receives one immediate retry
 unless Retry-After defers the source crawl durably.
 Redirect-loop detection is local to each fetch attempt so a failed redirect
 cannot poison later page retries; successfully traversed same-origin URLs are
@@ -362,8 +362,9 @@ later valid reprobe promotes the origin to recurring work.
 A transient unavailable outcome retains the current queue mode with durable
 retry state and does not replace the latest authoritative declaration state.
 
-Transient work receives at most three immediate verification attempts per
-claim. Consecutive transient failures normally persist their category and next
+Transient work receives one immediate verification retry per claim. A second
+failure is scheduled for later. A probe waiting for that later try does not
+consume pending-probe capacity, so new sites can be checked in the meantime. Consecutive transient failures normally persist their category and next
 due time using `5m`, `30m`, `2h`, `12h`, and a capped `24h` thereafter.
 Origins that have previously participated use that ladder for the first five
 consecutive transient failures, then switch to a seven-day recheck cadence
@@ -423,8 +424,8 @@ first durable crawl run before bounded admission. Eligible link candidates are
 allocated in canonical-origin order, up to the admission run's snapshotted
 promotion limit. Overflow remains unbatched durable evidence for a later crawl
 run. Each allocated origin then receives a fresh all-address netguard
-resolution. Transient resolution failures receive up to three immediate
-attempts and a durable due time; unsafe addresses are retained as evidence but
+resolution. A transient resolution failure receives one immediate retry and
+then a durable due time; unsafe addresses are retained as evidence but
 recorded as network-rejected. Capacity, policy, transient, and
 automatic-expansion-pause deferrals do not erase the candidate or provenance.
 
@@ -442,11 +443,13 @@ participant creates new scheduling intent.
 
 Scheduled sources that are neither curated seeds nor currently verified
 participants use verification-queue backpressure and automatic-expansion
-policy. At the configured pending-probe high-water mark, that work remains
-scheduled but is not claimed until workers drain the queue. Curated seeds and
-verified participants remain independently eligible. The high-water mark
-controls outstanding work; it does not discard history or impose a lifetime
-limit on discovery.
+policy. The pending-probe high-water mark counts probes that are due now or
+already being checked. A probe waiting for a future retry does not hold a
+slot, so new sites can be admitted while that retry waits. At the mark, other
+automatic sources remain scheduled but are not claimed until workers drain the
+probes that are due. Curated seeds and verified participants remain
+independently eligible. The high-water mark controls outstanding work; it does
+not discard history or impose a lifetime limit on discovery.
 
 Automatic expansion also has an independent durable operator pause. While this
 pause is active, scheduled sources that are neither curated seeds nor currently

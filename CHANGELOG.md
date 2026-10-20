@@ -48,6 +48,9 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- A transient check gets one immediate retry. A second failure is scheduled for
+  later, and that future retry does not occupy pending-probe capacity, so
+  workers move on to sites that can be checked now.
 - Curated seeds are scheduled when they are added, and discovery startup
   inserts a schedule row for any seeded origin that is missing one after the
   crawler and runner have been constructed. Removing a seed drops that

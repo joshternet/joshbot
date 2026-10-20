@@ -8,7 +8,9 @@ import (
 )
 
 const (
-	MaxAttemptsPerCycle = 3
+	// MaxAttemptsPerCycle is the first try plus one immediate retry.
+	// A second failure is scheduled for later and the worker moves on.
+	MaxAttemptsPerCycle = 2
 	MaxDelay            = 24 * time.Hour
 )
 

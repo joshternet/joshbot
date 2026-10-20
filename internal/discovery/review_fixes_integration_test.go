@@ -69,7 +69,7 @@ func TestPartialCrawlRetainsTransientFailure(t *testing.T) {
 	if err != nil || result.PagesParsed != 1 || len(telemetry.attempts) != 3 || result.FailureCategory != retry.CategoryHTTP5xx || telemetry.outcome != CrawlRunFailed || telemetry.stopReason != "partial_failure" {
 		t.Fatalf("result=%#v outcome=%v/%v err=%v", result, telemetry.outcome, telemetry.stopReason, err)
 	}
-	if len(getter.calls) != 5 {
+	if len(getter.calls) != 4 {
 		t.Fatalf("network attempts = %v", getter.calls)
 	}
 }
@@ -121,7 +121,7 @@ func TestChildTimeoutExhaustionContinuesToHealthySibling(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := crawler.Crawl(context.Background(), mustDiscoveryOrigin(t, "https://source.example"))
-	if err != nil || calls != 5 || result.PagesAttempted != 3 || result.PagesParsed != 2 || result.FailureCategory != retry.CategoryTimeout || telemetry.outcome != CrawlRunFailed {
+	if err != nil || calls != 4 || result.PagesAttempted != 3 || result.PagesParsed != 2 || result.FailureCategory != retry.CategoryTimeout || telemetry.outcome != CrawlRunFailed {
 		t.Fatalf("crawl=%#v calls=%d outcome=%s err=%v", result, calls, telemetry.outcome, err)
 	}
 	if len(telemetry.attempts) != 3 || telemetry.attempts[1].FailureCategory != retry.CategoryTimeout || telemetry.attempts[2].FailureCategory != retry.CategoryNone {

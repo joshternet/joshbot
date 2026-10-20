@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/retry"
 	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 	"github.com/joshternet/joshbot/internal/worker"
@@ -62,7 +63,7 @@ func TestWorkerRetryIntegrationRecoversWithinVerificationCycle(
 				attempt :=
 					declarationAttempts.Add(1)
 
-				if attempt < 3 {
+				if attempt < retry.MaxAttemptsPerCycle {
 					writer.WriteHeader(
 						http.StatusServiceUnavailable,
 					)
@@ -111,10 +112,11 @@ func TestWorkerRetryIntegrationRecoversWithinVerificationCycle(
 		)
 	}
 
-	if got := declarationAttempts.Load(); got != 3 {
+	if got := declarationAttempts.Load(); got != retry.MaxAttemptsPerCycle {
 		t.Fatalf(
-			"declaration attempts = %d, want 3",
+			"declaration attempts = %d, want %d",
 			got,
+			retry.MaxAttemptsPerCycle,
 		)
 	}
 
@@ -228,10 +230,11 @@ func TestWorkerRetryIntegrationPersistsTransientBackoffAfterCycleExhaustion(
 		)
 	}
 
-	if got := declarationAttempts.Load(); got != 3 {
+	if got := declarationAttempts.Load(); got != retry.MaxAttemptsPerCycle {
 		t.Fatalf(
-			"declaration attempts = %d, want 3",
+			"declaration attempts = %d, want %d",
 			got,
+			retry.MaxAttemptsPerCycle,
 		)
 	}
 
