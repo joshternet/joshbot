@@ -148,6 +148,15 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   that same schema rebuilt before it is reused. The package no longer creates
   and drops a spare schema for every test.
 
+### Security
+
+- Go 1.27.3 closes GO-2026-6809 / CVE-2026-111943 by rejecting certificate
+  chains that contain the compromised eMudhra intermediate CA keys in
+  `crypto/x509`.
+- The Docker build base is refreshed to `golang:1.27.3-trixie` so the
+  scratch-image `ca-certificates.crt` bundle comes from a post-remediation
+  Debian image, and `golang.org/x/net` moves to v0.61.0.
+
 ## [1.1.0] - 2026-09-21
 
 ### Added
