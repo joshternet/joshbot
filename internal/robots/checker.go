@@ -274,7 +274,9 @@ func (c *Checker) evictOverflowLocked(now time.Time) {
 // Get requests target only when the current robots policy permits it.
 //
 // Robots acquisition and the protected request use the same guarded,
-// per-origin scheduled HTTP implementation and JoshBot User-Agent.
+// per-origin scheduled HTTP implementation and JoshBot User-Agent. Hosts in
+// one registrable domain or private public suffix also share the operator
+// request delay.
 func (c *Checker) Get(
 	ctx context.Context,
 	target *url.URL,

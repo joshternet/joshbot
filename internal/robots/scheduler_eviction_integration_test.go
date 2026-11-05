@@ -2,6 +2,9 @@ package robots
 
 import "testing"
 
+// TestSchedulerEvictionAndPolitenessIntegration re-enters the scheduler unit
+// tests. The integration coverage gate runs only Test functions declared in
+// *_integration_test.go, so these calls are what count neighborhood pacing.
 func TestSchedulerEvictionAndPolitenessIntegration(t *testing.T) {
 	t.Run("bounded and expired", TestRequestSchedulerBoundsInactiveOrigins)
 	t.Run("pending spacing", TestSchedulerCapacityPreservesPendingSpacing)
