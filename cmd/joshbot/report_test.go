@@ -231,9 +231,9 @@ func TestLoadReportSettingsUsesConfiguredAddress(
 		)
 	}
 
-	if settings.automaticCrawlEnabled {
+	if !settings.automaticCrawlEnabled {
 		t.Error(
-			"automatic crawl enabled = true, want false",
+			"automatic crawl enabled = false, want default true",
 		)
 	}
 

@@ -607,8 +607,8 @@ func TestRecordDiscoveryRetainsEvidenceWhenAvoidRulesAreUnavailable(t *testing.T
 		Origin: mustStoreOrigin(t, "https://candidate.example"),
 		Kind:   discovery.KindLink,
 	}})
-	if err != nil {
-		t.Fatalf("RecordDiscovery() error = %v, want durable evidence", err)
+	if err == nil {
+		t.Fatal("RecordDiscovery() error = nil, want probe-scheduling failure after evidence")
 	}
 	var evidence int
 	if err := pool.QueryRow(

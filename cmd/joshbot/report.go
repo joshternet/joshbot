@@ -274,9 +274,8 @@ func loadReportSettings(
 			)
 	}
 
-	automaticEnabled, err := optionalBooleanSetting(
+	automaticEnabled, err := automaticCrawlEnabledSetting(
 		getenv,
-		automaticCrawlEnabledEnvironment,
 	)
 	if err != nil {
 		return reportSettings{}, err

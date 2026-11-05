@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/store"
 )
 
 func (operations *fakeCommandOperations) discover(
@@ -425,8 +426,10 @@ func TestNewDiscoveryRuntimeRejectsNilPool(
 func TestOwnedDiscoveryRuntimeStoreDelegatesClaim(
 	t *testing.T,
 ) {
+	var nilStore *store.DiscoveryStore
 	runtimeStore := &ownedDiscoveryRuntimeStore{
-		leaseOwner: "discovery-test",
+		leaseOwner:   "discovery-test",
+		leaseBackend: nilStore,
 	}
 
 	lease, found, err :=

@@ -38,6 +38,10 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Changed
 
+- Discovered link origins are admitted as crawl sources unless
+  `JOSHBOT_AUTOMATIC_CRAWL_ENABLED` is explicitly false. Robots, avoid rules,
+  crawl blocks, expansion pause, probe backpressure, promotion budgets, and
+  network checks still gate that expansion.
 - `wordpress.com` and `wordpress.org` are no longer domain-avoid rules, and
   existing blocks on those hosts are cleared. Sites that install the official
   Joshternet WordPress plugin can be probed and promoted. Other avoid rules
@@ -48,6 +52,13 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- `golang.org/x/net` moves to v0.62.0 to close GO-2026-6860 (quadratic HTML
+  text-node coalescing).
+- Discovered link origins are always queued to check `/.well-known/josh` when
+  policy and capacity allow, including when automatic crawl-source promotion is
+  enabled. Overflow and stranded candidates drain into `verification_queue` on
+  discovery startup and each source-claim poll so friends found on a crawled
+  site keep entering the check list as capacity frees.
 - A transient check gets one immediate retry. A second failure is scheduled for
   later, and that future retry does not occupy pending-probe capacity, so
   workers move on to sites that can be checked now.

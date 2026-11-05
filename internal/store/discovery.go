@@ -634,8 +634,9 @@ func (config AutomaticCrawlConfig) maxAutomaticPromotionsPerRun() int {
 }
 
 // RecordDiscovery durably records one complete candidate-evidence batch before
-// attempting bounded probe admission. Admission failure never rolls back valid
-// candidates or provenance edges.
+// attempting bounded /.well-known/josh probe enqueue. Probe scheduling runs
+// whether or not automatic crawl-source promotion is enabled. Failure to
+// enqueue probes never rolls back valid candidates or provenance edges.
 func (s *DiscoveryStore) RecordDiscovery(
 	ctx context.Context,
 	source origin.Origin,
@@ -974,10 +975,8 @@ func (s *DiscoveryStore) recordDiscovery(
 		)
 	}
 
-	if !s.automatic.Enabled {
-		if err := s.scheduleProbeCandidates(ctx, prepared, recordedAt); err != nil {
-			return discovery.RecordResult{}, err
-		}
+	if err := s.scheduleProbeCandidates(ctx, prepared, recordedAt); err != nil {
+		return discovery.RecordResult{}, err
 	}
 
 	return discovery.RecordResult{
@@ -985,33 +984,185 @@ func (s *DiscoveryStore) recordDiscovery(
 	}, nil
 }
 
+// SchedulePendingDiscoveryProbes enqueues eligible link candidates that are
+// not yet in verification_queue for a /.well-known/josh probe.
+//
+// Capacity overflow from RecordDiscovery and historically stranded candidates
+// are drained up to MaxPendingProbes. Avoid-listed and crawl-blocked hosts are
+// skipped. Origins with a current authoritative valid declaration, or a
+// terminal observation that is not older than the latest discovery evidence,
+// are left alone so the queue is not blindly re-flooded.
+//
+// @param ctx - request context for database work
+// @returns count of newly inserted probe rows
+// @throws store validation and PostgreSQL errors
+func (s *DiscoveryStore) SchedulePendingDiscoveryProbes(
+	ctx context.Context,
+) (int, error) {
+	if err := s.validate(ctx); err != nil {
+		return 0, err
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT candidate.origin
+		FROM discovery_candidates AS candidate
+		LEFT JOIN discovery_source_state AS source_state
+			ON source_state.source_origin = candidate.origin
+		LEFT JOIN LATERAL (
+			SELECT
+				observation.observed_at,
+				observation.outcome
+			FROM verification_observations AS observation
+			WHERE observation.origin = candidate.origin
+				AND observation.outcome IN (
+					'valid',
+					'absent',
+					'invalid',
+					'unsupported_version',
+					'cross_origin_redirect'
+				)
+			ORDER BY
+				observation.observed_at DESC,
+				observation.id DESC
+			LIMIT 1
+		) AS effective ON true
+		WHERE EXISTS (
+			SELECT 1
+			FROM discovery_edges AS edge
+			WHERE edge.candidate_origin = candidate.origin
+				AND edge.kind = 'link'
+		)
+			AND NOT COALESCE(source_state.crawl_blocked, false)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM verification_queue AS queue
+				WHERE queue.origin = candidate.origin
+			)
+			AND (
+				effective.observed_at IS NULL
+				OR (
+					effective.outcome <> 'valid'
+					AND candidate.last_discovered_at >
+						effective.observed_at
+				)
+			)
+		ORDER BY candidate.origin
+	`)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"store: list pending discovery probes: %w",
+			err,
+		)
+	}
+	defer rows.Close()
+
+	candidates := make([]discovery.Candidate, 0)
+	for rows.Next() {
+		var rawOrigin string
+		if err := rows.Scan(&rawOrigin); err != nil {
+			return 0, fmt.Errorf(
+				"store: scan pending discovery probe: %w",
+				err,
+			)
+		}
+		candidateOrigin, err := origin.Parse(rawOrigin)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"store: pending discovery probe origin: %w",
+				err,
+			)
+		}
+		candidates = append(candidates, discovery.Candidate{
+			Origin: candidateOrigin,
+			Kind:   discovery.KindLink,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf(
+			"store: iterate pending discovery probes: %w",
+			err,
+		)
+	}
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+
+	return s.scheduleProbeCandidatesCounted(
+		ctx,
+		candidates,
+		time.Time{},
+		true,
+	)
+}
+
 func (s *DiscoveryStore) scheduleProbeCandidates(
 	ctx context.Context,
 	candidates []discovery.Candidate,
 	availableAt time.Time,
 ) error {
+	_, err := s.scheduleProbeCandidatesCounted(
+		ctx,
+		candidates,
+		availableAt,
+		false,
+	)
+	return err
+}
+
+// scheduleProbeCandidatesCounted inserts eligible probe rows and returns how
+// many were newly queued under the pending-probe capacity limit.
+//
+// When useTransactionClock is true, availableAt is ignored and the durable
+// discovery clock supplies the queue availability time inside the transaction.
+func (s *DiscoveryStore) scheduleProbeCandidatesCounted(
+	ctx context.Context,
+	candidates []discovery.Candidate,
+	availableAt time.Time,
+	useTransactionClock bool,
+) (int, error) {
 	exclusions, err := s.automaticExclusions(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	eligible := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
 		if !exclusions.excludes(candidate.Origin.Hostname()) {
-			eligible = append(eligible, candidate.Origin.String())
+			eligible = append(
+				eligible,
+				candidate.Origin.String(),
+			)
 		}
 	}
 	if len(eligible) == 0 {
-		return nil
+		return 0, nil
 	}
-	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+
+	var scheduled int
+	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		probeAvailableAt := availableAt
+		if useTransactionClock {
+			now, err := s.clock.NowTransaction(ctx, tx)
+			if err != nil {
+				return fmt.Errorf(
+					"store: read discovery probe drain clock: %w",
+					err,
+				)
+			}
+			probeAvailableAt = now.UTC()
+		}
+
 		if _, err := tx.Exec(
 			ctx,
 			"SELECT pg_advisory_xact_lock($1)",
 			automaticAdmissionAdvisoryLockKey,
 		); err != nil {
-			return fmt.Errorf("store: lock probe admission: %w", err)
+			return fmt.Errorf(
+				"store: lock probe admission: %w",
+				err,
+			)
 		}
-		if _, err := tx.Exec(ctx, `
+
+		tag, err := tx.Exec(ctx, `
 			INSERT INTO verification_queue (origin, available_at, mode)
 			SELECT candidate.origin, $2, 'probe'
 			FROM unnest($1::text[]) AS candidate(origin)
@@ -1031,11 +1182,20 @@ func (s *DiscoveryStore) scheduleProbeCandidates(
 				0
 			)
 			ON CONFLICT (origin) DO NOTHING
-		`, eligible, availableAt, s.automatic.maxPendingProbes()); err != nil {
-			return fmt.Errorf("store: admit discovery probes: %w", err)
+		`, eligible, probeAvailableAt, s.automatic.maxPendingProbes())
+		if err != nil {
+			return fmt.Errorf(
+				"store: admit discovery probes: %w",
+				err,
+			)
 		}
+		scheduled = int(tag.RowsAffected())
 		return nil
 	})
+	if err != nil {
+		return 0, err
+	}
+	return scheduled, nil
 }
 
 // PendingAutomaticCandidates allocates and returns one durable, bounded

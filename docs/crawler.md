@@ -75,9 +75,10 @@ creates scheduling intent. It does not assert that the origin participates in
 the Joshternet. Adding a seed inserts both the curated flag and a
 `discovery_source_schedule` row, so the next discovery poll can claim it.
 The crawl is the normal one: the root page, the same-origin frontier, and
-external links recorded as candidates. Those candidates still wait for
-verification and automatic admission, including while the probe queue is at
-its cap.
+external links recorded as candidates. Eligible candidates are queued for
+`/.well-known/josh` verification independently of automatic admission.
+Overflow waits for probe capacity; automatic promotion to a crawl source still
+uses the admission policy when that feature is enabled.
 
 Discovery startup inserts a schedule row for every curated seed that is
 missing one, after the crawler and runner have been constructed. An existing
@@ -115,6 +116,13 @@ deduplication. Fragment-only differences do not create additional page work.
 Eligible same-origin HTTP and HTTPS links may extend the page frontier.
 External HTTP and HTTPS links contribute their canonical origins as
 declaration-verification candidates.
+
+Every eligible external link origin is queued to check `/.well-known/josh`
+when policy and probe capacity allow. Probe scheduling does not depend on
+automatic crawl-source promotion. When the pending-probe high-water mark is
+full, overflow evidence stays durable and discovery drains it into the
+verification queue as capacity frees, including on discovery startup and each
+source-claim poll. Avoid-listed and crawl-blocked hosts stay out of that queue.
 
 External origins are not followed as pages during the current source crawl.
 A newly discovered origin becomes crawl-eligible only after independent
@@ -227,7 +235,7 @@ Additional discovery controls are:
 | `JOSHBOT_DISCOVERY_INTERVAL` | `168h` | Minimum interval between source attempts |
 | `JOSHBOT_DISCOVERY_POLL_INTERVAL` | `30s` | Idle polling interval |
 | `JOSHBOT_DISCOVERY_PAGE_TIMEOUT` | `30s` | Per-page operation timeout |
-| `JOSHBOT_AUTOMATIC_CRAWL_ENABLED` | `false` | Admit discovered origins as private crawl sources |
+| `JOSHBOT_AUTOMATIC_CRAWL_ENABLED` | `true` | Admit discovered link origins as private crawl sources. `false` stops that expansion |
 | `JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES` | `1000` | Pause automatic source claims when this many probes are due or in progress. Future retries do not count |
 | `JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN` | `100` | Maximum newly promoted automatic sources in one durable crawl-run admission batch |
 | `JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS` | empty | Add emergency domain patterns beyond the durable operator-managed avoid list |
@@ -271,14 +279,20 @@ slots.
 
 These values are operator safety limits, not Joshternet protocol rules.
 
-When automatic expansion is enabled, safe canonical origins discovered through
-eligible public links can enter deterministic, bounded admission batches.
-Every candidate and provenance edge is durable before admission. Attribution
-belongs to the first crawl run that discovered the link origin. Each admission
-run allocates candidates in canonical-origin order up to that run's configured
-promotion limit; overflow remains unbatched and available to a later run.
-Canonical origin deduplication keeps repeated links from creating duplicate
-sources.
+Automatic expansion is enabled by default. Safe canonical origins discovered
+through eligible public links can enter deterministic, bounded admission
+batches. Robots permission is still required before any page or declaration
+URL is fetched. Avoid-listed hosts, crawl blocks, expansion pause, probe
+backpressure, and the promotion budget still keep those origins out of the
+crawl. Set `JOSHBOT_AUTOMATIC_CRAWL_ENABLED=false` to stop admitting new
+automatic crawl sources.
+Every candidate and provenance edge is durable before admission, and eligible
+link origins are already probe-scheduled independently of promotion.
+Attribution belongs to the first crawl run that discovered the link origin.
+Each admission run allocates candidates in canonical-origin order up to that
+run's configured promotion limit; overflow remains unbatched and available to
+a later run. Canonical origin deduplication keeps repeated links from creating
+duplicate sources.
 
 Each allocated candidate receives one immediate retry when the failure is
 transient. A second failure is scheduled for later, and the worker moves on. Capacity, policy, transient-network, and

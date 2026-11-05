@@ -135,9 +135,8 @@ func loadCrawlRuntimeSettings(
 		return crawlRuntimeSettings{}, err
 	}
 
-	automaticEnabled, err := optionalBooleanSetting(
+	automaticEnabled, err := automaticCrawlEnabledSetting(
 		getenv,
-		automaticCrawlEnabledEnvironment,
 	)
 	if err != nil {
 		return crawlRuntimeSettings{}, err
@@ -235,13 +234,14 @@ func optionalPositiveIntegerSetting(
 	return parsed, nil
 }
 
-func optionalBooleanSetting(
+// automaticCrawlEnabledSetting defaults to expanding discovered origins into
+// crawl sources. An explicit false keeps that expansion off.
+func automaticCrawlEnabledSetting(
 	getenv environmentGetter,
-	name string,
 ) (bool, error) {
-	value := getenv(name)
+	value := getenv(automaticCrawlEnabledEnvironment)
 	if value == "" {
-		return false, nil
+		return true, nil
 	}
 
 	parsed, err := strconv.ParseBool(value)
@@ -249,7 +249,7 @@ func optionalBooleanSetting(
 		return false, fmt.Errorf(
 			"%w: %s must be a boolean",
 			errInvalidRuntimeConfiguration,
-			name,
+			automaticCrawlEnabledEnvironment,
 		)
 	}
 

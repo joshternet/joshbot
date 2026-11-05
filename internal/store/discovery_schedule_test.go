@@ -1471,6 +1471,15 @@ func TestCompleteAutomaticCandidatesDefersNewerTerminalObservation(
 		declaration.OutcomeAbsent,
 		0,
 	)
+	// Clear the RecordDiscovery-time probe so this assertion covers only what
+	// CompleteAutomaticCandidates schedules after a newer terminal miss.
+	if _, err := pool.Exec(
+		ctx,
+		`DELETE FROM verification_queue WHERE origin = $1`,
+		candidate.Origin.String(),
+	); err != nil {
+		t.Fatalf("clear pre-admission probe: %v", err)
+	}
 
 	if err := store.CompleteAutomaticCandidates(
 		ctx,
