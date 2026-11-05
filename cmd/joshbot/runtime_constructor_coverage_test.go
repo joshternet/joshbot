@@ -188,6 +188,52 @@ func TestNewDiscoveryRuntimeWithStoreFactory(
 	)
 
 	t.Run(
+		"pending probe schedule failure",
+		func(t *testing.T) {
+			probeFailure := errors.New(
+				"test pending probe schedule failure",
+			)
+
+			runner, err :=
+				newDiscoveryRuntimeWithStoreFactory(
+					context.Background(),
+					nil,
+					testCrawlRuntimeSettings(t),
+					func(
+						*pgxpool.Pool,
+						store.AutomaticCrawlConfig,
+					) (discoveryRuntimeStore, error) {
+						return &coverageDiscoveryRuntimeStore{
+							probeScheduleErr: probeFailure,
+						}, nil
+					},
+				)
+
+			if runner != nil ||
+				!errors.Is(
+					err,
+					probeFailure,
+				) {
+				t.Fatalf(
+					"newDiscoveryRuntimeWithStoreFactory() = %#v, %v; want nil, probe schedule failure",
+					runner,
+					err,
+				)
+			}
+
+			if !strings.Contains(
+				err.Error(),
+				"schedule pending discovery probes",
+			) {
+				t.Errorf(
+					"error = %v, want pending probe schedule context",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
 		"crawler construction failure",
 		func(t *testing.T) {
 			settings :=
@@ -293,8 +339,9 @@ func TestNewDiscoveryRuntimeWithStoreFactory(
 }
 
 type coverageDiscoveryRuntimeStore struct {
-	reconcileErr error
-	scheduleErr  error
+	reconcileErr     error
+	scheduleErr      error
+	probeScheduleErr error
 }
 
 func (
@@ -311,6 +358,14 @@ func (
 	context.Context,
 ) (int, error) {
 	return 0, runtimeStore.scheduleErr
+}
+
+func (
+	runtimeStore *coverageDiscoveryRuntimeStore,
+) SchedulePendingDiscoveryProbes(
+	context.Context,
+) (int, error) {
+	return 0, runtimeStore.probeScheduleErr
 }
 
 func (

@@ -603,7 +603,7 @@ func TestRecordDiscoveryDatabasePathsWithoutDatabase(
 	t.Run(
 		"automatic crawling success",
 		func(t *testing.T) {
-			tx := &discoveryPolicyUnitTx{
+			recordTx := &discoveryPolicyUnitTx{
 				rowResults: []discoveryUnitRow{
 					{
 						values: []any{
@@ -615,10 +615,33 @@ func TestRecordDiscoveryDatabasePathsWithoutDatabase(
 				},
 			}
 
+			scheduleTx := &discoveryPolicyUnitTx{
+				execResults: []discoveryUnitExecResult{
+					{
+						tag: pgconn.NewCommandTag(
+							"SELECT 1",
+						),
+					},
+					{
+						tag: pgconn.NewCommandTag(
+							"INSERT 0 1",
+						),
+					},
+				},
+			}
+
 			database := &recordDiscoveryUnitDatabase{
 				beginResults: []recordDiscoveryBeginResult{
 					{
-						tx: tx,
+						tx: recordTx,
+					},
+					{
+						tx: scheduleTx,
+					},
+				},
+				queryResults: []discoveryUnitQueryResult{
+					{
+						rows: &discoveryUnitRows{},
 					},
 				},
 			}

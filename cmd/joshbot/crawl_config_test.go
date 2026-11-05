@@ -28,6 +28,8 @@ func TestCrawlRuntimeConfigurationUsesExplicitBudgets(
 		http:               robots.DefaultHTTPConfig(),
 		telemetryRetention: defaultCrawlTelemetryRetention,
 		automatic: store.AutomaticCrawlConfig{
+			Enabled:                      true,
+			MaxPendingProbes:             defaultAutomaticCrawlMaxPendingProbes,
 			MaxAutomaticPromotionsPerRun: defaultAutomaticCrawlMaxPromotionsPerRun,
 			ExcludedHostSuffixes:         defaultAutomaticCrawlExcludedHosts,
 		},
@@ -331,6 +333,27 @@ func TestCrawlRuntimeConfigurationRejectsInvalidAutomaticExpansion(
 	}
 }
 
+func TestCrawlRuntimeConfigurationDisablesAutomaticExpansionExplicitly(
+	t *testing.T,
+) {
+	environment := validCrawlRuntimeEnvironment()
+	environment[automaticCrawlEnabledEnvironment] = "false"
+
+	settings, err := loadCrawlRuntimeSettings(environment.get)
+	if err != nil {
+		t.Fatalf("load crawl settings: %v", err)
+	}
+	if settings.automatic.Enabled {
+		t.Fatal("automatic crawl enabled = true, want explicit false")
+	}
+	if settings.automatic.MaxPendingProbes != 0 {
+		t.Fatalf(
+			"MaxPendingProbes = %d, want 0 when automatic crawl is disabled",
+			settings.automatic.MaxPendingProbes,
+		)
+	}
+}
+
 func TestCrawlRuntimeConfigurationDefaultsAutomaticBackpressure(
 	t *testing.T,
 ) {
@@ -342,6 +365,9 @@ func TestCrawlRuntimeConfigurationDefaultsAutomaticBackpressure(
 		t.Fatalf("load crawl settings: %v", err)
 	}
 
+	if !settings.automatic.Enabled {
+		t.Fatal("automatic crawl enabled = false, want default true")
+	}
 	if settings.automatic.MaxPendingProbes !=
 		defaultAutomaticCrawlMaxPendingProbes {
 		t.Errorf(

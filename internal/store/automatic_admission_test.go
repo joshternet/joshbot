@@ -202,8 +202,17 @@ func TestAutomaticAdmissionTransientFailurePersistsAcrossStoreRestart(t *testing
 	`, unsafe.String()).Scan(&unsafeQueueCount); err != nil {
 		t.Fatal(err)
 	}
-	if unsafeQueueCount != 0 {
-		t.Fatalf("unsafe verification queue count = %d, want 0", unsafeQueueCount)
+	// RecordDiscovery queues probes independently of admission. Unsafe
+	// destinations stay out of automatic crawl sources and fail closed when
+	// the guarded worker later retrieves them.
+	if unsafeQueueCount != 1 {
+		t.Fatalf("unsafe verification queue count = %d, want 1", unsafeQueueCount)
+	}
+	gotUnsafe := automaticSourceNames(t, ctx, pool)
+	for _, name := range gotUnsafe {
+		if name == unsafe.String() {
+			t.Fatal("unsafe origin became an automatic crawl source")
+		}
 	}
 }
 
@@ -447,8 +456,9 @@ func TestAutomaticAdmissionPromotesRecurringCandidateWithinRunBudget(t *testing.
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO verification_queue (origin, available_at, mode)
-		VALUES ($1, statement_timestamp(), 'recurring')
+		UPDATE verification_queue
+		SET mode = 'recurring'
+		WHERE origin = $1
 	`, candidate.String()); err != nil {
 		t.Fatal(err)
 	}
@@ -865,13 +875,25 @@ func TestAutomaticAdmissionRechecksExactBlockPolicy(t *testing.T) {
 	var automatic, queued bool
 	if err := pool.QueryRow(ctx, `
 		SELECT
-			(SELECT automatically_discovered FROM discovery_source_state WHERE source_origin = $1),
+			COALESCE(
+				(
+					SELECT automatically_discovered
+					FROM discovery_source_state
+					WHERE source_origin = $1
+				),
+				false
+			),
 			EXISTS (SELECT 1 FROM verification_queue WHERE origin = $1)
 	`, candidate.Origin.String()).Scan(&automatic, &queued); err != nil {
 		t.Fatal(err)
 	}
-	if automatic || queued {
-		t.Fatalf("blocked candidate automatic/queued = %t/%t", automatic, queued)
+	if automatic {
+		t.Fatal("blocked candidate became an automatic crawl source")
+	}
+	// Probe enqueue happens at RecordDiscovery, before the block. Blocked
+	// queue rows remain but cannot be claimed until the block is cleared.
+	if !queued {
+		t.Fatal("pre-block probe was removed unexpectedly")
 	}
 }
 

@@ -311,7 +311,7 @@ JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN
 JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS
 ```
 
-Automatic crawling is disabled unless explicitly enabled.
+Automatic crawling is enabled unless explicitly disabled. Discovered link origins are admitted as crawl sources so later crawls can find more domains to check for `/.well-known/josh`. Robots rules, the domain avoid list, crawl blocks, automatic-expansion pause, probe-queue backpressure, the per-run promotion budget, page and depth limits, and network safety checks still apply. Set `JOSHBOT_AUTOMATIC_CRAWL_ENABLED=false` to stop admitting those crawl sources.
 
 When automatic crawling is enabled, operators can pause automatic expansion at
 runtime without pausing discovery or verification. Curated seeds and currently
@@ -327,7 +327,7 @@ than the verification queue can reasonably absorb.
 Runtime defaults are:
 
 ```dotenv
-JOSHBOT_AUTOMATIC_CRAWL_ENABLED=false
+JOSHBOT_AUTOMATIC_CRAWL_ENABLED=true
 JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES=1000
 JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN=100
 JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS=

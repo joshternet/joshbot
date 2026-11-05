@@ -521,9 +521,10 @@ func TestCompleteAutomaticCandidatesHandlesPolicyExistingAndCapacityFailures(t *
 		},
 		{
 			name: "capacity outcome",
-			setup: func(t *testing.T, pool *pgxpool.Pool, _ discovery.Candidate) {
+			setup: func(t *testing.T, pool *pgxpool.Pool, candidate discovery.Candidate) {
 				t.Helper()
 				if _, err := pool.Exec(ctx, `
+					DELETE FROM verification_queue WHERE origin = $1;
 					INSERT INTO verification_queue (origin, available_at, mode)
 					VALUES
 						('https://full-one.example', statement_timestamp(), 'probe'),
@@ -534,7 +535,7 @@ func TestCompleteAutomaticCandidatesHandlesPolicyExistingAndCapacityFailures(t *
 					CREATE TRIGGER reject_capacity_outcome
 						BEFORE UPDATE ON crawl_run_automatic_admission_batches
 						FOR EACH ROW EXECUTE FUNCTION reject_capacity_outcome()
-				`, pgx.QueryExecModeSimpleProtocol); err != nil {
+				`, pgx.QueryExecModeSimpleProtocol, candidate.Origin.String()); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -759,6 +760,7 @@ func TestCompleteAutomaticCandidatesHandlesDatabaseStages(t *testing.T) {
 		{
 			name: "schedule probe",
 			setup: `
+				DELETE FROM verification_queue WHERE origin = 'https://candidate.example';
 				CREATE FUNCTION reject_candidate_probe() RETURNS trigger
 				LANGUAGE plpgsql AS $$
 				BEGIN RAISE EXCEPTION 'reject candidate probe'; END $$;

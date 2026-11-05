@@ -42,6 +42,10 @@ func TestNewDiscoveryRuntimeReturnsConstructionFailure(
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			settings := testCrawlRuntimeSettings(t)
+			// Expansion defaults on and reconciles avoid rules before
+			// crawler construction. This schema is unmigrated, so keep
+			// expansion off and assert the constructor errors themselves.
+			settings.automatic.Enabled = false
 			test.mutate(&settings)
 
 			runner, err := newDiscoveryRuntime(

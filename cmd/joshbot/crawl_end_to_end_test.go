@@ -216,6 +216,7 @@ func TestCuratedSeedCrawlToPublicRegistryEndToEnd(
 	crawlStore := &ownedDiscoveryRuntimeStore{
 		DiscoveryStore: discoveryStore,
 		leaseOwner:     "end-to-end-discovery",
+		leaseBackend:   discoveryStore,
 	}
 
 	runner, err := discovery.NewCrawlRunner(

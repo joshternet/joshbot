@@ -193,11 +193,27 @@ type discoveryRuntimeStore interface {
 	EnsureSeededSourcesScheduled(
 		context.Context,
 	) (int, error)
+	SchedulePendingDiscoveryProbes(
+		context.Context,
+	) (int, error)
 }
 
 type ownedDiscoveryRuntimeStore struct {
 	*store.DiscoveryStore
-	leaseOwner string
+	leaseOwner   string
+	leaseBackend discoverySourceLeaseBackend
+}
+
+type discoverySourceLeaseBackend interface {
+	SchedulePendingDiscoveryProbes(
+		context.Context,
+	) (int, error)
+	ClaimDiscoverySourceLease(
+		context.Context,
+		string,
+		time.Duration,
+		time.Duration,
+	) (discovery.CrawlSourceLease, bool, error)
 }
 
 func (runtimeStore *ownedDiscoveryRuntimeStore) ClaimDiscoverySourceLease(
@@ -205,13 +221,17 @@ func (runtimeStore *ownedDiscoveryRuntimeStore) ClaimDiscoverySourceLease(
 	interval time.Duration,
 	leaseDuration time.Duration,
 ) (discovery.CrawlSourceLease, bool, error) {
-	return runtimeStore.DiscoveryStore.
-		ClaimDiscoverySourceLease(
-			ctx,
-			runtimeStore.leaseOwner,
-			interval,
-			leaseDuration,
-		)
+	if _, err := runtimeStore.leaseBackend.
+		SchedulePendingDiscoveryProbes(ctx); err != nil {
+		return discovery.CrawlSourceLease{}, false, err
+	}
+
+	return runtimeStore.leaseBackend.ClaimDiscoverySourceLease(
+		ctx,
+		runtimeStore.leaseOwner,
+		interval,
+		leaseDuration,
+	)
 }
 
 type discoveryRuntimeStoreFactory func(
@@ -236,6 +256,7 @@ func newRuntimeDiscoveryStore(
 	return &ownedDiscoveryRuntimeStore{
 		DiscoveryStore: discoveryStore,
 		leaseOwner:     leaseOwner,
+		leaseBackend:   discoveryStore,
 	}, nil
 }
 
@@ -333,6 +354,15 @@ func newDiscoveryRuntimeWithStoreFactory(
 	); err != nil {
 		return nil, fmt.Errorf(
 			"ensure seeded sources scheduled: %w",
+			err,
+		)
+	}
+
+	if _, err := discoveryStore.SchedulePendingDiscoveryProbes(
+		ctx,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"schedule pending discovery probes: %w",
 			err,
 		)
 	}

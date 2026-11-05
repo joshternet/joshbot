@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/declaration"
+	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/publicdata"
 	"github.com/joshternet/joshbot/internal/store"
@@ -329,4 +332,80 @@ func newCLIIntegrationEnvironment(
 	operations.getenv = environment.get
 
 	return operations, testPool
+}
+
+func TestDiscoveryRuntimePendingProbeScheduleFailure(
+	t *testing.T,
+) {
+	probeFailure := errors.New(
+		"integration pending probe schedule failure",
+	)
+
+	runner, err := newDiscoveryRuntimeWithStoreFactory(
+		context.Background(),
+		nil,
+		testCrawlRuntimeSettings(t),
+		func(
+			*pgxpool.Pool,
+			store.AutomaticCrawlConfig,
+		) (discoveryRuntimeStore, error) {
+			return &coverageDiscoveryRuntimeStore{
+				probeScheduleErr: probeFailure,
+			}, nil
+		},
+	)
+	if runner != nil || !errors.Is(err, probeFailure) {
+		t.Fatalf(
+			"newDiscoveryRuntimeWithStoreFactory() = %#v, %v",
+			runner,
+			err,
+		)
+	}
+	if !strings.Contains(
+		err.Error(),
+		"schedule pending discovery probes",
+	) {
+		t.Fatalf(
+			"error = %v, want pending probe schedule context",
+			err,
+		)
+	}
+}
+
+func TestOwnedDiscoveryRuntimeStoreClaimDrainsBeforeLease(
+	t *testing.T,
+) {
+	drainErr := errors.New(
+		"integration claim drain failure",
+	)
+	backend := &fakeDiscoverySourceLeaseBackend{
+		drainErr: drainErr,
+	}
+	runtimeStore := &ownedDiscoveryRuntimeStore{
+		leaseOwner:   "integration-discovery",
+		leaseBackend: backend,
+	}
+
+	lease, found, err := runtimeStore.ClaimDiscoverySourceLease(
+		context.Background(),
+		time.Hour,
+		time.Minute,
+	)
+	if !errors.Is(err, drainErr) ||
+		found ||
+		lease != (discovery.CrawlSourceLease{}) {
+		t.Fatalf(
+			"ClaimDiscoverySourceLease() = %#v, %v, %v",
+			lease,
+			found,
+			err,
+		)
+	}
+	if !backend.drained || backend.claimed {
+		t.Fatalf(
+			"drain/claim = %v/%v, want true/false",
+			backend.drained,
+			backend.claimed,
+		)
+	}
 }
