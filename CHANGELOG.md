@@ -8,6 +8,8 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Added
 
+- Sibling hosts share `JOSHBOT_CRAWL_REQUEST_DELAY` by eTLD+1 or private public
+  suffix. Robots `Crawl-delay` stays on the origin that published it (#57).
 - The durable domain avoid list includes `centerblog.net`, so that neighborhood
   is not promoted automatically (#51).
 - Operators can pause automatic expansion without pausing discovery or

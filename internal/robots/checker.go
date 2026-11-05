@@ -62,8 +62,10 @@ type Checker struct {
 //
 // Every robots fetch and robots-authorized target request uses the same guarded
 // network access, stable User-Agent, per-origin scheduler, and optional request
-// signer. Redirect hops are performed as new requests through this same
-// boundary, so each hop receives a fresh signature for its actual authority.
+// signer. Hosts in one registrable domain or private public suffix also share
+// the operator request delay. Redirect hops are performed as new requests
+// through this same boundary, so each hop receives a fresh signature for its
+// actual authority.
 func NewCheckerWithRequestDelayAndSigner(
 	resolver netguard.Resolver,
 	dialer netguard.Dialer,
