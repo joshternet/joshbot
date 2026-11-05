@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/joshternet/joshbot/internal/origin"
 )
 
 func TestCheckerEnforcesEffectivePerOriginRequestDelay(
@@ -1055,6 +1057,152 @@ func assertRequestDelayOffsets(
 				want[index],
 			)
 		}
+	}
+}
+
+func TestNeighborhoodKey(t *testing.T) {
+	tests := []struct {
+		host string
+		key  string
+		ok   bool
+	}{
+		{host: "www.example.com", key: "example.com", ok: true},
+		{host: "blog.example.com", key: "example.com", ok: true},
+		{host: "other.example", key: "other.example", ok: true},
+		{host: "books.amazon.co.uk", key: "amazon.co.uk", ok: true},
+		{host: "www.amazon.co.uk", key: "amazon.co.uk", ok: true},
+		{host: "other.co.uk", key: "other.co.uk", ok: true},
+		{host: "alice.blogspot.com", key: "blogspot.com", ok: true},
+		{host: "bob.blogspot.com", key: "blogspot.com", ok: true},
+		{host: "blogspot.com", key: "blogspot.com", ok: true},
+		{host: "alice.blogspot.co.uk", key: "blogspot.co.uk", ok: true},
+		{host: "192.0.2.1", ok: false},
+		{host: "2001:db8::1", ok: false},
+		{host: "com", ok: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.host, func(t *testing.T) {
+			key, ok := neighborhoodKey(test.host)
+			if ok != test.ok || key != test.key {
+				t.Fatalf(
+					"neighborhoodKey(%q) = %q, %t; want %q, %t",
+					test.host,
+					key,
+					ok,
+					test.key,
+					test.ok,
+				)
+			}
+		})
+	}
+}
+
+func TestIPHostsDoNotShareANeighborhood(t *testing.T) {
+	clock := &requestDelayTestClock{current: time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)}
+	waiter := &requestDelayRecordingWaiter{clock: clock}
+	scheduler := newOriginRequestScheduler(clock.Now, waiter, time.Second)
+
+	for _, raw := range []string{
+		"https://192.0.2.1/page",
+		"https://198.51.100.1/page",
+	} {
+		if err := scheduler.wait(context.Background(), requestDelayTarget(t, raw)); err != nil {
+			t.Fatalf("wait %s: %v", raw, err)
+		}
+	}
+
+	if len(waiter.durations) != 0 {
+		t.Fatalf("wait durations = %v, want none", waiter.durations)
+	}
+}
+
+func TestAcquireTargetReleasesOriginWhenNeighborhoodIsFull(t *testing.T) {
+	clock := &requestDelayTestClock{current: time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)}
+	waiter := &requestDelayRecordingWaiter{clock: clock}
+	scheduler := newOriginRequestScheduler(clock.Now, waiter, time.Second)
+	scheduler.capacity = 1
+	// A pending neighborhood with no origin forces the pin rollback. Normal
+	// traffic keeps a pending neighborhood behind its origin, so the origin
+	// cap fails first.
+	scheduler.neighborhoods["held.example"] = &originRequestSchedule{
+		lastStart:  clock.Now(),
+		lastAccess: clock.Now(),
+	}
+
+	target := requestDelayTarget(t, "https://fresh.example/")
+	err := scheduler.wait(context.Background(), target)
+	if !errors.Is(err, errScheduleCapacity) {
+		t.Fatalf("wait error = %v, want %v", err, errScheduleCapacity)
+	}
+	schedule := scheduler.schedules[mustRequestOrigin(t, target)]
+	if schedule == nil || schedule.users != 0 {
+		t.Fatalf("origin pin after failed neighborhood pin = %#v", schedule)
+	}
+
+	clock.Advance(time.Second)
+	if err := scheduler.wait(context.Background(), target); err != nil {
+		t.Fatalf("wait after neighborhood spacing elapsed: %v", err)
+	}
+}
+
+func mustRequestOrigin(t *testing.T, target *url.URL) origin.Origin {
+	t.Helper()
+	parsed, err := origin.Parse(target.String())
+	if err != nil {
+		t.Fatalf("origin.Parse(%q) error = %v", target, err)
+	}
+	return parsed
+}
+
+func TestSiblingHostsShareOperatorMinimum(t *testing.T) {
+	clock := &requestDelayTestClock{current: time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)}
+	waiter := &requestDelayRecordingWaiter{clock: clock}
+	scheduler := newOriginRequestScheduler(clock.Now, waiter, time.Second)
+
+	for _, raw := range []string{
+		"https://www.example.com/page",
+		"http://blog.example.com:8080/page",
+		"https://other.example/page",
+	} {
+		if err := scheduler.wait(context.Background(), requestDelayTarget(t, raw)); err != nil {
+			t.Fatalf("wait %s: %v", raw, err)
+		}
+	}
+
+	if !slices.Equal(waiter.durations, []time.Duration{time.Second}) {
+		t.Fatalf("wait durations = %v, want [1s]", waiter.durations)
+	}
+}
+
+func TestSiblingDoesNotInheritOriginCrawlDelay(t *testing.T) {
+	clock := &requestDelayTestClock{current: time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)}
+	waiter := &requestDelayRecordingWaiter{clock: clock}
+	scheduler := newOriginRequestScheduler(clock.Now, waiter, time.Second)
+	www := requestDelayTarget(t, "https://www.example.com/page")
+
+	pinned, err := scheduler.acquireTarget(www)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned.origin.setCrawlDelay(5 * time.Second)
+	scheduler.releasePinned(pinned)
+
+	if err := scheduler.wait(context.Background(), www); err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduler.wait(context.Background(), requestDelayTarget(t, "https://blog.example.com/page")); err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduler.wait(context.Background(), www); err != nil {
+		t.Fatal(err)
+	}
+
+	// The sibling consumes the 1s operator minimum. The following www request
+	// waits the remaining 4s of its own 5s crawl-delay.
+	want := []time.Duration{time.Second, 4 * time.Second}
+	if !slices.Equal(waiter.durations, want) {
+		t.Fatalf("wait durations = %v, want %v", waiter.durations, want)
 	}
 }
 

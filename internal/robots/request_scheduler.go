@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 
 	"github.com/joshternet/joshbot/internal/origin"
 )
@@ -29,12 +33,13 @@ type requestDelayWaiter interface {
 type timerRequestDelayWaiter struct{}
 
 type originRequestScheduler struct {
-	mu        sync.Mutex
-	now       func() time.Time
-	waiter    requestDelayWaiter
-	minimum   time.Duration
-	capacity  int
-	schedules map[origin.Origin]*originRequestSchedule
+	mu            sync.Mutex
+	now           func() time.Time
+	waiter        requestDelayWaiter
+	minimum       time.Duration
+	capacity      int
+	schedules     map[origin.Origin]*originRequestSchedule
+	neighborhoods map[string]*originRequestSchedule
 }
 
 type originRequestSchedule struct {
@@ -45,18 +50,49 @@ type originRequestSchedule struct {
 	users      int
 }
 
+// pinnedSchedules holds the origin clock and, when the host has a
+// neighborhood, the shared operator-minimum clock.
+type pinnedSchedules struct {
+	origin       *originRequestSchedule
+	neighborhood *originRequestSchedule
+}
+
 func newOriginRequestScheduler(
 	now func() time.Time,
 	waiter requestDelayWaiter,
 	minimum time.Duration,
 ) *originRequestScheduler {
 	return &originRequestScheduler{
-		now:       now,
-		waiter:    waiter,
-		minimum:   minimum,
-		capacity:  maxScheduleEntries,
-		schedules: make(map[origin.Origin]*originRequestSchedule),
+		now:           now,
+		waiter:        waiter,
+		minimum:       minimum,
+		capacity:      maxScheduleEntries,
+		schedules:     make(map[origin.Origin]*originRequestSchedule),
+		neighborhoods: make(map[string]*originRequestSchedule),
 	}
+}
+
+// neighborhoodKey returns the shared pacing group for a canonical ASCII hostname.
+//
+// It reports false for an IP address and for a host that is only an ICANN
+// public suffix. Those hosts keep an origin-only clock. A private multi-label
+// public suffix, including its apex, is the group. Every other host uses its
+// eTLD+1.
+func neighborhoodKey(hostname string) (string, bool) {
+	if _, err := netip.ParseAddr(hostname); err == nil {
+		return "", false
+	}
+
+	suffix, icann := publicsuffix.PublicSuffix(hostname)
+	if !icann && strings.Contains(suffix, ".") {
+		return suffix, true
+	}
+
+	registrable, err := publicsuffix.EffectiveTLDPlusOne(hostname)
+	if err != nil {
+		return "", false
+	}
+	return registrable, true
 }
 
 // acquire pins an origin while policy lookup, a wait, or a request uses it.
@@ -64,10 +100,29 @@ func newOriginRequestScheduler(
 func (scheduler *originRequestScheduler) acquire(source origin.Origin) (*originRequestSchedule, error) {
 	scheduler.mu.Lock()
 	defer scheduler.mu.Unlock()
-	now := scheduler.now()
+	return pin(scheduler, scheduler.schedules, source, scheduler.now(), lessOrigin)
+}
+
+// lessOrigin reports whether left sorts before right when eviction breaks a tie.
+func lessOrigin(left, right origin.Origin) bool {
+	return left.String() < right.String()
+}
+
+// pin returns the schedule for key, creating it when absent.
+//
+// The caller must hold scheduler.mu. Only an idle entry whose spacing has
+// elapsed can be evicted. Neighborhood entries leave crawlDelay at zero, so
+// their spacing is the operator minimum.
+func pin[Key comparable](
+	scheduler *originRequestScheduler,
+	entries map[Key]*originRequestSchedule,
+	key Key,
+	now time.Time,
+	less func(left, right Key) bool,
+) (*originRequestSchedule, error) {
 	var oldest *originRequestSchedule
-	var oldestOrigin origin.Origin
-	for key, entry := range scheduler.schedules {
+	var oldestKey Key
+	for candidate, entry := range entries {
 		if entry.users != 0 {
 			continue
 		}
@@ -79,24 +134,24 @@ func (scheduler *originRequestScheduler) acquire(source origin.Origin) (*originR
 			continue
 		}
 		if !now.Before(entry.lastAccess.Add(maxCacheLifetime)) {
-			delete(scheduler.schedules, key)
+			delete(entries, candidate)
 			continue
 		}
 		if oldest == nil || entry.lastAccess.Before(oldest.lastAccess) ||
-			(entry.lastAccess.Equal(oldest.lastAccess) && key.String() < oldestOrigin.String()) {
-			oldest, oldestOrigin = entry, key
+			(entry.lastAccess.Equal(oldest.lastAccess) && less(candidate, oldestKey)) {
+			oldest, oldestKey = entry, candidate
 		}
 	}
-	schedule := scheduler.schedules[source]
+	schedule := entries[key]
 	if schedule == nil {
-		if len(scheduler.schedules) >= scheduler.capacity {
+		if len(entries) >= scheduler.capacity {
 			if oldest == nil {
 				return nil, errScheduleCapacity
 			}
-			delete(scheduler.schedules, oldestOrigin)
+			delete(entries, oldestKey)
 		}
 		schedule = &originRequestSchedule{}
-		scheduler.schedules[source] = schedule
+		entries[key] = schedule
 	}
 	schedule.users++
 	schedule.lastAccess = now
@@ -106,8 +161,20 @@ func (scheduler *originRequestScheduler) acquire(source origin.Origin) (*originR
 func (scheduler *originRequestScheduler) release(schedule *originRequestSchedule) {
 	scheduler.mu.Lock()
 	defer scheduler.mu.Unlock()
+	scheduler.unpin(schedule, scheduler.now())
+}
+
+// unpin drops one pin. The caller must hold scheduler.mu.
+func (scheduler *originRequestScheduler) unpin(schedule *originRequestSchedule, accessed time.Time) {
 	schedule.users--
-	schedule.lastAccess = scheduler.now()
+	schedule.lastAccess = accessed
+}
+
+func (scheduler *originRequestScheduler) releasePinned(pinned pinnedSchedules) {
+	scheduler.release(pinned.origin)
+	if pinned.neighborhood != nil {
+		scheduler.release(pinned.neighborhood)
+	}
 }
 
 func (schedule *originRequestSchedule) setCrawlDelay(delay time.Duration) {
@@ -116,67 +183,103 @@ func (schedule *originRequestSchedule) setCrawlDelay(delay time.Duration) {
 	schedule.crawlDelay = delay
 }
 
-func (scheduler *originRequestScheduler) acquireTarget(target *url.URL) (*originRequestSchedule, error) {
+func (scheduler *originRequestScheduler) acquireTarget(target *url.URL) (pinnedSchedules, error) {
 	if target == nil {
-		return nil, errInvalidHTTPTarget
+		return pinnedSchedules{}, errInvalidHTTPTarget
 	}
 
-	targetOrigin, err := origin.Parse(
-		target.String(),
-	)
+	targetOrigin, err := origin.Parse(target.String())
 	if err != nil {
-		return nil, errInvalidHTTPTarget
+		return pinnedSchedules{}, errInvalidHTTPTarget
 	}
 
 	if scheduler.minimum < 0 {
-		return nil, errInvalidRequestDelay
+		return pinnedSchedules{}, errInvalidRequestDelay
 	}
 
-	return scheduler.acquire(targetOrigin)
+	key, grouped := neighborhoodKey(targetOrigin.Hostname())
+	scheduler.mu.Lock()
+	defer scheduler.mu.Unlock()
+	now := scheduler.now()
+	originSchedule, err := pin(scheduler, scheduler.schedules, targetOrigin, now, lessOrigin)
+	if err != nil {
+		return pinnedSchedules{}, err
+	}
+	if !grouped {
+		return pinnedSchedules{origin: originSchedule}, nil
+	}
+
+	group, err := pin(scheduler, scheduler.neighborhoods, key, now, func(left, right string) bool {
+		return left < right
+	})
+	if err != nil {
+		scheduler.unpin(originSchedule, now)
+		return pinnedSchedules{}, err
+	}
+	return pinnedSchedules{origin: originSchedule, neighborhood: group}, nil
 }
 
 func (scheduler *originRequestScheduler) wait(
 	ctx context.Context,
 	target *url.URL,
 ) error {
-	schedule, err := scheduler.acquireTarget(target)
+	pinned, err := scheduler.acquireTarget(target)
 	if err != nil {
 		return err
 	}
-	defer scheduler.release(schedule)
+	defer scheduler.releasePinned(pinned)
 
 	for {
-		schedule.mu.Lock()
-
-		effectiveDelay := scheduler.minimum
-		if schedule.crawlDelay > effectiveDelay {
-			effectiveDelay = schedule.crawlDelay
+		// The origin mutex is always acquired before the neighborhood mutex.
+		pinned.origin.mu.Lock()
+		if pinned.neighborhood != nil {
+			pinned.neighborhood.mu.Lock()
 		}
 
-		var wait time.Duration
+		originDelay := scheduler.minimum
+		if pinned.origin.crawlDelay > originDelay {
+			originDelay = pinned.origin.crawlDelay
+		}
 		now := scheduler.now()
-		if !schedule.lastStart.IsZero() {
-			earliestStart := schedule.lastStart.Add(
-				effectiveDelay,
-			)
-			if earliestStart.After(now) {
-				wait = earliestStart.Sub(now)
+		wait := remainingDelay(pinned.origin.lastStart, originDelay, now)
+		if pinned.neighborhood != nil {
+			groupWait := remainingDelay(pinned.neighborhood.lastStart, scheduler.minimum, now)
+			if groupWait > wait {
+				wait = groupWait
 			}
 		}
 
 		if wait > 0 {
-			// Release while sleeping so other origins are not blocked.
-			schedule.mu.Unlock()
+			if pinned.neighborhood != nil {
+				pinned.neighborhood.mu.Unlock()
+			}
+			pinned.origin.mu.Unlock()
 			if err := scheduler.waiter.Wait(ctx, wait); err != nil {
 				return err
 			}
 			continue
 		}
 
-		schedule.lastStart = now
-		schedule.mu.Unlock()
+		pinned.origin.lastStart = now
+		if pinned.neighborhood != nil {
+			pinned.neighborhood.lastStart = now
+			pinned.neighborhood.mu.Unlock()
+		}
+		pinned.origin.mu.Unlock()
 		return nil
 	}
+}
+
+// remainingDelay is how long lastStart still blocks a request spaced by delay.
+func remainingDelay(lastStart time.Time, delay time.Duration, now time.Time) time.Duration {
+	if lastStart.IsZero() {
+		return 0
+	}
+	earliest := lastStart.Add(delay)
+	if earliest.After(now) {
+		return earliest.Sub(now)
+	}
+	return 0
 }
 
 type scheduledHopGetter struct {
@@ -190,11 +293,11 @@ func (getter scheduledHopGetter) get(
 ) (*http.Response, error) {
 	// Robots redirects also need to retain their own destination schedule
 	// while awaiting response headers.
-	schedule, err := getter.scheduler.acquireTarget(target)
+	pinned, err := getter.scheduler.acquireTarget(target)
 	if err != nil {
 		return nil, err
 	}
-	defer getter.scheduler.release(schedule)
+	defer getter.scheduler.releasePinned(pinned)
 
 	if err := getter.scheduler.wait(
 		ctx,

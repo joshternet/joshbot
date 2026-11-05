@@ -135,25 +135,29 @@ than its latest authoritative declaration observation. Rediscovery preserves
 the existing classification, verification history, and provenance rather than
 creating a new source identity.
 
-Outbound robots-aware requests use a shared per-origin schedule. The
-applicable robots `Crawl-delay` is capped by `JOSHBOT_ROBOTS_MAX_CRAWL_DELAY`
-before calculating spacing. The effective delay is the greater of that capped
-robots delay and `JOSHBOT_CRAWL_REQUEST_DELAY`. The operator minimum is not
-capped. Before an origin's robots policy is known, the configured request
-delay is used as the minimum for retrieving that policy.
+Outbound robots-aware requests use a per-origin schedule. Hosts in one
+neighborhood also share `JOSHBOT_CRAWL_REQUEST_DELAY`. The neighborhood is
+the private public suffix when the public suffix list lists one, including
+its apex, and the registrable domain (eTLD+1) otherwise. IP addresses are
+not grouped. An applicable robots `Crawl-delay` stays on that origin. It is
+capped by `JOSHBOT_ROBOTS_MAX_CRAWL_DELAY`, and it cannot reduce the operator
+minimum or extend a sibling's wait. Before an origin's robots policy is
+known, the configured request delay is used as the minimum for retrieving
+that policy.
 
 The same scheduling boundary covers robots retrieval, declaration
 verification, discovery pages, and redirect hops. Requests to different
-origins use independent schedules. Requests within one source crawl remain
-sequential.
+neighborhoods use independent schedules. Requests within one source crawl
+remain sequential.
 
-Each checker retains at most 1,024 robots policies and 1,024 origin schedules.
-Policies expire after 24 hours. Idle schedules expire after 24 hours and may
-be evicted earlier to make room, once their required spacing has elapsed.
-Policy lookups, scheduler waits, and requests awaiting response headers keep
-their schedules until they finish. If every schedule is still in use or
-protecting a pending delay, a new origin receives a temporary failure rather
-than bypassing spacing.
+Each checker retains at most 1,024 robots policies, 1,024 origin schedules,
+and 1,024 neighborhood schedules. Policies expire after 24 hours. Idle
+schedules expire after 24 hours and may be evicted earlier to make room,
+once their required spacing has elapsed. Policy lookups, scheduler waits,
+and requests awaiting response headers keep their schedules until they
+finish. If every schedule is still in use or protecting a pending delay, a
+new origin or neighborhood receives a temporary failure rather than
+bypassing spacing.
 Reusing a cached policy restores its validated delay after schedule eviction.
 
 JoshBot parses supported response content for links. It does not run a browser,
@@ -221,7 +225,7 @@ The runtime exposes these controls:
 | `JOSHBOT_CRAWL_MAX_DEPTH` | `4` | Deepest same-origin page depth, with the root at zero |
 | `JOSHBOT_CRAWL_MAX_PAGES` | `32` | Maximum frontier pages selected for guarded retrieval, from 1 through 10,000 |
 | `JOSHBOT_CRAWL_MAX_PAGE_BYTES` | `1048576` | Maximum accepted page body size |
-| `JOSHBOT_CRAWL_REQUEST_DELAY` | `1s` | Minimum per-origin delay for robots, verification, and discovery requests |
+| `JOSHBOT_CRAWL_REQUEST_DELAY` | `1s` | Minimum delay per origin and per registrable-domain or private-suffix neighborhood for robots, verification, and discovery requests |
 | `JOSHBOT_ROBOTS_MAX_CRAWL_DELAY` | `30s` | Maximum valid robots-directed delay |
 | `JOSHBOT_HTTP_DIAL_TIMEOUT` | `5s` | Timeout for each validated-address dial attempt |
 | `JOSHBOT_HTTP_TLS_HANDSHAKE_TIMEOUT` | `10s` | TLS handshake timeout |
