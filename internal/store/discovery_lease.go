@@ -485,6 +485,81 @@ func (s *DiscoveryStore) RenewDiscoverySourceLease(
 	return renewed, nil
 }
 
+// ReleaseDiscoverySourceLease clears the current unexpired discovery lease
+// without recording a crawl result.
+//
+// Eligibility, consecutive failures, and last_attempted_at stay as they were.
+// The exact origin, generation, and unexpired lease must still be
+// authoritative. A stale claimant cannot release a lease that has expired or
+// moved to a newer generation.
+//
+// @param ctx - Request context.
+// @param lease - The lease being released.
+// @throws ErrDiscoverySourceLeaseLost when the lease is no longer authoritative.
+func (s *DiscoveryStore) ReleaseDiscoverySourceLease(
+	ctx context.Context,
+	lease discovery.CrawlSourceLease,
+) error {
+	if err := s.validate(ctx); err != nil {
+		return err
+	}
+
+	if !validDiscoverySourceLease(lease) {
+		return errInvalidDiscoverySourceLease
+	}
+
+	err := pgx.BeginFunc(
+		ctx,
+		s.pool,
+		func(tx pgx.Tx) error {
+			now, err := s.clock.NowTransaction(ctx, tx)
+			if err != nil {
+				return fmt.Errorf(
+					"store: read discovery clock: %w",
+					err,
+				)
+			}
+
+			now = now.UTC()
+			commandTag, err := tx.Exec(
+				ctx,
+				`
+					UPDATE discovery_source_state
+					SET
+						lease_owner = NULL,
+						lease_expires_at = NULL
+					WHERE source_origin = $1
+						AND lease_generation = $2
+						AND lease_expires_at > $3
+				`,
+				lease.Origin.String(),
+				lease.Generation,
+				now,
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"store: update discovery source release: %w",
+					err,
+				)
+			}
+
+			if commandTag.RowsAffected() != 1 {
+				return ErrDiscoverySourceLeaseLost
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"store: release discovery source lease: %w",
+			err,
+		)
+	}
+
+	return nil
+}
+
 func validDiscoverySourceLease(
 	lease discovery.CrawlSourceLease,
 ) bool {

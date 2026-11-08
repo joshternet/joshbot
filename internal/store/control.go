@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/control"
 	"github.com/joshternet/joshbot/internal/database"
+	"github.com/joshternet/joshbot/internal/domainavoid"
 	"github.com/joshternet/joshbot/internal/origin"
 )
 
@@ -192,13 +192,9 @@ func (s *ControlStore) AddDomainAvoid(
 	pattern string,
 	audit control.Audit,
 ) error {
-	pattern = strings.ToLower(
-		strings.TrimSpace(pattern),
-	)
+	pattern = domainavoid.Normalize(pattern)
 
-	if pattern == "" ||
-		strings.Contains(pattern, ",") ||
-		!validExcludedHostSuffixes(pattern) {
+	if !domainavoid.Valid(pattern) {
 		return errors.New(
 			"store: crawl domain avoid rule is invalid",
 		)
@@ -255,13 +251,9 @@ func (s *ControlStore) RemoveDomainAvoid(
 	pattern string,
 	audit control.Audit,
 ) error {
-	pattern = strings.ToLower(
-		strings.TrimSpace(pattern),
-	)
+	pattern = domainavoid.Normalize(pattern)
 
-	if pattern == "" ||
-		strings.Contains(pattern, ",") ||
-		!validExcludedHostSuffixes(pattern) {
+	if !domainavoid.Valid(pattern) {
 		return errors.New(
 			"store: crawl domain avoid rule is invalid",
 		)

@@ -19,4 +19,5 @@ func TestSchedulerEvictionAndPolitenessIntegration(t *testing.T) {
 	t.Run("shared minimum", TestSiblingHostsShareOperatorMinimum)
 	t.Run("origin crawl delay", TestSiblingDoesNotInheritOriginCrawlDelay)
 	t.Run("neighborhood capacity", TestAcquireTargetReleasesOriginWhenNeighborhoodIsFull)
+	t.Run("fleet budget", TestFleetBudgetGate)
 }

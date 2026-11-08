@@ -34,6 +34,13 @@ func (*crawlRunnerFailureIntegrationStore) RenewDiscoverySourceLease(
 	return CrawlSourceLease{}, nil
 }
 
+func (*crawlRunnerFailureIntegrationStore) ReleaseDiscoverySourceLease(
+	context.Context,
+	CrawlSourceLease,
+) error {
+	return nil
+}
+
 func (*crawlRunnerFailureIntegrationStore) CompleteDiscoverySourceLeaseRetry(
 	context.Context,
 	CrawlSourceLease,

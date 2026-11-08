@@ -31,6 +31,10 @@ func TestCLIIntegrationExercisesRuntimeAndPostgreSQL(
 			return "1048576"
 		case crawlRequestDelayEnvironment:
 			return "0s"
+		case crawlMaxRequestsPerSecondEnvironment:
+			return "1"
+		case crawlMaxBytesPerDayEnvironment:
+			return "1048576"
 		case crawlRedirectLimitEnvironment:
 			return "5"
 		case automaticCrawlEnabledEnvironment:

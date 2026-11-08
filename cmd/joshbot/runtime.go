@@ -532,6 +532,25 @@ func (operations runtimeOperations) worker(
 				)
 			}
 
+			maxRequestsPerSecond, maxBytesPerDay, err :=
+				loadFleetBudgetSettings(
+					operations.getenv,
+				)
+			if err != nil {
+				return err
+			}
+			fleetBudget, err := newRuntimeFleetBudget(
+				connection.Pool(),
+				maxRequestsPerSecond,
+				maxBytesPerDay,
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"construct fleet budget: %w",
+					err,
+				)
+			}
+
 			checker, err := newRuntimeHTTPChecker(
 				net.DefaultResolver,
 				&net.Dialer{
@@ -540,6 +559,7 @@ func (operations runtimeOperations) worker(
 				requestDelay,
 				signer,
 				httpConfig,
+				fleetBudget,
 			)
 			if err != nil {
 				return err

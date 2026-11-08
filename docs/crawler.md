@@ -226,6 +226,8 @@ The runtime exposes these controls:
 | `JOSHBOT_CRAWL_MAX_PAGES` | `32` | Maximum frontier pages selected for guarded retrieval, from 1 through 10,000 |
 | `JOSHBOT_CRAWL_MAX_PAGE_BYTES` | `1048576` | Maximum accepted page body size |
 | `JOSHBOT_CRAWL_REQUEST_DELAY` | `1s` | Minimum delay per origin and per registrable-domain or private-suffix neighborhood for robots, verification, and discovery requests |
+| `JOSHBOT_CRAWL_MAX_REQUESTS_PER_SECOND` | `1` | Shared fleet request rate across discovery processes; spacing is one second divided by this integer and must stay positive |
+| `JOSHBOT_CRAWL_MAX_BYTES_PER_DAY` | `1073741824` | Shared UTC-day body-byte cap across discovery processes |
 | `JOSHBOT_ROBOTS_MAX_CRAWL_DELAY` | `30s` | Maximum valid robots-directed delay |
 | `JOSHBOT_HTTP_DIAL_TIMEOUT` | `5s` | Timeout for each validated-address dial attempt |
 | `JOSHBOT_HTTP_TLS_HANDSHAKE_TIMEOUT` | `10s` | TLS handshake timeout |
@@ -247,11 +249,18 @@ Additional discovery controls are:
 Go duration syntax is used. For example, one week is `168h`, not `7d`.
 
 The durable domain avoid list starts with common hosted publishing and social
-platforms, including `centerblog.net`, and is editable through the operator
-control API. Exact domains include their
-subdomains. A public-suffix family such as `blogspot.*` also matches regional
-forms including `blogspot.co.uk` and `blogspot.no`. Avoided origins remain in
-private discovery evidence but are not promoted or probed automatically.
+platforms, including `centerblog.net`, the hostname glob `cbd-hash*`, and the
+free-blog farms `ampedpages.com`, `bligblogging.com`, `bloginder.com`,
+`blogocial.com`, `blogolenta.com`, `blogoscience.com`, `blogzet.com`,
+`kylieblog.com`, `review-blogger.com`, `total-blog.com`, and
+`webdesign96.com`. It is editable through the operator control API. Exact
+domains include their subdomains. A public-suffix family such as `blogspot.*`
+also matches regional forms including `blogspot.co.uk` and `blogspot.no`.
+Hostname globs such as `cbd-hash*` or `*bloginder.com` use `*` as the only
+wildcard. Explicit RE2 patterns use a `re:` prefix, for example
+`re:^cbd-hash[0-9]+\.`, and match the lowercase hostname. Avoided origins
+remain in private discovery evidence but are not promoted or probed
+automatically.
 `wordpress.com` and `wordpress.org` are not on that list, so a site that
 installs the official Joshternet plugin stays eligible for discovery and
 verification. The operator dashboard counts matches for each avoid rule in
@@ -260,8 +269,9 @@ a WordPress host.
 
 `JOSHBOT_CRAWL_MAX_DEPTH` may be zero, limiting the crawl to its root page.
 
-Maximum pages, maximum page bytes, and redirect limit must be positive.
-Maximum pages cannot exceed 10,000. Request delay may be zero.
+Maximum pages, maximum page bytes, fleet requests per second, fleet bytes per
+day, and redirect limit must be positive. Maximum pages cannot exceed 10,000.
+Request delay may be zero.
 
 The four robots/HTTP limits are shared by verification, discovery, and Web
 Bot Auth conformance. Unset limits use the defaults above; explicit values

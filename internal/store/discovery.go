@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/database"
 	"github.com/joshternet/joshbot/internal/discovery"
+	"github.com/joshternet/joshbot/internal/domainavoid"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/retry"
 )
@@ -989,9 +990,11 @@ func (s *DiscoveryStore) recordDiscovery(
 //
 // Capacity overflow from RecordDiscovery and historically stranded candidates
 // are drained up to MaxPendingProbes. Avoid-listed and crawl-blocked hosts are
-// skipped. Origins with a current authoritative valid declaration, or a
-// terminal observation that is not older than the latest discovery evidence,
-// are left alone so the queue is not blindly re-flooded.
+// skipped. Origins that fail current origin parsing are skipped so one legacy
+// row cannot stop discovery startup or lease drain. Origins with a current
+// authoritative valid declaration, or a terminal observation that is not
+// older than the latest discovery evidence, are left alone so the queue is
+// not blindly re-flooded.
 //
 // @param ctx - request context for database work
 // @returns count of newly inserted probe rows
@@ -1067,10 +1070,10 @@ func (s *DiscoveryStore) SchedulePendingDiscoveryProbes(
 		}
 		candidateOrigin, err := origin.Parse(rawOrigin)
 		if err != nil {
-			return 0, fmt.Errorf(
-				"store: pending discovery probe origin: %w",
-				err,
-			)
+			// Older rows may fail current origin parsing. Skip them
+			// so one legacy value cannot stop discovery startup or
+			// lease drain.
+			continue
 		}
 		candidates = append(candidates, discovery.Candidate{
 			Origin: candidateOrigin,
@@ -1252,7 +1255,9 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 		if err != nil {
 			return err
 		}
-		patterns := automaticExclusionPatterns(exclusions)
+		patterns := domainavoid.NonRegexPatterns(
+			automaticExclusionPatterns(exclusions),
+		)
 		remainingBatch := maxPromotions - batchCount
 		if remainingBatch > 0 {
 			if _, err := tx.Exec(ctx, `
@@ -1333,52 +1338,7 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 								)
 								)) AS hostname
 							) AS parsed
-							CROSS JOIN LATERAL (
-								SELECT replace(
-									replace(
-										replace(
-											CASE
-												WHEN right(
-													excluded.pattern,
-													2
-												) = '.*'
-												THEN left(
-													excluded.pattern,
-													length(
-														excluded.pattern
-													) - 2
-												)
-												ELSE excluded.pattern
-											END,
-											E'\\',
-											E'\\\\'
-										),
-										E'%',
-										E'\\%'
-									),
-									E'_',
-									E'\\_'
-								) AS like_pattern
-							) AS escaped
-							WHERE (
-								right(excluded.pattern, 2) = '.*'
-								AND (
-								parsed.hostname LIKE
-								escaped.like_pattern || '.%'
-								ESCAPE E'\\'
-								OR parsed.hostname LIKE
-								'%.' || escaped.like_pattern || '.%'
-								ESCAPE E'\\'
-								)
-							) OR (
-								right(excluded.pattern, 2) <> '.*'
-								AND (
-								parsed.hostname = excluded.pattern
-								OR parsed.hostname LIKE
-								'%.' || escaped.like_pattern
-								ESCAPE E'\\'
-								)
-							)
+							WHERE `+domainAvoidHostnameMatchSQL+`
 						)
 					GROUP BY candidate.origin
 					ORDER BY candidate.origin
@@ -1406,7 +1366,7 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 		}
 		remainingProbes := s.automatic.maxPendingProbes() - pendingProbes
 		if remainingProbes > 0 {
-			if _, err := tx.Exec(ctx, `
+			probeRows, err := tx.Query(ctx, `
 				INSERT INTO verification_queue (origin, available_at, mode)
 				SELECT candidate.origin, $3, 'probe'
 				FROM discovery_candidates AS candidate
@@ -1440,58 +1400,37 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 								)
 							)) AS hostname
 						) AS parsed
-						CROSS JOIN LATERAL (
-							SELECT replace(
-								replace(
-									replace(
-										CASE
-											WHEN right(
-												excluded.pattern,
-												2
-											) = '.*'
-											THEN left(
-												excluded.pattern,
-												length(
-													excluded.pattern
-												) - 2
-											)
-											ELSE excluded.pattern
-										END,
-										E'\\',
-										E'\\\\'
-									),
-									E'%',
-									E'\\%'
-								),
-								E'_',
-								E'\\_'
-							) AS like_pattern
-						) AS escaped
-						WHERE (
-							right(excluded.pattern, 2) = '.*'
-							AND (
-								parsed.hostname LIKE
-								escaped.like_pattern || '.%'
-								ESCAPE E'\\'
-								OR parsed.hostname LIKE
-								'%.' || escaped.like_pattern || '.%'
-								ESCAPE E'\\'
-							)
-						) OR (
-							right(excluded.pattern, 2) <> '.*'
-							AND (
-								parsed.hostname = excluded.pattern
-								OR parsed.hostname LIKE
-								'%.' || escaped.like_pattern
-								ESCAPE E'\\'
-							)
-						)
+						WHERE `+domainAvoidHostnameMatchSQL+`
 					)
 				ORDER BY candidate.origin
 				LIMIT $2
 				ON CONFLICT (origin) DO NOTHING
-			`, patterns, remainingProbes, now.UTC()); err != nil {
+				RETURNING origin
+			`, patterns, remainingProbes, now.UTC())
+			if err != nil {
 				return fmt.Errorf("admit deferred discovery probes: %w", err)
+			}
+			insertedProbes, err := pgx.CollectRows(
+				probeRows,
+				func(row pgx.CollectableRow) (string, error) {
+					var rawOrigin string
+					err := row.Scan(&rawOrigin)
+					return rawOrigin, err
+				},
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"collect deferred discovery probes: %w",
+					err,
+				)
+			}
+			if err := removeRegexExcludedOrigins(
+				ctx,
+				tx,
+				exclusions,
+				insertedProbes,
+			); err != nil {
+				return err
 			}
 		}
 
@@ -1995,6 +1934,44 @@ func automaticExclusionPatterns(config AutomaticCrawlConfig) []string {
 	return patterns
 }
 
+// removeRegexExcludedOrigins drops verification_queue rows that match only
+// re: rules. SQL admission already applied NonRegexPatterns.
+func removeRegexExcludedOrigins(
+	ctx context.Context,
+	tx pgx.Tx,
+	exclusions AutomaticCrawlConfig,
+	origins []string,
+) error {
+	var remove []string
+	for _, rawOrigin := range origins {
+		parsed, err := origin.Parse(rawOrigin)
+		if err != nil {
+			continue
+		}
+		if exclusions.excludes(parsed.Hostname()) {
+			remove = append(remove, rawOrigin)
+		}
+	}
+	if len(remove) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(
+		ctx,
+		`
+			DELETE FROM verification_queue
+			WHERE origin = ANY($1::text[])
+				AND mode = 'probe'
+		`,
+		remove,
+	); err != nil {
+		return fmt.Errorf(
+			"remove regex-excluded discovery probes: %w",
+			err,
+		)
+	}
+	return nil
+}
+
 func prepareAdmissionCandidates(
 	candidates []discovery.Candidate,
 ) ([]discovery.Candidate, error) {
@@ -2046,37 +2023,16 @@ func upsertDurableAdmissionOutcome(
 }
 
 func validExcludedHostSuffixes(value string) bool {
-	for _, suffix := range strings.Split(value, ",") {
-		suffix = strings.TrimSpace(suffix)
-		if suffix == "" {
-			continue
-		}
-		family := strings.TrimSuffix(suffix, ".*")
-		if strings.ToLower(suffix) != suffix || strings.HasPrefix(suffix, ".") ||
-			strings.HasSuffix(family, ".") || family == "" ||
-			strings.ContainsAny(family, `/:@?#*_%\`) ||
-			(strings.Contains(suffix, "*") && suffix != family+".*") {
-			return false
-		}
-	}
-	return true
+	return domainavoid.ValidList(value)
 }
 
 func (config AutomaticCrawlConfig) excludes(hostname string) bool {
-	hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
-	for _, suffix := range strings.Split(config.ExcludedHostSuffixes, ",") {
-		suffix = strings.TrimSpace(suffix)
-		if suffix == "" {
+	for _, pattern := range strings.Split(config.ExcludedHostSuffixes, ",") {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
 			continue
 		}
-		if family := strings.TrimSuffix(suffix, ".*"); family != suffix {
-			if strings.HasPrefix(hostname, family+".") ||
-				strings.Contains(hostname, "."+family+".") {
-				return true
-			}
-			continue
-		}
-		if hostname == suffix || strings.HasSuffix(hostname, "."+suffix) {
+		if domainavoid.Matches(hostname, pattern) {
 			return true
 		}
 	}

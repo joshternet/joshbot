@@ -69,17 +69,17 @@ func TestHTTPConfigValidationAndTransport(t *testing.T) {
 		original := *field
 		for _, invalid := range []time.Duration{0, -time.Second} {
 			*field = invalid
-			if _, err := NewCheckerWithHTTPConfig(nil, nil, 0, nil, config); !errors.Is(err, ErrInvalidHTTPConfig) {
+			if _, err := NewCheckerWithHTTPConfig(nil, nil, 0, nil, config, nil); !errors.Is(err, ErrInvalidHTTPConfig) {
 				t.Fatalf("error=%v", err)
 			}
 		}
 		*field = original
 	}
-	checker, err := NewCheckerWithHTTPConfig(nil, nil, 0, nil, config)
+	checker, err := NewCheckerWithHTTPConfig(nil, nil, 0, nil, config, nil)
 	if err != nil || checker.maxCrawlDelay != config.MaxCrawlDelay {
 		t.Fatalf("checker=%v error=%v", checker, err)
 	}
-	if _, err := NewCheckerWithHTTPConfig(nil, nil, -time.Second, nil, config); !errors.Is(err, errInvalidRequestDelay) {
+	if _, err := NewCheckerWithHTTPConfig(nil, nil, -time.Second, nil, config, nil); !errors.Is(err, errInvalidRequestDelay) {
 		t.Fatalf("error=%v", err)
 	}
 }

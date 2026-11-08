@@ -641,9 +641,6 @@ func TestPendingAutomaticCandidatesWithoutDatabase(
 							"SELECT 1",
 						),
 					},
-					{
-						err: testErr,
-					},
 				},
 				rowResults: []discoveryUnitRow{
 					{
@@ -661,6 +658,9 @@ func TestPendingAutomaticCandidatesWithoutDatabase(
 				queryResults: []discoveryUnitQueryResult{
 					{
 						rows: &discoveryUnitRows{},
+					},
+					{
+						err: testErr,
 					},
 				},
 			}
@@ -694,6 +694,183 @@ func TestPendingAutomaticCandidatesWithoutDatabase(
 				!strings.Contains(
 					err.Error(),
 					"admit deferred discovery probes",
+				) {
+				t.Fatalf(
+					"PendingAutomaticCandidates() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"deferred probe collect failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test deferred probe collect failure",
+			)
+
+			tx := &discoveryPolicyUnitTx{
+				execResults: []discoveryUnitExecResult{
+					{
+						tag: pgconn.NewCommandTag(
+							"SELECT 1",
+						),
+					},
+				},
+				rowResults: []discoveryUnitRow{
+					{
+						values: []any{
+							0,
+							0,
+						},
+					},
+					{
+						values: []any{
+							0,
+						},
+					},
+				},
+				queryResults: []discoveryUnitQueryResult{
+					{
+						rows: &discoveryUnitRows{},
+					},
+					{
+						rows: &discoveryUnitRows{
+							rows: []discoveryUnitRow{
+								{
+									err: testErr,
+								},
+							},
+						},
+					},
+				},
+			}
+
+			store := pendingAutomaticStore(
+				t,
+				discoveryPolicyDatabase(tx),
+				pendingAutomaticClock{
+					now: now,
+				},
+				true,
+			)
+
+			candidates, err :=
+				store.PendingAutomaticCandidates(
+					ctx,
+					1,
+				)
+
+			if candidates != nil {
+				t.Fatalf(
+					"PendingAutomaticCandidates() = %#v, want nil",
+					candidates,
+				)
+			}
+
+			if !errors.Is(
+				err,
+				testErr,
+			) ||
+				!strings.Contains(
+					err.Error(),
+					"collect deferred discovery probes",
+				) {
+				t.Fatalf(
+					"PendingAutomaticCandidates() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"regex exclude after deferred probes",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test regex exclude after deferred probes",
+			)
+
+			tx := &discoveryPolicyUnitTx{
+				execResults: []discoveryUnitExecResult{
+					{
+						tag: pgconn.NewCommandTag(
+							"SELECT 1",
+						),
+					},
+					{
+						err: testErr,
+					},
+				},
+				rowResults: []discoveryUnitRow{
+					{
+						values: []any{
+							0,
+							0,
+						},
+					},
+					{
+						values: []any{
+							0,
+						},
+					},
+				},
+				queryResults: []discoveryUnitQueryResult{
+					{
+						rows: &discoveryUnitRows{
+							rows: []discoveryUnitRow{
+								{
+									values: []any{
+										"re:^spam.example",
+									},
+								},
+							},
+						},
+					},
+					{
+						rows: &discoveryUnitRows{
+							rows: []discoveryUnitRow{
+								{
+									values: []any{
+										"https://spam.example",
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			store := pendingAutomaticStore(
+				t,
+				discoveryPolicyDatabase(tx),
+				pendingAutomaticClock{
+					now: now,
+				},
+				true,
+			)
+
+			candidates, err :=
+				store.PendingAutomaticCandidates(
+					ctx,
+					1,
+				)
+
+			if candidates != nil {
+				t.Fatalf(
+					"PendingAutomaticCandidates() = %#v, want nil",
+					candidates,
+				)
+			}
+
+			if !errors.Is(
+				err,
+				testErr,
+			) ||
+				!strings.Contains(
+					err.Error(),
+					"remove regex-excluded discovery probes",
 				) {
 				t.Fatalf(
 					"PendingAutomaticCandidates() error = %v",
@@ -953,11 +1130,6 @@ func TestPendingAutomaticCandidatesWithoutDatabase(
 							"INSERT 0 2",
 						),
 					},
-					{
-						tag: pgconn.NewCommandTag(
-							"INSERT 0 1",
-						),
-					},
 				},
 				rowResults: []discoveryUnitRow{
 					{
@@ -973,6 +1145,9 @@ func TestPendingAutomaticCandidatesWithoutDatabase(
 					},
 				},
 				queryResults: []discoveryUnitQueryResult{
+					{
+						rows: &discoveryUnitRows{},
+					},
 					{
 						rows: &discoveryUnitRows{},
 					},

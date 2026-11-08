@@ -88,7 +88,7 @@ func TestSchedulePendingDiscoveryProbesWithoutDatabase(
 		}
 	})
 
-	t.Run("invalid origin", func(t *testing.T) {
+	t.Run("skips invalid origin", func(t *testing.T) {
 		database := &discoveryPolicyUnitDatabase{
 			discoveryUnitDatabase: &discoveryUnitDatabase{
 				queryResults: []discoveryUnitQueryResult{
@@ -104,13 +104,57 @@ func TestSchedulePendingDiscoveryProbesWithoutDatabase(
 		}
 		store := discoveryPolicyStore(database)
 		scheduled, err := store.SchedulePendingDiscoveryProbes(ctx)
-		if scheduled != 0 ||
-			err == nil ||
-			!strings.Contains(err.Error(), "pending discovery probe origin") {
+		if scheduled != 0 || err != nil {
 			t.Fatalf(
 				"SchedulePendingDiscoveryProbes() = %d, %v",
 				scheduled,
 				err,
+			)
+		}
+	})
+
+	t.Run("skips invalid origin among valid pending probes", func(t *testing.T) {
+		tx := &discoveryPolicyUnitTx{
+			execResults: []discoveryUnitExecResult{
+				{tag: pgconn.NewCommandTag("SELECT 1")},
+				{tag: pgconn.NewCommandTag("INSERT 0 1")},
+			},
+		}
+		database := &discoveryPolicyUnitDatabase{
+			discoveryUnitDatabase: &discoveryUnitDatabase{
+				queryResults: []discoveryUnitQueryResult{
+					{
+						rows: &discoveryUnitRows{
+							rows: []discoveryUnitRow{
+								{values: []any{"not a url"}},
+								{
+									values: []any{
+										"https://friend.example",
+									},
+								},
+							},
+						},
+					},
+					{rows: &discoveryUnitRows{}},
+				},
+			},
+			beginTx: tx,
+		}
+		store := &DiscoveryStore{
+			pool:  database,
+			clock: claimDiscoveryClock{now: now},
+		}
+		scheduled, err := store.SchedulePendingDiscoveryProbes(ctx)
+		if err != nil {
+			t.Fatalf(
+				"SchedulePendingDiscoveryProbes() error = %v",
+				err,
+			)
+		}
+		if scheduled != 1 {
+			t.Fatalf(
+				"SchedulePendingDiscoveryProbes() scheduled = %d, want 1",
+				scheduled,
 			)
 		}
 	})

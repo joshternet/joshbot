@@ -244,7 +244,8 @@ func TestPendingAutomaticCandidatesHandlesDeferredProbeFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.PendingAutomaticCandidates(ctx, runID); err == nil ||
-		!strings.Contains(err.Error(), "admit deferred discovery probes") {
+		(!strings.Contains(err.Error(), "admit deferred discovery probes") &&
+			!strings.Contains(err.Error(), "collect deferred discovery probes")) {
 		t.Fatalf("deferred probe error = %v", err)
 	}
 }

@@ -271,6 +271,7 @@ func newWebBotAuthConformanceClient(
 		requestDelay,
 		signer,
 		config,
+		nil,
 	)
 }
 

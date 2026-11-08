@@ -2,7 +2,8 @@
 
 set -eu
 
-govulncheck_version=v1.8.0
+# Always use the latest govulncheck so vulnerability DB and scanner stay current.
+govulncheck_version=latest
 
 if [ "$#" -eq 0 ]; then
 	set -- ./...

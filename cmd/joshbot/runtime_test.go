@@ -16,9 +16,28 @@ import (
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/publicdata"
+	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 	"github.com/joshternet/joshbot/internal/worker"
 )
+
+// stubRuntimeFleetBudget replaces fleet-budget construction for tests that
+// exercise worker or discovery wiring with a nil PostgreSQL pool.
+func stubRuntimeFleetBudget(t *testing.T) {
+	t.Helper()
+
+	original := newRuntimeFleetBudget
+	t.Cleanup(func() {
+		newRuntimeFleetBudget = original
+	})
+	newRuntimeFleetBudget = func(
+		*pgxpool.Pool,
+		int,
+		int64,
+	) (robots.FleetBudget, error) {
+		return nil, nil
+	}
+}
 
 func TestRuntimeConfigurationDefaults(t *testing.T) {
 	settings, err := loadWorkerSettings(
@@ -783,6 +802,58 @@ func TestRuntimeWorker(t *testing.T) {
 		}
 	})
 
+	t.Run("fleet budget settings failure", func(t *testing.T) {
+		operations, _ := newTestRuntimeOperations(t)
+		environment := runtimeTestEnvironment(t)
+		delete(environment, crawlMaxRequestsPerSecondEnvironment)
+		operations.getenv = environment.get
+
+		if err := operations.worker(
+			context.Background(),
+		); !errors.Is(err, errInvalidRuntimeConfiguration) {
+			t.Fatalf(
+				"worker() error = %v, want %v",
+				err,
+				errInvalidRuntimeConfiguration,
+			)
+		}
+	})
+
+	t.Run("fleet budget construction failure", func(t *testing.T) {
+		operations, _ := newTestRuntimeOperations(t)
+		fleetFailure := errors.New(
+			"test worker fleet budget failure",
+		)
+		original := newRuntimeFleetBudget
+		t.Cleanup(func() {
+			newRuntimeFleetBudget = original
+		})
+		newRuntimeFleetBudget = func(
+			*pgxpool.Pool,
+			int,
+			int64,
+		) (robots.FleetBudget, error) {
+			return nil, fleetFailure
+		}
+
+		err := operations.worker(context.Background())
+		if !errors.Is(err, fleetFailure) {
+			t.Fatalf(
+				"worker() error = %v, want fleet budget failure",
+				err,
+			)
+		}
+		if !strings.Contains(
+			err.Error(),
+			"construct fleet budget",
+		) {
+			t.Errorf(
+				"worker() error = %v, want fleet budget context",
+				err,
+			)
+		}
+	})
+
 	t.Run("worker construction failure", func(t *testing.T) {
 		operations, _ := newTestRuntimeOperations(t)
 		constructionFailure := errors.New(
@@ -1138,6 +1209,7 @@ func newTestRuntimeOperations(
 	t *testing.T,
 ) (runtimeOperations, *runtimeTestState) {
 	t.Helper()
+	stubRuntimeFleetBudget(t)
 
 	state := &runtimeTestState{
 		database: &fakeRuntimeDatabase{},
@@ -1252,9 +1324,11 @@ func runtimeTestEnvironment(
 		databaseURLEnvironment: "postgres://" +
 			"joshbot_app@localhost:5432/joshbot" +
 			"?sslmode=disable",
-		databasePasswordFileEnvironment: passwordFile,
-		workerIDEnvironment:             "worker-test",
-		webBotAuthModeEnvironment:       webBotAuthModeUnsigned,
+		databasePasswordFileEnvironment:      passwordFile,
+		workerIDEnvironment:                  "worker-test",
+		webBotAuthModeEnvironment:            webBotAuthModeUnsigned,
+		crawlMaxRequestsPerSecondEnvironment: "1",
+		crawlMaxBytesPerDayEnvironment:       "1073741824",
 	}
 }
 

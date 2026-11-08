@@ -18,6 +18,7 @@ import (
 	"github.com/joshternet/joshbot/internal/githubpublish"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/publicdata"
+	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 	"github.com/joshternet/joshbot/internal/worker"
 )
@@ -759,6 +760,77 @@ func TestRuntimeBoundaryIntegrationWorkerFailures(
 		}
 	})
 
+	t.Run("fleet budget settings", func(t *testing.T) {
+		operations, _ :=
+			runtimeBoundaryIntegrationOperations(t)
+
+		baseGetenv := operations.getenv
+		operations.getenv = func(name string) string {
+			if name == crawlMaxRequestsPerSecondEnvironment {
+				return ""
+			}
+
+			return baseGetenv(name)
+		}
+
+		err := operations.worker(
+			context.Background(),
+		)
+
+		if !errors.Is(
+			err,
+			errInvalidRuntimeConfiguration,
+		) {
+			t.Errorf(
+				"worker() error = %v, want %v",
+				err,
+				errInvalidRuntimeConfiguration,
+			)
+		}
+	})
+
+	t.Run("fleet budget construction", func(t *testing.T) {
+		operations, _ :=
+			runtimeBoundaryIntegrationOperations(t)
+
+		original := newRuntimeFleetBudget
+		t.Cleanup(func() {
+			newRuntimeFleetBudget = original
+		})
+		newRuntimeFleetBudget = func(
+			*pgxpool.Pool,
+			int,
+			int64,
+		) (robots.FleetBudget, error) {
+			return nil, errRuntimeBoundaryIntegration
+		}
+
+		err := operations.worker(
+			context.Background(),
+		)
+
+		if !errors.Is(
+			err,
+			errRuntimeBoundaryIntegration,
+		) {
+			t.Errorf(
+				"worker() error = %v, want %v",
+				err,
+				errRuntimeBoundaryIntegration,
+			)
+		}
+
+		if !strings.Contains(
+			err.Error(),
+			"construct fleet budget",
+		) {
+			t.Errorf(
+				"worker() error = %v, want fleet budget context",
+				err,
+			)
+		}
+	})
+
 	t.Run("worker construction", func(t *testing.T) {
 		operations, _ :=
 			runtimeBoundaryIntegrationOperations(t)
@@ -922,6 +994,7 @@ func runtimeBoundaryIntegrationOperations(
 	t *testing.T,
 ) (runtimeOperations, *runtimeBoundaryIntegrationState) {
 	t.Helper()
+	stubRuntimeFleetBudget(t)
 
 	state := &runtimeBoundaryIntegrationState{
 		database:  &runtimeBoundaryIntegrationDatabase{},
@@ -1059,8 +1132,10 @@ func runtimeBoundaryIntegrationEnvironmentFor(
 
 		databasePasswordFileEnvironment: passwordFile,
 
-		workerIDEnvironment:       "integration-worker",
-		webBotAuthModeEnvironment: webBotAuthModeUnsigned,
+		workerIDEnvironment:                  "integration-worker",
+		webBotAuthModeEnvironment:            webBotAuthModeUnsigned,
+		crawlMaxRequestsPerSecondEnvironment: "1",
+		crawlMaxBytesPerDayEnvironment:       "1073741824",
 	}
 }
 

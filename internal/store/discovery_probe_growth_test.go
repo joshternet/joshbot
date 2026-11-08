@@ -369,3 +369,93 @@ func TestSchedulePendingDiscoveryProbesReconcilesStrandedCandidates(
 		t.Fatal("stranded friend was not reconciled into the probe queue")
 	}
 }
+
+func TestSchedulePendingDiscoveryProbesSkipsUnparseableCandidates(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	pool := newStoreTestPool(t)
+	source := mustStoreOrigin(t, "https://source.example")
+	friend := mustStoreOrigin(t, "https://friend.example")
+	const corruptOrigin = "http://."
+
+	store, err := NewDiscoveryStoreWithAutomaticCrawling(
+		pool,
+		AutomaticCrawlConfig{Enabled: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddCrawlSeed(ctx, source); err != nil {
+		t.Fatal(err)
+	}
+
+	recordedAt := time.Now().UTC()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO discovery_candidates (
+			origin,
+			first_discovered_at,
+			last_discovered_at
+		)
+		VALUES
+			($1, $3, $3),
+			($2, $3, $3)
+	`, corruptOrigin, friend.String(), recordedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO discovery_edges (
+			source_origin,
+			candidate_origin,
+			kind,
+			first_discovered_at,
+			last_discovered_at
+		)
+		VALUES
+			($1, $2, 'link', $4, $4),
+			($1, $3, 'link', $4, $4)
+	`, source.String(), corruptOrigin, friend.String(), recordedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	scheduled, err := store.SchedulePendingDiscoveryProbes(ctx)
+	if err != nil {
+		t.Fatalf(
+			"SchedulePendingDiscoveryProbes() error = %v",
+			err,
+		)
+	}
+	if scheduled != 1 {
+		t.Fatalf(
+			"SchedulePendingDiscoveryProbes() scheduled = %d, want 1",
+			scheduled,
+		)
+	}
+
+	var friendQueued bool
+	var corruptQueued bool
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			EXISTS (
+				SELECT 1
+				FROM verification_queue
+				WHERE origin = $1 AND mode = 'probe'
+			),
+			EXISTS (
+				SELECT 1
+				FROM verification_queue
+				WHERE origin = $2
+			)
+	`, friend.String(), corruptOrigin).Scan(
+		&friendQueued,
+		&corruptQueued,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !friendQueued {
+		t.Fatal("valid friend was not scheduled")
+	}
+	if corruptQueued {
+		t.Fatal("unparseable candidate was queued")
+	}
+}

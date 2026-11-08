@@ -174,6 +174,14 @@ func TestRuntimeConfigFailureIntegrationCrawlSettings(t *testing.T) {
 		{name: "invalid max pages", key: crawlMaxPagesEnvironment, value: runtimeConfigFailureIntegrationString("0")},
 		{name: "invalid max bytes", key: crawlMaxPageBytesEnvironment, value: runtimeConfigFailureIntegrationString("nope")},
 		{name: "negative request delay", key: crawlRequestDelayEnvironment, value: runtimeConfigFailureIntegrationString("-1ms")},
+		{name: "missing fleet request rate", key: crawlMaxRequestsPerSecondEnvironment},
+		{name: "invalid fleet request rate", key: crawlMaxRequestsPerSecondEnvironment, value: runtimeConfigFailureIntegrationString("many")},
+		{name: "zero fleet request rate", key: crawlMaxRequestsPerSecondEnvironment, value: runtimeConfigFailureIntegrationString("0")},
+		{name: "fleet request rate without spacing", key: crawlMaxRequestsPerSecondEnvironment, value: runtimeConfigFailureIntegrationString("1000000001")},
+		{name: "missing fleet byte cap", key: crawlMaxBytesPerDayEnvironment},
+		{name: "invalid fleet byte cap", key: crawlMaxBytesPerDayEnvironment, value: runtimeConfigFailureIntegrationString("many")},
+		{name: "zero fleet byte cap", key: crawlMaxBytesPerDayEnvironment, value: runtimeConfigFailureIntegrationString("0")},
+		{name: "negative fleet byte cap", key: crawlMaxBytesPerDayEnvironment, value: runtimeConfigFailureIntegrationString("-1")},
 		{name: "invalid redirect limit", key: crawlRedirectLimitEnvironment, value: runtimeConfigFailureIntegrationString("0")},
 		{name: "invalid automatic boolean", key: automaticCrawlEnabledEnvironment, value: runtimeConfigFailureIntegrationString("sometimes")},
 		{name: "invalid promotions", key: automaticCrawlMaxPromotionsPerRunEnvironment, value: runtimeConfigFailureIntegrationString("0")},
@@ -510,11 +518,13 @@ func TestRuntimeConfigFailureIntegrationWebBotAuthSettings(t *testing.T) {
 
 func runtimeConfigFailureIntegrationCrawlEnvironment() runtimeConfigFailureIntegrationEnvironment {
 	return runtimeConfigFailureIntegrationEnvironment{
-		crawlMaxDepthEnvironment:      "2",
-		crawlMaxPagesEnvironment:      "32",
-		crawlMaxPageBytesEnvironment:  "1048576",
-		crawlRequestDelayEnvironment:  "250ms",
-		crawlRedirectLimitEnvironment: "5",
+		crawlMaxDepthEnvironment:             "2",
+		crawlMaxPagesEnvironment:             "32",
+		crawlMaxPageBytesEnvironment:         "1048576",
+		crawlRequestDelayEnvironment:         "250ms",
+		crawlMaxRequestsPerSecondEnvironment: "1",
+		crawlMaxBytesPerDayEnvironment:       "1073741824",
+		crawlRedirectLimitEnvironment:        "5",
 	}
 }
 
