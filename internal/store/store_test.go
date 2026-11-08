@@ -511,6 +511,11 @@ BEGIN
 		destination,
 		source
 	);
+	EXECUTE format(
+		'INSERT INTO %I.crawl_fleet_budget SELECT * FROM %I.crawl_fleet_budget',
+		destination,
+		source
+	);
 END;
 $copy$;
 
@@ -615,6 +620,10 @@ BEGIN
 	);
 	EXECUTE format(
 		'INSERT INTO %I.crawl_domain_avoid_rules SELECT * FROM store_migration_template.crawl_domain_avoid_rules',
+		destination
+	);
+	EXECUTE format(
+		'INSERT INTO %I.crawl_fleet_budget SELECT * FROM store_migration_template.crawl_fleet_budget',
 		destination
 	);
 END;

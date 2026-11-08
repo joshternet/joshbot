@@ -13,6 +13,7 @@ import (
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/retry"
+	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 )
 
@@ -505,6 +506,24 @@ func (w *Worker) Run(ctx context.Context) error {
 				return contextError
 			}
 			if worked {
+				if delay, ok := robots.FleetByteBudgetDelay(err); ok {
+					w.observe(
+						"paused",
+						origin.Origin{},
+						"fleet_byte_budget",
+					)
+					slog.Info(
+						"fleet byte budget exhausted",
+						"retry_after",
+						delay.String(),
+					)
+					if waitErr := w.waiter.Wait(
+						ctx,
+						delay,
+					); waitErr != nil {
+						return waitErr
+					}
+				}
 				continue
 			}
 			if waitErr := w.waiter.Wait(

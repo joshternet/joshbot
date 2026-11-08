@@ -135,6 +135,13 @@ func (store *fakeLeaseCrawlSourceStore) RenewDiscoverySourceLease(
 	return renewed, err
 }
 
+func (store *fakeLeaseCrawlSourceStore) ReleaseDiscoverySourceLease(
+	context.Context,
+	CrawlSourceLease,
+) error {
+	return nil
+}
+
 func (store *fakeLeaseCrawlSourceStore) CompleteDiscoverySourceLeaseRetry(
 	_ context.Context,
 	lease CrawlSourceLease,

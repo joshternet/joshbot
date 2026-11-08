@@ -46,6 +46,8 @@ func TestCrawlRuntimeConfigurationUsesExplicitBudgets(
 			PageTimeout:                  defaultDiscoveryPageTimeout,
 			MaxAutomaticPromotionsPerRun: defaultAutomaticCrawlMaxPromotionsPerRun,
 		},
+		maxRequestsPerSecond: 1,
+		maxBytesPerDay:       1073741824,
 	}
 
 	if settings != want {
@@ -68,6 +70,8 @@ func TestCrawlRuntimeConfigurationOverridesEverySetting(
 	environment[crawlMaxPagesEnvironment] = "128"
 	environment[crawlMaxPageBytesEnvironment] = "2097152"
 	environment[crawlRequestDelayEnvironment] = "1.5s"
+	environment[crawlMaxRequestsPerSecondEnvironment] = "4"
+	environment[crawlMaxBytesPerDayEnvironment] = "2048"
 	environment[crawlRedirectLimitEnvironment] = "8"
 	environment[automaticCrawlEnabledEnvironment] = "true"
 	environment[automaticCrawlMaxPendingProbesEnvironment] = "250"
@@ -101,6 +105,8 @@ func TestCrawlRuntimeConfigurationOverridesEverySetting(
 			PageTimeout:                  15 * time.Second,
 			MaxAutomaticPromotionsPerRun: 17,
 		},
+		maxRequestsPerSecond: 4,
+		maxBytesPerDay:       2048,
 		automatic: store.AutomaticCrawlConfig{
 			Enabled:                      true,
 			MaxPendingProbes:             250,
@@ -223,6 +229,49 @@ func TestCrawlRuntimeConfigurationRejectsInvalidValues(
 			name:  "negative request delay",
 			key:   crawlRequestDelayEnvironment,
 			value: stringPointer("-1ms"),
+		},
+		{
+			name: "missing fleet request rate",
+			key:  crawlMaxRequestsPerSecondEnvironment,
+		},
+		{
+			name:  "invalid fleet request rate",
+			key:   crawlMaxRequestsPerSecondEnvironment,
+			value: stringPointer("many"),
+		},
+		{
+			name:  "zero fleet request rate",
+			key:   crawlMaxRequestsPerSecondEnvironment,
+			value: stringPointer("0"),
+		},
+		{
+			name:  "negative fleet request rate",
+			key:   crawlMaxRequestsPerSecondEnvironment,
+			value: stringPointer("-1"),
+		},
+		{
+			name:  "fleet request rate without spacing",
+			key:   crawlMaxRequestsPerSecondEnvironment,
+			value: stringPointer("1000000001"),
+		},
+		{
+			name: "missing fleet byte cap",
+			key:  crawlMaxBytesPerDayEnvironment,
+		},
+		{
+			name:  "invalid fleet byte cap",
+			key:   crawlMaxBytesPerDayEnvironment,
+			value: stringPointer("many"),
+		},
+		{
+			name:  "zero fleet byte cap",
+			key:   crawlMaxBytesPerDayEnvironment,
+			value: stringPointer("0"),
+		},
+		{
+			name:  "negative fleet byte cap",
+			key:   crawlMaxBytesPerDayEnvironment,
+			value: stringPointer("-1"),
 		},
 		{
 			name: "missing redirect limit",
@@ -492,12 +541,14 @@ func TestValidCrawlRuntimeEnvironmentIsIndependent(
 
 func validCrawlRuntimeEnvironment() mapEnvironment {
 	return mapEnvironment{
-		crawlMaxDepthEnvironment:      "2",
-		crawlMaxPagesEnvironment:      "32",
-		crawlMaxPageBytesEnvironment:  "1048576",
-		crawlRequestDelayEnvironment:  "250ms",
-		crawlRedirectLimitEnvironment: "5",
-		webBotAuthModeEnvironment:     webBotAuthModeUnsigned,
+		crawlMaxDepthEnvironment:             "2",
+		crawlMaxPagesEnvironment:             "32",
+		crawlMaxPageBytesEnvironment:         "1048576",
+		crawlRequestDelayEnvironment:         "250ms",
+		crawlMaxRequestsPerSecondEnvironment: "1",
+		crawlMaxBytesPerDayEnvironment:       "1073741824",
+		crawlRedirectLimitEnvironment:        "5",
+		webBotAuthModeEnvironment:            webBotAuthModeUnsigned,
 	}
 }
 

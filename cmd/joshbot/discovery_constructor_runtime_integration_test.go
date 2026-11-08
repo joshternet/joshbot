@@ -7,12 +7,15 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 )
 
 func TestDiscoveryConstructorRuntimeIntegrationFailures(
 	t *testing.T,
 ) {
+	stubRuntimeFleetBudget(t)
+
 	t.Run("runtime store construction", func(t *testing.T) {
 		settings := testCrawlRuntimeSettings(t)
 
@@ -121,6 +124,62 @@ func TestDiscoveryConstructorRuntimeIntegrationFailures(
 		) {
 			t.Errorf(
 				"error = %v, want reconciliation context",
+				err,
+			)
+		}
+	})
+
+	t.Run("fleet budget construction", func(t *testing.T) {
+		fleetErr := errors.New(
+			"integration fleet budget construction failure",
+		)
+		original := newRuntimeFleetBudget
+		t.Cleanup(func() {
+			newRuntimeFleetBudget = original
+		})
+		newRuntimeFleetBudget = func(
+			*pgxpool.Pool,
+			int,
+			int64,
+		) (robots.FleetBudget, error) {
+			return nil, fleetErr
+		}
+
+		runner, err :=
+			newDiscoveryRuntimeWithStoreFactory(
+				context.Background(),
+				nil,
+				testCrawlRuntimeSettings(t),
+				func(
+					*pgxpool.Pool,
+					store.AutomaticCrawlConfig,
+				) (discoveryRuntimeStore, error) {
+					return &coverageDiscoveryRuntimeStore{},
+						nil
+				},
+			)
+
+		if runner != nil {
+			t.Errorf(
+				"runner = %#v, want nil",
+				runner,
+			)
+		}
+
+		if !errors.Is(err, fleetErr) {
+			t.Fatalf(
+				"error = %v, want %v",
+				err,
+				fleetErr,
+			)
+		}
+
+		if !strings.Contains(
+			err.Error(),
+			"construct fleet budget",
+		) {
+			t.Errorf(
+				"error = %v, want fleet budget context",
 				err,
 			)
 		}
@@ -260,6 +319,8 @@ func TestDiscoveryConstructorRuntimeIntegrationFailures(
 func TestDiscoveryConstructorRuntimeIntegrationRepairsSeeds(
 	t *testing.T,
 ) {
+	stubRuntimeFleetBudget(t)
+
 	runner, err := newDiscoveryRuntimeWithStoreFactory(
 		context.Background(),
 		nil,

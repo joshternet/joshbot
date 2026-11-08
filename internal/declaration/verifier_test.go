@@ -1438,3 +1438,30 @@ func assertDeclarationBodiesClosed(
 		}
 	}
 }
+
+type fleetBudgetDeclarationGetter struct {
+	err error
+}
+
+func (getter fleetBudgetDeclarationGetter) Get(
+	context.Context,
+	*url.URL,
+) (*http.Response, error) {
+	return nil, getter.err
+}
+
+func TestVerifierReturnsFleetByteBudget(t *testing.T) {
+	source, err := origin.Parse("https://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	verifier := NewVerifier(fleetBudgetDeclarationGetter{
+		err: &robots.FleetByteBudgetError{RetryAfter: time.Hour},
+	})
+	_, err = verifier.Verify(context.Background(), source)
+	delay, ok := robots.FleetByteBudgetDelay(err)
+	if !ok || delay != time.Hour {
+		t.Fatalf("Verify() error = %v, want a one-hour fleet byte budget", err)
+	}
+}

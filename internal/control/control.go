@@ -11,11 +11,11 @@ import (
 	"mime"
 	"net"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/joshternet/joshbot/internal/domainavoid"
 	"github.com/joshternet/joshbot/internal/operatortoken"
 	"github.com/joshternet/joshbot/internal/origin"
 )
@@ -38,7 +38,6 @@ const (
 var (
 	errCommanderUnavailable = errors.New("control: commander is unavailable")
 	errTokenUnavailable     = errors.New("control: authentication token is invalid")
-	domainPattern           = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?:\.\*)?$`)
 )
 
 // Audit describes one bounded authenticated mutation attempt.
@@ -472,21 +471,11 @@ func validBoundedText(value string, limit int) bool {
 }
 
 func normalizeDomainPattern(value string) string {
-	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(value), "."))
+	return domainavoid.Normalize(value)
 }
 
 func validDomainPattern(value string) bool {
-	if len(value) < 1 || len(value) > 253 || !domainPattern.MatchString(value) {
-		return false
-	}
-	family := strings.TrimSuffix(value, ".*")
-	for _, label := range strings.Split(family, ".") {
-		if len(label) < 1 || len(label) > 63 ||
-			strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
-			return false
-		}
-	}
-	return true
+	return domainavoid.Valid(value)
 }
 
 func boundedTarget(value string) string {

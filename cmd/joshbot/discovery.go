@@ -308,6 +308,18 @@ func newDiscoveryRuntimeWithStoreFactory(
 		)
 	}
 
+	fleetBudget, err := newRuntimeFleetBudget(
+		pool,
+		settings.maxRequestsPerSecond,
+		settings.maxBytesPerDay,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"construct fleet budget: %w",
+			err,
+		)
+	}
+
 	checker, err := newRuntimeHTTPChecker(
 		net.DefaultResolver,
 		&net.Dialer{
@@ -316,6 +328,7 @@ func newDiscoveryRuntimeWithStoreFactory(
 		settings.crawl.RequestDelay,
 		settings.signer,
 		settings.http,
+		fleetBudget,
 	)
 	if err != nil {
 		return nil, err

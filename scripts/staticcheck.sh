@@ -2,7 +2,8 @@
 
 set -eu
 
-staticcheck_version=v0.8.2
+# Always use the latest staticcheck so analyzer fixes stay current.
+staticcheck_version=latest
 
 if [ "$#" -eq 0 ]; then
 	set -- ./...

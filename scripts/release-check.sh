@@ -226,8 +226,13 @@ done
 
 require_text \
 	scripts/govulncheck.sh \
-	'govulncheck_version=v1.8.0' \
-	'govulncheck version is pinned to v1.8.0'
+	'govulncheck_version=latest' \
+	'govulncheck always uses the latest version'
+
+require_text \
+	scripts/staticcheck.sh \
+	'staticcheck_version=latest' \
+	'staticcheck always uses the latest version'
 
 if [ -x scripts/govulncheck.sh ]; then
 	if scripts/govulncheck.sh; then
@@ -410,6 +415,16 @@ require_text \
 	docs/crawler.md \
 	'JOSHBOT_CRAWL_REQUEST_DELAY' \
 	'crawler documentation covers request delay'
+
+require_text \
+	docs/crawler.md \
+	'JOSHBOT_CRAWL_MAX_REQUESTS_PER_SECOND' \
+	'crawler documentation covers fleet request rate'
+
+require_text \
+	docs/crawler.md \
+	'JOSHBOT_CRAWL_MAX_BYTES_PER_DAY' \
+	'crawler documentation covers fleet daily byte budget'
 
 require_text \
 	docs/crawler.md \

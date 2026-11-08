@@ -6,8 +6,22 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Independent integration coverage now re-enters domain-avoid unit paths and
+  deferred-probe / regex-exclude store paths, and exercises worker and
+  discovery fleet-budget construction failures that were only covered by unit
+  tests.
+
 ### Added
 
+- Domain-avoid rules accept hostname glob strings (`cbd-hash*`,
+  `*bloginder.com`) and explicit RE2 patterns (`re:^cbd-hash`). Exact domain
+  suffixes and `blogspot.*` families keep their prior meaning. Migration
+  `0031` seeds `cbd-hash*` plus the free-blog farms hosting that spam:
+  `ampedpages.com`, `bligblogging.com`, `bloginder.com`, `blogocial.com`,
+  `blogolenta.com`, `blogoscience.com`, `blogzet.com`, `kylieblog.com`,
+  `review-blogger.com`, `total-blog.com`, and `webdesign96.com`.
 - Sibling hosts share `JOSHBOT_CRAWL_REQUEST_DELAY` by eTLD+1 or private public
   suffix. Robots `Crawl-delay` stays on the origin that published it (#57).
 - The durable domain avoid list includes `centerblog.net`, so that neighborhood
@@ -30,16 +44,21 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   access and no GitHub token.
 - `registry-publish` publishes each new snapshot. An unchanged registry
   does not create a commit. It has the GitHub token and no database access.
-- The embedded schema now contains twenty-nine migrations, `0001` through
-  `0029`, including durable candidate admission state, domain-avoid LIKE
+- The embedded schema now contains thirty-one migrations, `0001` through
+  `0031`, including durable candidate admission state, domain-avoid LIKE
   hardening, verification-queue `abandoned` events, removal of the WordPress
-  domain-avoid rules, and the running build identity on service heartbeats.
+  domain-avoid rules, the running build identity on service heartbeats, crawl
+  fleet budget state, and hostname glob/regex domain-avoid patterns.
 - Discovery and worker heartbeats record `build_version` and `build_commit`
   for the process that is running. The image build stamps those values from
   `VERSION` and `VCS_REF`.
 
 ### Changed
 
+- `scripts/govulncheck.sh` and `scripts/staticcheck.sh` always run their tools
+  at `@latest` instead of pinned older releases, and release readiness checks
+  that policy.
+- Direct Go module dependencies stay on current releases (`pgx/v5` v5.12.0).
 - Discovered link origins are admitted as crawl sources unless
   `JOSHBOT_AUTOMATIC_CRAWL_ENABLED` is explicitly false. Robots, avoid rules,
   crawl blocks, expansion pause, probe backpressure, promotion budgets, and
@@ -54,6 +73,36 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- Discovery and worker construct the shared PostgreSQL fleet budget and pass it
+  into the robots HTTP checker, so
+  `JOSHBOT_CRAWL_MAX_REQUESTS_PER_SECOND` and
+  `JOSHBOT_CRAWL_MAX_BYTES_PER_DAY` are enforced on outbound crawl traffic.
+- Domain-avoid `re:` rules stay on the Go RE2 path; SQL admission only sees
+  domain, family, and glob patterns via `NonRegexPatterns`.
+- Discovery Compose, smoke deploy, and CLI integration supply
+  `JOSHBOT_CRAWL_MAX_REQUESTS_PER_SECOND` and
+  `JOSHBOT_CRAWL_MAX_BYTES_PER_DAY`, so discovery no longer exits before the
+  smoke healthcheck or CLI integration discover when those required fleet
+  budgets are unset.
+- Worker Compose also receives those fleet budget settings, and smoke asserts
+  them on the worker container so workers do not crash-loop on startup.
+- Runtime config failure integration covers fleet budget load errors (missing,
+  non-integer, non-positive, and request-rate spacing overflow) so the
+  independent integration coverage gate includes those `crawl_config`
+  statement blocks.
+- Worker and discovery runtime tests supply fleet budget settings and stub
+  fleet-budget construction when the PostgreSQL pool is unavailable, and
+  pending-automatic unit mocks account for domain-avoid reads plus deferred
+  probe admission via `Query`.
+- Domain-avoid invalid-pattern tests reject reserved `.*` and other illegal
+  forms instead of hostname globs that are now valid. Deferred-probe failure
+  coverage accepts the collect-path error from statement triggers.
+- Unit coverage includes fleet-budget construction failures, the shared
+  fleet-budget wrapper body, domain-avoid edge cases, deferred-probe collect
+  failures, and regex-only probe exclusion cleanup.
+- Pending-probe drain skips stored candidate origins that fail current origin
+  parsing instead of aborting discovery startup and every source-lease claim
+  (#168).
 - `golang.org/x/net` moves to v0.62.0 to close GO-2026-6860 (quadratic HTML
   text-node coalescing).
 - Discovered link origins are always queued to check `/.well-known/josh` when

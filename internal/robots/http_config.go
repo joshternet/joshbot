@@ -40,6 +40,7 @@ func NewCheckerWithHTTPConfig(
 	requestDelay time.Duration,
 	signer RequestSigner,
 	config HTTPConfig,
+	budget FleetBudget,
 ) (*Checker, error) {
 	if config.MaxCrawlDelay <= 0 ||
 		config.DialTimeout <= 0 ||
@@ -50,7 +51,7 @@ func NewCheckerWithHTTPConfig(
 	if requestDelay < 0 {
 		return nil, errInvalidRequestDelay
 	}
-	return newCheckerWithHTTPConfig(resolver, dialer, requestDelay, signer, config), nil
+	return newCheckerWithHTTPConfig(resolver, dialer, requestDelay, signer, config, budget), nil
 }
 
 func newCheckerWithHTTPConfig(
@@ -59,9 +60,16 @@ func newCheckerWithHTTPConfig(
 	requestDelay time.Duration,
 	signer RequestSigner,
 	config HTTPConfig,
+	budget FleetBudget,
 ) *Checker {
 	checker := newCheckerWithRequestDelay(
-		&guardedHTTP{resolver: resolver, dialer: dialer, signer: signer, config: config},
+		&guardedHTTP{
+			resolver: resolver,
+			dialer:   dialer,
+			signer:   signer,
+			config:   config,
+			budget:   budget,
+		},
 		time.Now, requestDelay, timerRequestDelayWaiter{},
 	)
 	checker.maxCrawlDelay = config.MaxCrawlDelay

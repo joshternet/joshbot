@@ -3,7 +3,9 @@ package main
 import (
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/robots"
+	"github.com/joshternet/joshbot/internal/store"
 )
 
 const (
@@ -15,6 +17,19 @@ const (
 
 // Shared construction boundary for all outbound runtime clients.
 var newRuntimeHTTPChecker = robots.NewCheckerWithHTTPConfig
+
+// Shared fleet-budget boundary for worker and discovery crawl clients.
+var newRuntimeFleetBudget = func(
+	pool *pgxpool.Pool,
+	maxRequestsPerSecond int,
+	maxBytesPerDay int64,
+) (robots.FleetBudget, error) {
+	return store.NewFleetBudget(
+		pool,
+		maxRequestsPerSecond,
+		maxBytesPerDay,
+	)
+}
 
 func loadHTTPConfig(getenv environmentGetter) (robots.HTTPConfig, error) {
 	config := robots.DefaultHTTPConfig()

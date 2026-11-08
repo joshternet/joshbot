@@ -10,6 +10,7 @@ import (
 
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/retry"
+	"github.com/joshternet/joshbot/internal/robots"
 )
 
 func TestCrawlRunnerProcessesOneSource(t *testing.T) {
@@ -1106,6 +1107,8 @@ type fakeCrawlSourceStore struct {
 	retryAfter     []time.Duration
 	completeError  error
 	renewError     error
+	released       []CrawlSourceLease
+	releaseError   error
 }
 
 type retryingCrawlSourceStore struct {
@@ -1204,6 +1207,15 @@ func (store *fakeCrawlSourceStore) CompleteDiscoverySourceLeaseRetry(
 	return store.completeError
 }
 
+func (store *fakeCrawlSourceStore) ReleaseDiscoverySourceLease(
+	_ context.Context,
+	lease CrawlSourceLease,
+) error {
+	store.released = append(store.released, lease)
+
+	return store.releaseError
+}
+
 type fakeSourceCrawlResult struct {
 	result CrawlResult
 	err    error
@@ -1277,6 +1289,161 @@ func (waiter *fakeCrawlRunnerWaiter) Wait(
 	)
 
 	return waiter.err
+}
+
+func TestCrawlRunnerFleetByteBudgetReleasesAndWaits(t *testing.T) {
+	source := mustDiscoveryOrigin(t, "https://example.com")
+	store := &fakeCrawlSourceStore{
+		claims: []fakeCrawlSourceClaim{{
+			source: source,
+			found:  true,
+		}},
+	}
+	delay := 2 * time.Hour
+	crawler := &fakeSourceCrawler{
+		results: []fakeSourceCrawlResult{{
+			err: &robots.FleetByteBudgetError{RetryAfter: delay},
+		}},
+	}
+	waiter := &fakeCrawlRunnerWaiter{err: errors.New("stop after budget wait")}
+	runner, err := newCrawlRunner(
+		store,
+		crawler,
+		testCrawlRunnerConfig(),
+		waiter,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = runner.Run(context.Background())
+	if !errors.Is(err, waiter.err) {
+		t.Fatalf("Run() error = %v, want the budget wait to stop the loop", err)
+	}
+	if len(waiter.durations) != 1 || waiter.durations[0] != delay {
+		t.Fatalf("waits = %v, want %s", waiter.durations, delay)
+	}
+	if len(store.released) != 1 || len(store.categories) != 0 {
+		t.Fatalf(
+			"released = %d categories = %v, want one release and no failure",
+			len(store.released),
+			store.categories,
+		)
+	}
+
+	continued := &fakeCrawlSourceStore{
+		claims: []fakeCrawlSourceClaim{
+			{source: source, found: true},
+			{found: false},
+		},
+	}
+	idleStop := errors.New("stop after idle poll")
+	continuedWaiter := &sequenceCrawlRunnerWaiter{
+		errors: []error{nil, idleStop},
+	}
+	continuedRunner, err := newCrawlRunner(
+		continued,
+		&fakeSourceCrawler{
+			results: []fakeSourceCrawlResult{{
+				err: &robots.FleetByteBudgetError{RetryAfter: delay},
+			}},
+		},
+		testCrawlRunnerConfig(),
+		continuedWaiter,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = continuedRunner.Run(context.Background())
+	if !errors.Is(err, idleStop) {
+		t.Fatalf(
+			"Run() error = %v, want stop after idle poll",
+			err,
+		)
+	}
+	if len(continuedWaiter.durations) != 2 ||
+		continuedWaiter.durations[0] != delay ||
+		continuedWaiter.durations[1] != testCrawlRunnerConfig().PollInterval {
+		t.Fatalf(
+			"waits = %v, want budget delay then poll interval",
+			continuedWaiter.durations,
+		)
+	}
+	if len(continued.released) != 1 {
+		t.Fatalf(
+			"released = %d, want one release before continue",
+			len(continued.released),
+		)
+	}
+
+	releaseFailed := &fakeCrawlSourceStore{
+		claims: []fakeCrawlSourceClaim{{
+			source: source,
+			found:  true,
+		}},
+		releaseError: errors.New("release failed"),
+	}
+	releaseRunner, err := newCrawlRunner(
+		releaseFailed,
+		&fakeSourceCrawler{
+			results: []fakeSourceCrawlResult{{
+				err: &robots.FleetByteBudgetError{RetryAfter: delay},
+			}},
+		},
+		testCrawlRunnerConfig(),
+		&fakeCrawlRunnerWaiter{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = releaseRunner.RunOnce(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "release crawl source lease") {
+		t.Fatalf(
+			"RunOnce() error = %v, want lease release failure",
+			err,
+		)
+	}
+	if !errors.Is(err, releaseFailed.releaseError) {
+		t.Fatalf(
+			"RunOnce() error = %v, want wrapped release failure",
+			err,
+		)
+	}
+
+	other := &fakeCrawlSourceStore{
+		claims: []fakeCrawlSourceClaim{
+			{source: source, found: true},
+			{found: false},
+		},
+	}
+	otherWaiter := &fakeCrawlRunnerWaiter{err: errors.New("stop after poll")}
+	otherRunner, err := newCrawlRunner(
+		other,
+		&fakeSourceCrawler{
+			results: []fakeSourceCrawlResult{{
+				err: errors.New("crawl failed"),
+			}},
+		},
+		testCrawlRunnerConfig(),
+		otherWaiter,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = otherRunner.Run(context.Background()); !errors.Is(err, otherWaiter.err) {
+		t.Fatalf("Run() error = %v, want the poll wait to stop the loop", err)
+	}
+	if len(other.released) != 0 || len(other.categories) != 1 {
+		t.Fatalf(
+			"released = %d categories = %v, want a recorded failure",
+			len(other.released),
+			other.categories,
+		)
+	}
+	if len(otherWaiter.durations) != 1 ||
+		otherWaiter.durations[0] != testCrawlRunnerConfig().PollInterval {
+		t.Fatalf("waits = %v, want the poll interval", otherWaiter.durations)
+	}
 }
 
 func testCrawlRunnerConfig() CrawlRunnerConfig {

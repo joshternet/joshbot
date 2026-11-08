@@ -1406,6 +1406,7 @@ func TestRobotsBoundaryIntegrationHTTPConfigValidation(
 		0,
 		nil,
 		config,
+		nil,
 	); !errors.Is(err, ErrInvalidHTTPConfig) {
 		t.Fatalf(
 			"NewCheckerWithHTTPConfig() error = %v, want %v",
@@ -1420,6 +1421,7 @@ func TestRobotsBoundaryIntegrationHTTPConfigValidation(
 		-time.Second,
 		nil,
 		DefaultHTTPConfig(),
+		nil,
 	); !errors.Is(err, errInvalidRequestDelay) {
 		t.Fatalf(
 			"NewCheckerWithHTTPConfig() error = %v, want %v",

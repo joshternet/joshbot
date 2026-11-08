@@ -162,6 +162,10 @@ func (v *Verifier) Verify(
 				return Result{}, contextError
 			}
 
+			if errors.Is(err, robots.ErrFleetByteBudget) {
+				return Result{}, err
+			}
+
 			if errors.Is(err, robots.ErrDisallowed) {
 				return Result{
 					Outcome: OutcomeRobotsDenied,

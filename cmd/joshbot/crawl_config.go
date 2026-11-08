@@ -27,6 +27,10 @@ const (
 
 	crawlRequestDelayEnvironment = "JOSHBOT_CRAWL_REQUEST_DELAY"
 
+	crawlMaxRequestsPerSecondEnvironment = "JOSHBOT_CRAWL_MAX_REQUESTS_PER_SECOND"
+
+	crawlMaxBytesPerDayEnvironment = "JOSHBOT_CRAWL_MAX_BYTES_PER_DAY"
+
 	crawlRedirectLimitEnvironment = "JOSHBOT_CRAWL_REDIRECT_LIMIT"
 
 	automaticCrawlEnabledEnvironment = "JOSHBOT_AUTOMATIC_CRAWL_ENABLED"
@@ -43,13 +47,15 @@ const (
 )
 
 type crawlRuntimeSettings struct {
-	runner             discovery.CrawlRunnerConfig
-	crawl              discovery.CrawlConfig
-	automatic          store.AutomaticCrawlConfig
-	telemetryRetention time.Duration
-	http               robots.HTTPConfig
-	signer             robots.RequestSigner
-	leaseOwner         string
+	runner               discovery.CrawlRunnerConfig
+	crawl                discovery.CrawlConfig
+	automatic            store.AutomaticCrawlConfig
+	telemetryRetention   time.Duration
+	http                 robots.HTTPConfig
+	signer               robots.RequestSigner
+	leaseOwner           string
+	maxRequestsPerSecond int
+	maxBytesPerDay       int64
 }
 
 func loadCrawlRuntimeSettings(
@@ -126,6 +132,13 @@ func loadCrawlRuntimeSettings(
 		return crawlRuntimeSettings{}, err
 	}
 
+	maxRequestsPerSecond, maxBytesPerDay, err := loadFleetBudgetSettings(
+		getenv,
+	)
+	if err != nil {
+		return crawlRuntimeSettings{}, err
+	}
+
 	redirectLimit, err := requiredIntegerSetting(
 		getenv,
 		crawlRedirectLimitEnvironment,
@@ -194,10 +207,66 @@ func loadCrawlRuntimeSettings(
 			PageTimeout:                  pageTimeout,
 			MaxAutomaticPromotionsPerRun: automaticConfig.MaxAutomaticPromotionsPerRun,
 		},
-		http:               httpConfig,
-		automatic:          automaticConfig,
-		telemetryRetention: telemetryRetention,
+		http:                 httpConfig,
+		automatic:            automaticConfig,
+		telemetryRetention:   telemetryRetention,
+		maxRequestsPerSecond: maxRequestsPerSecond,
+		maxBytesPerDay:       maxBytesPerDay,
 	}, nil
+}
+
+// loadFleetBudgetSettings reads the shared fleet request rate and UTC-daily
+// body-byte cap. The rate must stay positive after one second is divided by it.
+func loadFleetBudgetSettings(
+	getenv environmentGetter,
+) (int, int64, error) {
+	rate, err := requiredIntegerSetting(
+		getenv,
+		crawlMaxRequestsPerSecondEnvironment,
+		1,
+	)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	if time.Second/time.Duration(rate) <= 0 {
+		return 0, 0, fmt.Errorf(
+			"%w: %s spacing must stay positive",
+			errInvalidRuntimeConfiguration,
+			crawlMaxRequestsPerSecondEnvironment,
+		)
+	}
+
+	maxBytes, err := requiredInt64Setting(
+		getenv,
+		crawlMaxBytesPerDayEnvironment,
+		1,
+	)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return rate, maxBytes, nil
+}
+
+// requiredInt64Setting reads a required base-10 integer of at least minimum.
+func requiredInt64Setting(
+	getenv environmentGetter,
+	name string,
+	minimum int64,
+) (int64, error) {
+	value := getenv(name)
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if value == "" || err != nil || parsed < minimum {
+		return 0, fmt.Errorf(
+			"%w: %s must be an integer greater than or equal to %d",
+			errInvalidRuntimeConfiguration,
+			name,
+			minimum,
+		)
+	}
+
+	return parsed, nil
 }
 
 func settingOrDefault(

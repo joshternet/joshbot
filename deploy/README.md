@@ -310,6 +310,8 @@ JOSHBOT_CRAWL_MAX_DEPTH >= 0
 1 <= JOSHBOT_CRAWL_MAX_PAGES <= 10000
 JOSHBOT_CRAWL_MAX_PAGE_BYTES > 0
 JOSHBOT_CRAWL_REQUEST_DELAY >= 0
+JOSHBOT_CRAWL_MAX_REQUESTS_PER_SECOND > 0
+JOSHBOT_CRAWL_MAX_BYTES_PER_DAY > 0
 JOSHBOT_CRAWL_REDIRECT_LIMIT > 0
 
 JOSHBOT_AUTOMATIC_CRAWL_ENABLED = true or false
@@ -325,6 +327,8 @@ JOSHBOT_CRAWL_MAX_DEPTH=4
 JOSHBOT_CRAWL_MAX_PAGES=32
 JOSHBOT_CRAWL_MAX_PAGE_BYTES=1048576
 JOSHBOT_CRAWL_REQUEST_DELAY=1s
+JOSHBOT_CRAWL_MAX_REQUESTS_PER_SECOND=1
+JOSHBOT_CRAWL_MAX_BYTES_PER_DAY=1073741824
 JOSHBOT_CRAWL_REDIRECT_LIMIT=5
 JOSHBOT_CRAWL_TELEMETRY_RETENTION=720h
 
@@ -341,11 +345,18 @@ registrable domain or private public suffix. An applicable robots
 
 The durable domain avoid list is managed through the operator control API and
 starts with the hosted publishing and social-platform defaults, including
-`centerblog.net`. `wordpress.com` and `wordpress.org` are not on that list, so
-sites using the official Joshternet plugin stay eligible. An environment
-value adds emergency rules to that list;
-dashboard removal cannot override an environment rule. Use a family such as
-`blogspot.*` to cover regional public suffixes.
+`centerblog.net`, `cbd-hash*`, and the free-blog farms `ampedpages.com`,
+`bligblogging.com`, `bloginder.com`, `blogocial.com`, `blogolenta.com`,
+`blogoscience.com`, `blogzet.com`, `kylieblog.com`, `review-blogger.com`,
+`total-blog.com`, and `webdesign96.com`. `wordpress.com` and `wordpress.org`
+are not on that list, so sites using the official Joshternet plugin stay
+eligible. An environment value adds emergency rules to that list; dashboard
+removal cannot override an environment rule. Pattern forms are exact domains
+and subdomains, families such as `blogspot.*`, hostname globs such as
+`cbd-hash*` or `*bloginder.com`, and RE2 regexes with a `re:` prefix such as
+`re:^cbd-hash[0-9]+\.`. Add with `POST /api/v1/control/domain-avoid` and remove
+with `DELETE /api/v1/control/domain-avoid/{pattern}` using the same normalized
+pattern string (URL-encode regexes on DELETE).
 
 The root page is depth zero. Redirect hops do not consume additional frontier
 slots. Requests within one source crawl are sequential.

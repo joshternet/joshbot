@@ -100,6 +100,7 @@ type crawledPage struct {
 	attempt         PageAttempt
 	failureCategory retry.Category
 	retryAfter      time.Duration
+	err             error
 }
 
 // NewMultiPageCrawlerWithTelemetry constructs a crawler that durably reports
@@ -190,6 +191,9 @@ func (c *MultiPageCrawler) Crawl(
 		if ctx.Err() != nil {
 			outcome = CrawlRunCanceled
 			reason = "context_canceled"
+		} else if errors.Is(crawlErr, robots.ErrFleetByteBudget) {
+			outcome = CrawlRunCanceled
+			reason = "fleet_byte_budget"
 		} else if crawlErr != nil {
 			outcome = CrawlRunFailed
 			reason = "crawler_error"
@@ -285,6 +289,9 @@ func (c *MultiPageCrawler) Crawl(
 			)
 			pageContextErr = pageContext.Err()
 			cancelPage()
+			if errors.Is(page.err, robots.ErrFleetByteBudget) {
+				return result, page.err
+			}
 			if !page.failureCategory.Transient() {
 				break
 			}
@@ -487,6 +494,10 @@ func (c *MultiPageCrawler) fetchPage(
 			current,
 		)
 		if err != nil {
+			if errors.Is(err, robots.ErrFleetByteBudget) {
+				return crawledPage{err: err}
+			}
+
 			category := retry.CategoryTransport
 			if errors.Is(err, robots.ErrDisallowed) {
 				attempt.RobotsDecision = RobotsDenied

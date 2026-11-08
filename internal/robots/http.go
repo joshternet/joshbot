@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
+	"time"
 
 	"github.com/joshternet/joshbot/internal/netguard"
 	"github.com/joshternet/joshbot/internal/origin"
@@ -70,12 +72,20 @@ type guardedHTTP struct {
 	rootCAs  *x509.CertPool
 	signer   RequestSigner
 	config   HTTPConfig
+	budget   FleetBudget
+
+	pendingMu    sync.Mutex
+	pendingBytes int64
 }
 
 func (g *guardedHTTP) get(
 	ctx context.Context,
 	target *url.URL,
 ) (*http.Response, error) {
+	if err := g.reserve(ctx); err != nil {
+		return nil, err
+	}
+
 	// Checker validates initial request targets before they reach this
 	// boundary, and redirectTarget applies the same validation to every
 	// redirect hop.
@@ -134,12 +144,101 @@ func (g *guardedHTTP) get(
 		)
 	}
 
-	response.Body = &transportBody{
+	body := &transportBody{
 		ReadCloser: response.Body,
 		closeIdle:  transport.CloseIdleConnections,
 	}
+	if g.budget == nil {
+		response.Body = body
+	} else {
+		response.Body = &fleetBudgetBody{
+			ReadCloser: body,
+			add:        g.addPending,
+		}
+	}
 
 	return response, nil
+}
+
+// reserve adds pending body bytes and waits for the shared request slot.
+// A nil budget means this client is not part of the crawl fleet.
+func (g *guardedHTTP) reserve(ctx context.Context) error {
+	if g == nil || g.budget == nil {
+		return nil
+	}
+
+	g.pendingMu.Lock()
+	pending := g.pendingBytes
+	g.pendingMu.Unlock()
+
+	wait, err := g.budget.Acquire(ctx, pending)
+	if err != nil {
+		var budget fleetByteBudgetDelay
+		if errors.As(err, &budget) {
+			g.clearPending(pending)
+
+			return &FleetByteBudgetError{
+				RetryAfter: budget.FleetByteBudgetDelay(),
+			}
+		}
+
+		return fmt.Errorf(
+			"robots: fleet budget: %w",
+			err,
+		)
+	}
+
+	g.clearPending(pending)
+	if wait <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (g *guardedHTTP) addPending(count int64) {
+	if g == nil || count <= 0 {
+		return
+	}
+
+	g.pendingMu.Lock()
+	g.pendingBytes += count
+	g.pendingMu.Unlock()
+}
+
+func (g *guardedHTTP) clearPending(sent int64) {
+	g.pendingMu.Lock()
+	defer g.pendingMu.Unlock()
+
+	if g.pendingBytes >= sent {
+		g.pendingBytes -= sent
+
+		return
+	}
+
+	g.pendingBytes = 0
+}
+
+type fleetBudgetBody struct {
+	io.ReadCloser
+	add func(int64)
+}
+
+func (body *fleetBudgetBody) Read(buffer []byte) (int, error) {
+	count, err := body.ReadCloser.Read(buffer)
+	if count > 0 && body.add != nil {
+		body.add(int64(count))
+	}
+
+	return count, err
 }
 
 func newGuardedTransport(
@@ -212,6 +311,10 @@ func obtainPolicy(
 		if err != nil {
 			if contextError := ctx.Err(); contextError != nil {
 				return disallowAllPolicy(), contextError
+			}
+
+			if errors.Is(err, ErrFleetByteBudget) {
+				return disallowAllPolicy(), err
 			}
 
 			return disallowAllPolicy(), fmt.Errorf(

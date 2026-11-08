@@ -14,6 +14,20 @@ import (
 	"github.com/joshternet/joshbot/internal/store"
 )
 
+func TestRuntimeFleetBudgetConstructorUsesStoreBoundary(t *testing.T) {
+	original := newRuntimeFleetBudget
+	t.Cleanup(func() {
+		newRuntimeFleetBudget = original
+	})
+	// Restore the production wrapper so coverage includes its body.
+	newRuntimeFleetBudget = original
+
+	_, err := newRuntimeFleetBudget(nil, 1, 1)
+	if err == nil {
+		t.Fatal("newRuntimeFleetBudget(nil) error = nil, want pool unavailable")
+	}
+}
+
 func TestHTTPSettingsDefaultsAndOverrides(t *testing.T) {
 	env := mapEnvironment{}
 	got, err := loadHTTPConfig(env.get)
@@ -68,10 +82,11 @@ func TestHTTPSettingsFailBeforeRuntimeActivity(t *testing.T) {
 func TestRuntimeHTTPSettingsReachEveryClientAndPropagateConstructionError(t *testing.T) {
 	original := newRuntimeHTTPChecker
 	t.Cleanup(func() { newRuntimeHTTPChecker = original })
+	stubRuntimeFleetBudget(t)
 	failure := errors.New("HTTP checker construction failed")
 	want := robots.HTTPConfig{MaxCrawlDelay: 250 * time.Millisecond, DialTimeout: 250 * time.Millisecond, TLSHandshakeTimeout: 250 * time.Millisecond, ResponseHeaderTimeout: 250 * time.Millisecond}
 	calls := 0
-	newRuntimeHTTPChecker = func(_ netguard.Resolver, dialer netguard.Dialer, _ time.Duration, _ robots.RequestSigner, config robots.HTTPConfig) (*robots.Checker, error) {
+	newRuntimeHTTPChecker = func(_ netguard.Resolver, dialer netguard.Dialer, _ time.Duration, _ robots.RequestSigner, config robots.HTTPConfig, _ robots.FleetBudget) (*robots.Checker, error) {
 		calls++
 		if config != want {
 			t.Fatalf("config=%v want %v", config, want)

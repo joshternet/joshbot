@@ -705,6 +705,26 @@ func TestDeclarationFailureIntegrationEnforcesRedirectAuthority(
 	})
 }
 
+func TestDeclarationFailureIntegrationFleetByteBudget(t *testing.T) {
+	source := declarationFailureIntegrationOrigin(
+		t,
+		"https://example.com",
+	)
+	verifier := declaration.NewVerifier(
+		declarationFailureIntegrationGetter{
+			get: func(context.Context, *url.URL) (*http.Response, error) {
+				return nil, &robots.FleetByteBudgetError{RetryAfter: time.Hour}
+			},
+		},
+	)
+
+	_, err := verifier.Verify(context.Background(), source)
+	delay, ok := robots.FleetByteBudgetDelay(err)
+	if !ok || delay != time.Hour {
+		t.Fatalf("Verify() error = %v, want a one-hour fleet byte budget", err)
+	}
+}
+
 func declarationFailureIntegrationVerifyGetterError(
 	t *testing.T,
 	source origin.Origin,

@@ -526,6 +526,8 @@ func TestValidExcludedHostSuffixesWithoutDatabase(
 		"example.com,blogspot.*",
 		"foo-bar.example",
 		" example.com , blogspot.* ",
+		"cbd-hash*,re:^cbd-hash",
+		"*bloginder.com",
 	}
 
 	for _, value := range valid {
@@ -552,6 +554,8 @@ func TestValidExcludedHostSuffixesWithoutDatabase(
 		"foo%bar.example",
 		`foo\bar.example`,
 		"under_score.*",
+		"re:[",
+		"re:",
 	}
 
 	for _, value := range invalid {
@@ -811,6 +815,9 @@ func TestDiscoveryContractGolden(
 		"example.com.",
 		"*",
 		"blogspot.*.example",
+		"cbd-hash*",
+		"re:^cbd-hash",
+		"re:[",
 	} {
 		fmt.Fprintf(
 			&snapshot,
@@ -826,7 +833,7 @@ func TestDiscoveryContractGolden(
 	)
 
 	exclusions := AutomaticCrawlConfig{
-		ExcludedHostSuffixes: "example.com,blogspot.*",
+		ExcludedHostSuffixes: "example.com,blogspot.*,cbd-hash*,re:^spam-",
 	}
 
 	for _, hostname := range []string{
@@ -835,6 +842,8 @@ func TestDiscoveryContractGolden(
 		"other.test",
 		"blogspot.com",
 		"foo.blogspot.co.uk",
+		"cbd-hash27174.ampedpages.com",
+		"spam-host.example",
 	} {
 		fmt.Fprintf(
 			&snapshot,

@@ -72,7 +72,14 @@ func NewCheckerWithRequestDelayAndSigner(
 	requestDelay time.Duration,
 	signer RequestSigner,
 ) *Checker {
-	return newCheckerWithHTTPConfig(resolver, dialer, requestDelay, signer, DefaultHTTPConfig())
+	return newCheckerWithHTTPConfig(
+		resolver,
+		dialer,
+		requestDelay,
+		signer,
+		DefaultHTTPConfig(),
+		nil,
+	)
 }
 
 func newCheckerWithRequestDelay(
@@ -195,6 +202,16 @@ func (c *Checker) policyFor(
 	c.mu.Unlock()
 
 	policy, err := obtainPolicy(ctx, initial, c.getter)
+	if errors.Is(err, ErrFleetByteBudget) {
+		pending.err = err
+		close(pending.done)
+
+		c.mu.Lock()
+		delete(c.inflight, initial)
+		c.mu.Unlock()
+
+		return Policy{}, err
+	}
 	if err != nil {
 		err = fmt.Errorf("%w: %w", ErrTemporary, err)
 		pending.err = err
@@ -302,6 +319,9 @@ func (c *Checker) Get(
 	}
 
 	response, err := c.getter.get(ctx, target)
+	if errors.Is(err, ErrFleetByteBudget) {
+		return nil, err
+	}
 	if err != nil {
 		return nil, fmt.Errorf(
 			"robots: fetch protected target: %w",

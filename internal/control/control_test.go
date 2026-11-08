@@ -469,9 +469,22 @@ func TestControlValidationHelpersCoverBoundaries(t *testing.T) {
 		strings.Repeat("a", 64) + ".example",
 		"-bad.example",
 		"bad-.example",
+		"*",
+		"re:",
+		"re:[",
 	} {
 		if validDomainPattern(pattern) {
 			t.Errorf("validDomainPattern(%q) = true", pattern)
+		}
+	}
+	for _, pattern := range []string{
+		"example.com",
+		"blogspot.*",
+		"cbd-hash*",
+		"re:^cbd-hash",
+	} {
+		if !validDomainPattern(normalizeDomainPattern(pattern)) {
+			t.Errorf("validDomainPattern(%q) = false", pattern)
 		}
 	}
 	if got := bounded("abcdef", 3); got != "abc" {

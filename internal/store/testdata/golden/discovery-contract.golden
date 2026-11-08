@@ -16,6 +16,9 @@ pattern=foo.test
 "example.com."=false
 "*"=false
 "blogspot.*.example"=false
+"cbd-hash*"=true
+"re:^cbd-hash"=true
+"re:["=false
 
 === exclusion matching ===
 example.com=true
@@ -23,6 +26,8 @@ www.example.com=true
 other.test=false
 blogspot.com=true
 foo.blogspot.co.uk=true
+cbd-hash27174.ampedpages.com=true
+spam-host.example=true
 
 === discovery kinds ===
 1="link",true

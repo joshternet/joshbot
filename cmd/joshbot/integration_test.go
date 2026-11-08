@@ -322,10 +322,12 @@ func newCLIIntegrationEnvironment(
 	}
 
 	environment := mapEnvironment{
-		databaseURLEnvironment:          runtimeURL.String(),
-		databasePasswordFileEnvironment: passwordFile,
-		workerIDEnvironment:             "integration-worker",
-		webBotAuthModeEnvironment:       webBotAuthModeUnsigned,
+		databaseURLEnvironment:               runtimeURL.String(),
+		databasePasswordFileEnvironment:      passwordFile,
+		workerIDEnvironment:                  "integration-worker",
+		webBotAuthModeEnvironment:            webBotAuthModeUnsigned,
+		crawlMaxRequestsPerSecondEnvironment: "1",
+		crawlMaxBytesPerDayEnvironment:       "1073741824",
 	}
 
 	operations := newRuntimeOperations(io.Discard)
@@ -337,6 +339,8 @@ func newCLIIntegrationEnvironment(
 func TestDiscoveryRuntimePendingProbeScheduleFailure(
 	t *testing.T,
 ) {
+	stubRuntimeFleetBudget(t)
+
 	probeFailure := errors.New(
 		"integration pending probe schedule failure",
 	)

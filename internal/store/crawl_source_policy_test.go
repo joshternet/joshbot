@@ -86,7 +86,7 @@ func TestCrawlSourcePolicyAndClassification(t *testing.T) {
 	); err == nil {
 		t.Fatal("construct store with invalid excluded host suffix: nil error")
 	}
-	for _, invalid := range []string{"*.example.com", "example.*.com", "example*"} {
+	for _, invalid := range []string{"example.*.com", "blogspot.*.example", "*", "bad?.example"} {
 		if _, err := NewDiscoveryStoreWithAutomaticCrawling(
 			pool,
 			AutomaticCrawlConfig{Enabled: true, ExcludedHostSuffixes: invalid},
@@ -419,7 +419,7 @@ func TestDomainAvoidRulesRejectInvalidPatterns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, pattern := range []string{"", "*.example.com", "example.*.com", "https://example.com", "one.example,two.example"} {
+	for _, pattern := range []string{"", "example.*.com", "blogspot.*.example", "https://example.com", "one.example,two.example", "*", "bad?.example"} {
 		if err := commander.AddDomainAvoid(
 			ctx,
 			pattern,

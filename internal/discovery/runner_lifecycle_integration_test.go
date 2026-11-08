@@ -113,6 +113,13 @@ func (store *discoveryRunnerIntegrationCrawlStore) DiscoveryPaused(
 	return store.paused, nil
 }
 
+func (store *discoveryRunnerIntegrationCrawlStore) ReleaseDiscoverySourceLease(
+	context.Context,
+	discovery.CrawlSourceLease,
+) error {
+	return nil
+}
+
 func (store *discoveryRunnerIntegrationCrawlStore) CompleteDiscoverySourceLeaseRetry(
 	_ context.Context,
 	_ discovery.CrawlSourceLease,

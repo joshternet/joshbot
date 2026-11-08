@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/retry"
+	"github.com/joshternet/joshbot/internal/robots"
 )
 
 const defaultCrawlSourceLeaseDuration = 5 * time.Minute
@@ -56,6 +58,11 @@ type CrawlSourceStore interface {
 		CrawlSourceLease,
 		retry.Category,
 		time.Duration,
+	) error
+
+	ReleaseDiscoverySourceLease(
+		context.Context,
+		CrawlSourceLease,
 	) error
 }
 
@@ -257,6 +264,30 @@ func (runner *CrawlRunner) runOnceWithLease(
 			"discovery: renew crawl source lease: %w",
 			renewalErr,
 		)
+	}
+
+	if errors.Is(crawlErr, robots.ErrFleetByteBudget) {
+		if releaseErr := store.ReleaseDiscoverySourceLease(
+			ctx,
+			currentLease,
+		); releaseErr != nil {
+			runner.observe(
+				"failed",
+				source,
+				"lease_release_failed",
+			)
+			return report, fmt.Errorf(
+				"discovery: release crawl source lease: %w",
+				releaseErr,
+			)
+		}
+
+		runner.observe(
+			"paused",
+			source,
+			"fleet_byte_budget",
+		)
+		return report, crawlErr
 	}
 
 	if crawlErr != nil {
@@ -488,6 +519,21 @@ func (runner *CrawlRunner) Run(
 			if contextError :=
 				ctx.Err(); contextError != nil {
 				return contextError
+			}
+
+			if delay, ok := robots.FleetByteBudgetDelay(err); ok {
+				slog.Info(
+					"fleet byte budget exhausted",
+					"retry_after",
+					delay.String(),
+				)
+				if waitErr := runner.waiter.Wait(
+					ctx,
+					delay,
+				); waitErr != nil {
+					return waitErr
+				}
+				continue
 			}
 
 			if report.Worked {

@@ -12,6 +12,7 @@ import (
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/retry"
+	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 )
 
@@ -1682,6 +1683,102 @@ func workerTestResult(
 			Version:  1,
 			Identity: declaration.IdentityAffirmed,
 		},
+	}
+}
+
+func TestWorkerFleetByteBudgetWaitsWithoutRecordingFailure(t *testing.T) {
+	source := workerFailureIntegrationOrigin(t, "https://example.com")
+	lease := workerFailureIntegrationLease(source)
+	abandoned := 0
+	completed := 0
+	claims := 0
+	queue := &workerFailureIntegrationQueue{
+		claim: func(context.Context, string) (store.Lease, bool, error) {
+			claims++
+			if claims == 1 {
+				return lease, true, nil
+			}
+			return store.Lease{}, false, nil
+		},
+		abandon: func(context.Context, store.Lease) error {
+			abandoned++
+			return nil
+		},
+		complete: func(
+			context.Context,
+			store.Lease,
+			declaration.Result,
+			time.Duration,
+		) error {
+			completed++
+			return nil
+		},
+	}
+	delay := 2 * time.Hour
+	stop := errors.New("stop after budget wait")
+	waiter := &workerFailureIntegrationWaiter{
+		wait: func(_ context.Context, waited time.Duration) error {
+			if waited != delay {
+				t.Errorf("wait = %s, want %s", waited, delay)
+			}
+			return stop
+		},
+	}
+	runtime, err := newWorker(
+		queue,
+		workerFailureIntegrationVerifier{
+			verify: func(context.Context, origin.Origin) (declaration.Result, error) {
+				return declaration.Result{}, &robots.FleetByteBudgetError{RetryAfter: delay}
+			},
+		},
+		workerFailureIntegrationConfig(),
+		waiter,
+		contextTimeoutFactory{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = runtime.Run(context.Background()); !errors.Is(err, stop) {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if abandoned != 1 || completed != 0 || claims != 1 {
+		t.Fatalf("abandoned=%d completed=%d claims=%d", abandoned, completed, claims)
+	}
+
+	otherClaims := 0
+	pollStop := errors.New("stop after poll")
+	otherWaiter := &workerFailureIntegrationWaiter{
+		wait: func(context.Context, time.Duration) error {
+			return pollStop
+		},
+	}
+	other, err := newWorker(
+		&workerFailureIntegrationQueue{
+			claim: func(context.Context, string) (store.Lease, bool, error) {
+				otherClaims++
+				if otherClaims == 1 {
+					return lease, true, nil
+				}
+				return store.Lease{}, false, nil
+			},
+		},
+		workerFailureIntegrationVerifier{
+			verify: func(context.Context, origin.Origin) (declaration.Result, error) {
+				return declaration.Result{}, errors.New("verification failed")
+			},
+		},
+		workerFailureIntegrationConfig(),
+		otherWaiter,
+		contextTimeoutFactory{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = other.Run(context.Background()); !errors.Is(err, pollStop) {
+		t.Fatalf("Run() error = %v, want the poll wait", err)
+	}
+	if otherClaims != 2 || otherWaiter.calls != 1 {
+		t.Fatalf("claims=%d waits=%d, want 2 claims and 1 poll wait", otherClaims, otherWaiter.calls)
 	}
 }
 

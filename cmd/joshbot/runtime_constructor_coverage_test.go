@@ -11,6 +11,7 @@ import (
 	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/origin"
 	"github.com/joshternet/joshbot/internal/retry"
+	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 )
 
@@ -73,6 +74,18 @@ func TestNewDiscoveryRuntimeCoversProductionStoreFactory(
 func TestNewDiscoveryRuntimeWithStoreFactory(
 	t *testing.T,
 ) {
+	originalFleetBudget := newRuntimeFleetBudget
+	t.Cleanup(func() {
+		newRuntimeFleetBudget = originalFleetBudget
+	})
+	newRuntimeFleetBudget = func(
+		*pgxpool.Pool,
+		int,
+		int64,
+	) (robots.FleetBudget, error) {
+		return nil, nil
+	}
+
 	storeFailure := errors.New(
 		"store construction failure",
 	)
@@ -139,6 +152,67 @@ func TestNewDiscoveryRuntimeWithStoreFactory(
 				t.Fatalf(
 					"newDiscoveryRuntimeWithStoreFactory() = %#v, %v; want nil, reconcile failure",
 					runner,
+					err,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"fleet budget construction failure",
+		func(t *testing.T) {
+			fleetFailure := errors.New(
+				"test fleet budget construction failure",
+			)
+			newRuntimeFleetBudget = func(
+				*pgxpool.Pool,
+				int,
+				int64,
+			) (robots.FleetBudget, error) {
+				return nil, fleetFailure
+			}
+			t.Cleanup(func() {
+				newRuntimeFleetBudget = func(
+					*pgxpool.Pool,
+					int,
+					int64,
+				) (robots.FleetBudget, error) {
+					return nil, nil
+				}
+			})
+
+			runner, err :=
+				newDiscoveryRuntimeWithStoreFactory(
+					context.Background(),
+					nil,
+					testCrawlRuntimeSettings(t),
+					func(
+						*pgxpool.Pool,
+						store.AutomaticCrawlConfig,
+					) (discoveryRuntimeStore, error) {
+						return &coverageDiscoveryRuntimeStore{},
+							nil
+					},
+				)
+
+			if runner != nil ||
+				!errors.Is(
+					err,
+					fleetFailure,
+				) {
+				t.Fatalf(
+					"newDiscoveryRuntimeWithStoreFactory() = %#v, %v; want nil, fleet budget failure",
+					runner,
+					err,
+				)
+			}
+
+			if !strings.Contains(
+				err.Error(),
+				"construct fleet budget",
+			) {
+				t.Errorf(
+					"error = %v, want fleet budget context",
 					err,
 				)
 			}
@@ -405,6 +479,15 @@ func (
 	discovery.CrawlSourceLease,
 	retry.Category,
 	time.Duration,
+) error {
+	return nil
+}
+
+func (
+	*coverageDiscoveryRuntimeStore,
+) ReleaseDiscoverySourceLease(
+	context.Context,
+	discovery.CrawlSourceLease,
 ) error {
 	return nil
 }

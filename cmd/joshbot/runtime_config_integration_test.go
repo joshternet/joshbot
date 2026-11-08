@@ -56,6 +56,8 @@ func TestRuntimeConfigurationIntegrationLoadsOperationalSettingsAndWebBotAuth(
 		crawlMaxPagesEnvironment:                     "16",
 		crawlMaxPageBytesEnvironment:                 "524288",
 		crawlRequestDelayEnvironment:                 "125ms",
+		crawlMaxRequestsPerSecondEnvironment:         "1",
+		crawlMaxBytesPerDayEnvironment:               "1073741824",
 		crawlRedirectLimitEnvironment:                "4",
 		automaticCrawlEnabledEnvironment:             "true",
 		automaticCrawlMaxPendingProbesEnvironment:    "75",

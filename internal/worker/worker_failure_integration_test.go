@@ -1423,6 +1423,10 @@ func TestWorkerFailureIntegrationAbandonErrorPaths(t *testing.T) {
 	})
 }
 
+func TestWorkerFleetByteBudgetIntegration(t *testing.T) {
+	t.Run("pause", TestWorkerFleetByteBudgetWaitsWithoutRecordingFailure)
+}
+
 func workerFailureIntegrationConfig() Config {
 	return Config{
 		WorkerID:        "integration-worker",
