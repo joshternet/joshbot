@@ -406,9 +406,14 @@ func TestReleaseDiscoverySourceLeaseWithoutDatabase(t *testing.T) {
 	t.Run("success clears only the lease", func(t *testing.T) {
 		tx := &discoveryLeaseReleaseCaptureTx{
 			discoveryPolicyUnitTx: discoveryPolicyUnitTx{
-				execResults: []discoveryUnitExecResult{{
-					tag: pgconn.NewCommandTag("UPDATE 1"),
-				}},
+				execResults: []discoveryUnitExecResult{
+					{
+						tag: pgconn.NewCommandTag("UPDATE 1"),
+					},
+					{
+						tag: pgconn.NewCommandTag("DELETE 1"),
+					},
+				},
 			},
 		}
 		store := discoveryReleaseStore(
@@ -446,8 +451,10 @@ func (tx *discoveryLeaseReleaseCaptureTx) Exec(
 	query string,
 	args ...any,
 ) (pgconn.CommandTag, error) {
-	tx.query = query
-	tx.args = append([]any(nil), args...)
+	if strings.Contains(query, "UPDATE discovery_source_state") {
+		tx.query = query
+		tx.args = append([]any(nil), args...)
+	}
 
 	return tx.discoveryPolicyUnitTx.Exec(ctx, query, args...)
 }

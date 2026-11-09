@@ -1001,7 +1001,8 @@ func resetAutomaticFixtureData(t *testing.T, pool *pgxpool.Pool) {
 			discovery_source_schedule,
 			discovery_source_state,
 			crawl_runs,
-			verification_queue
+			verification_queue,
+			domain_inflight_leases
 		RESTART IDENTITY CASCADE
 	`); err != nil {
 		t.Fatalf("reset automatic fixture data: %v", err)

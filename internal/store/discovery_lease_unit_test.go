@@ -634,9 +634,9 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				)
 			}
 
-			if len(tx.claimArgs) != 6 {
+			if len(tx.claimArgs) != 5 {
 				t.Fatalf(
-					"claim argument count = %d, want 6",
+					"claim argument count = %d, want 5",
 					len(tx.claimArgs),
 				)
 			}
@@ -770,10 +770,6 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 	t.Run(
 		"invalid stored origin",
 		func(t *testing.T) {
-			expiresAt := now.Add(
-				leaseDuration,
-			)
-
 			tx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{},
@@ -788,9 +784,8 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 					{
 						values: []any{
 							"ftp://example.com",
-							int64(1),
-							now,
-							expiresAt,
+							false,
+							int64(0),
 						},
 					},
 				},
@@ -855,6 +850,18 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 						values: []any{
 							false,
 							false,
+						},
+					},
+					{
+						values: []any{
+							"https://example.com",
+							false,
+							int64(6),
+						},
+					},
+					{
+						values: []any{
+							"example.com",
 						},
 					},
 					{
@@ -935,6 +942,18 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 						values: []any{
 							false,
 							false,
+						},
+					},
+					{
+						values: []any{
+							"https://example.com",
+							false,
+							int64(6),
+						},
+					},
+					{
+						values: []any{
+							"example.com",
 						},
 					},
 					{
@@ -1022,6 +1041,18 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 						values: []any{
 							false,
 							false,
+						},
+					},
+					{
+						values: []any{
+							"https://example.com",
+							false,
+							int64(6),
+						},
+					},
+					{
+						values: []any{
+							"example.com",
 						},
 					},
 					{
@@ -1138,7 +1169,7 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				"locked_state AS",
 				"FOR UPDATE OF state",
 				"source_state.lease_expires_at IS NULL OR source_state.lease_expires_at <= $1",
-				"WHERE discovery_source_state. lease_expires_at IS NULL OR discovery_source_state. lease_expires_at <= $1",
+				"candidate.lease_generation",
 			} {
 				if !strings.Contains(
 					normalizedQuery,
@@ -1155,39 +1186,20 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 			for _, fragment := range []string{
 				"WITH verified_candidate AS",
 				"seeded_candidate AS",
-				"FROM candidate",
+				"INSERT INTO discovery_source_state",
 				"automatically_discovered",
+				"SET last_attempted_at =",
 			} {
 				if strings.Contains(
 					normalizedQuery,
 					fragment,
 				) {
 					t.Fatalf(
-						"claim query contains stale scheduling dependency %q: %s",
+						"claim select contains unexpected fragment %q: %s",
 						fragment,
 						normalizedQuery,
 					)
 				}
-			}
-
-			if !strings.Contains(
-				normalizedQuery,
-				"lease_generation = discovery_source_state. lease_generation + 1",
-			) {
-				t.Fatalf(
-					"claim query does not advance lease generation: %s",
-					normalizedQuery,
-				)
-			}
-
-			if strings.Contains(
-				normalizedQuery,
-				"SET last_attempted_at =",
-			) {
-				t.Fatalf(
-					"claim query consumes last_attempted_at: %s",
-					normalizedQuery,
-				)
 			}
 
 			normalizedCleanupQuery := strings.Join(
@@ -1281,9 +1293,9 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				)
 			}
 
-			if len(tx.claimArgs) != 6 {
+			if len(tx.claimArgs) != 5 {
 				t.Fatalf(
-					"claim argument count = %d, want 6",
+					"claim argument count = %d, want 5",
 					len(tx.claimArgs),
 				)
 			}
@@ -1314,11 +1326,10 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				)
 			}
 
-			if got, ok := tx.claimArgs[4].(time.Time); !ok ||
-				!got.Equal(wantExpiresAt) {
+			if lease.ExpiresAt != wantExpiresAt {
 				t.Fatalf(
-					"claim expiration argument = %#v, want %v",
-					tx.claimArgs[4],
+					"claim lease expiration = %v, want %v",
+					lease.ExpiresAt,
 					wantExpiresAt,
 				)
 			}

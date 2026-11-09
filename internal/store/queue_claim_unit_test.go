@@ -473,11 +473,6 @@ func TestQueueClaimWithoutDatabase(t *testing.T) {
 	t.Run(
 		"invalid stored origin",
 		func(t *testing.T) {
-			claimedAt := now
-			expiresAt := now.Add(
-				10 * time.Minute,
-			)
-
 			tx := &discoveryPolicyUnitTx{
 				rowResults: []discoveryUnitRow{
 					{
@@ -488,10 +483,7 @@ func TestQueueClaimWithoutDatabase(t *testing.T) {
 					{
 						values: []any{
 							"ftp://example.com",
-							workerID,
-							int64(1),
-							claimedAt,
-							expiresAt,
+							int64(0),
 						},
 					},
 				},
@@ -569,6 +561,16 @@ func TestQueueClaimWithoutDatabase(t *testing.T) {
 					{
 						values: []any{
 							"https://example.com",
+							int64(6),
+						},
+					},
+					{
+						values: []any{
+							"example.com",
+						},
+					},
+					{
+						values: []any{
 							workerID,
 							int64(7),
 							claimedAt,

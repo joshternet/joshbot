@@ -474,6 +474,11 @@ func TestRenewDiscoverySourceLeaseWithoutDatabase(
 			baseTx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{},
+					{
+						tag: pgconn.NewCommandTag(
+							"UPDATE 1",
+						),
+					},
 				},
 				rowResults: []discoveryUnitRow{
 					{

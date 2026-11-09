@@ -292,13 +292,20 @@ func (q *Queue) Claim(
 				return nil
 			}
 
-			var storedOrigin string
+			skippedOrigins := make([]string, 0)
+			skippedDomains := make(map[string]struct{})
+			for {
+				var (
+					storedOrigin string
+					currentGen   int64
+				)
 
-			scanErr := tx.QueryRow(
-				ctx,
-				`
-					WITH candidate AS (
-						SELECT origin
+				scanErr := tx.QueryRow(
+					ctx,
+					`
+						SELECT
+							origin,
+							lease_generation
 						FROM verification_queue
 						WHERE available_at <= $1
 							AND (
@@ -319,7 +326,10 @@ func (q *Queue) Claim(
 							)
 							AND (
 								last_claimed_at IS NULL
-								OR last_claimed_at <= $4
+								OR last_claimed_at <= $2
+							)
+							AND NOT (
+								origin = ANY ($3::text[])
 							)
 						ORDER BY
 							CASE
@@ -330,40 +340,23 @@ func (q *Queue) Claim(
 							origin ASC
 						FOR UPDATE SKIP LOCKED
 						LIMIT 1
-					)
-					UPDATE verification_queue AS queued
-					SET
-						lease_generation =
-							queued.lease_generation + 1,
-						lease_owner = $2,
-						lease_expires_at = $3,
-						last_claimed_at = $1
-					FROM candidate
-					WHERE queued.origin = candidate.origin
-					RETURNING
-						queued.origin,
-						queued.lease_owner,
-						queued.lease_generation,
-						queued.last_claimed_at,
-						queued.lease_expires_at
-				`,
-				now,
-				workerID,
-				expiresAt,
-				politeBefore,
-			).Scan(
-				&storedOrigin,
-				&lease.WorkerID,
-				&lease.Generation,
-				&lease.ClaimedAt,
-				&lease.ExpiresAt,
-			)
+					`,
+					now,
+					politeBefore,
+					skippedOrigins,
+				).Scan(
+					&storedOrigin,
+					&currentGen,
+				)
 
-			if errors.Is(scanErr, pgx.ErrNoRows) {
-				return nil
-			}
+				if errors.Is(scanErr, pgx.ErrNoRows) {
+					return nil
+				}
 
-			if scanErr == nil {
+				if scanErr != nil {
+					return scanErr
+				}
+
 				source, parseErr := origin.Parse(
 					storedOrigin,
 				)
@@ -374,15 +367,76 @@ func (q *Queue) Claim(
 					)
 				}
 
-				lease.Origin = source
-				lease.ClaimedAt =
-					lease.ClaimedAt.UTC()
-				lease.ExpiresAt =
-					lease.ExpiresAt.UTC()
-				found = true
-			}
+				domainKey := domainInflightKey(source)
+				if _, busy := skippedDomains[domainKey]; busy {
+					skippedOrigins = append(
+						skippedOrigins,
+						storedOrigin,
+					)
+					continue
+				}
 
-			return scanErr
+				nextGeneration := currentGen + 1
+				acquired, acquireErr := acquireDomainInflight(
+					ctx,
+					tx,
+					domainKey,
+					source,
+					workerID,
+					nextGeneration,
+					now,
+					expiresAt,
+				)
+				if acquireErr != nil {
+					return acquireErr
+				}
+
+				if !acquired {
+					skippedDomains[domainKey] = struct{}{}
+					skippedOrigins = append(
+						skippedOrigins,
+						storedOrigin,
+					)
+					continue
+				}
+
+				scanErr = tx.QueryRow(
+					ctx,
+					`
+						UPDATE verification_queue
+						SET
+							lease_generation = $2,
+							lease_owner = $3,
+							lease_expires_at = $4,
+							last_claimed_at = $5
+						WHERE origin = $1
+						RETURNING
+							lease_owner,
+							lease_generation,
+							last_claimed_at,
+							lease_expires_at
+					`,
+					storedOrigin,
+					nextGeneration,
+					workerID,
+					expiresAt,
+					now,
+				).Scan(
+					&lease.WorkerID,
+					&lease.Generation,
+					&lease.ClaimedAt,
+					&lease.ExpiresAt,
+				)
+				if scanErr != nil {
+					return scanErr
+				}
+
+				lease.Origin = source
+				lease.ClaimedAt = lease.ClaimedAt.UTC()
+				lease.ExpiresAt = lease.ExpiresAt.UTC()
+				found = true
+				return nil
+			}
 		},
 	)
 	if err != nil {
@@ -411,57 +465,90 @@ func (q *Queue) Renew(
 		return Lease{}, errInvalidLease
 	}
 
-	now, err := q.now(ctx)
-	if err != nil {
-		return Lease{}, err
-	}
-
-	candidateExpiresAt := now.Add(
-		q.config.LeaseDuration,
-	).UTC()
-
 	renewed := Lease{
 		Origin: lease.Origin,
 	}
 
-	err = q.pool.QueryRow(
+	err := pgx.BeginFunc(
 		ctx,
-		`
-			UPDATE verification_queue
-			SET lease_expires_at = GREATEST(
-				lease_expires_at,
-				$5
-			)
-			WHERE origin = $1
-				AND lease_owner = $2
-				AND lease_generation = $3
-				AND lease_expires_at > $4
-				AND (
-					mode = 'recurring'
-					OR NOT EXISTS (
-						SELECT 1 FROM discovery_source_state
-						WHERE source_origin = verification_queue.origin
-							AND crawl_blocked
+		q.pool,
+		func(tx pgx.Tx) error {
+			now, err := q.claimTime(ctx, tx)
+			if err != nil {
+				return err
+			}
+
+			candidateExpiresAt := now.Add(
+				q.config.LeaseDuration,
+			).UTC()
+
+			err = tx.QueryRow(
+				ctx,
+				`
+					UPDATE verification_queue
+					SET lease_expires_at = GREATEST(
+						lease_expires_at,
+						$5
 					)
-				)
-			RETURNING
-				lease_owner,
-				lease_generation,
-				last_claimed_at,
-				lease_expires_at
-		`,
-		lease.Origin.String(),
-		lease.WorkerID,
-		lease.Generation,
-		now,
-		candidateExpiresAt,
-	).Scan(
-		&renewed.WorkerID,
-		&renewed.Generation,
-		&renewed.ClaimedAt,
-		&renewed.ExpiresAt,
+					WHERE origin = $1
+						AND lease_owner = $2
+						AND lease_generation = $3
+						AND lease_expires_at > $4
+						AND (
+							mode = 'recurring'
+							OR NOT EXISTS (
+								SELECT 1 FROM discovery_source_state
+								WHERE source_origin = verification_queue.origin
+									AND crawl_blocked
+							)
+						)
+					RETURNING
+						lease_owner,
+						lease_generation,
+						last_claimed_at,
+						lease_expires_at
+				`,
+				lease.Origin.String(),
+				lease.WorkerID,
+				lease.Generation,
+				now,
+				candidateExpiresAt,
+			).Scan(
+				&renewed.WorkerID,
+				&renewed.Generation,
+				&renewed.ClaimedAt,
+				&renewed.ExpiresAt,
+			)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrLeaseLost
+			}
+
+			if err != nil {
+				return err
+			}
+
+			renewed.ClaimedAt = renewed.ClaimedAt.UTC()
+			renewed.ExpiresAt = renewed.ExpiresAt.UTC()
+
+			if err := extendDomainInflight(
+				ctx,
+				tx,
+				domainInflightKey(lease.Origin),
+				lease.Origin,
+				lease.Generation,
+				renewed.ExpiresAt,
+			); err != nil {
+				if errors.Is(err, errDomainInflightLost) {
+					return ErrLeaseLost
+				}
+
+				return err
+			}
+
+			return nil
+		},
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, ErrLeaseLost) {
 		return Lease{}, ErrLeaseLost
 	}
 
@@ -471,9 +558,6 @@ func (q *Queue) Renew(
 			err,
 		)
 	}
-
-	renewed.ClaimedAt = renewed.ClaimedAt.UTC()
-	renewed.ExpiresAt = renewed.ExpiresAt.UTC()
 
 	return renewed, nil
 }
@@ -499,48 +583,72 @@ func (q *Queue) Reschedule(
 		return errInvalidAvailableAt
 	}
 
-	now, err := q.now(ctx)
-	if err != nil {
-		return err
+	err := pgx.BeginFunc(
+		ctx,
+		q.pool,
+		func(tx pgx.Tx) error {
+			now, err := q.claimTime(ctx, tx)
+			if err != nil {
+				return err
+			}
+
+			commandTag, err := tx.Exec(
+				ctx,
+				`
+					UPDATE verification_queue
+					SET
+						available_at = GREATEST(
+							$5,
+							last_claimed_at + make_interval(
+								secs => $6::double precision
+							)
+						),
+						consecutive_failures = 0,
+						last_failure_category = NULL,
+						next_attempt_at = NULL,
+						lease_owner = NULL,
+						lease_expires_at = NULL
+					WHERE origin = $1
+						AND lease_owner = $2
+						AND lease_generation = $3
+						AND lease_expires_at > $4
+				`,
+				lease.Origin.String(),
+				lease.WorkerID,
+				lease.Generation,
+				now,
+				availableAt.UTC(),
+				q.config.MinOriginInterval.Seconds(),
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"store: reschedule queue work: %w",
+					err,
+				)
+			}
+
+			if commandTag.RowsAffected() != 1 {
+				return ErrLeaseLost
+			}
+
+			return releaseDomainInflight(
+				ctx,
+				tx,
+				domainInflightKey(lease.Origin),
+				lease.Origin,
+				lease.Generation,
+			)
+		},
+	)
+	if errors.Is(err, ErrLeaseLost) {
+		return ErrLeaseLost
 	}
 
-	commandTag, err := q.pool.Exec(
-		ctx,
-		`
-			UPDATE verification_queue
-			SET
-				available_at = GREATEST(
-					$5,
-					last_claimed_at + make_interval(
-						secs => $6::double precision
-					)
-				),
-				consecutive_failures = 0,
-				last_failure_category = NULL,
-				next_attempt_at = NULL,
-				lease_owner = NULL,
-				lease_expires_at = NULL
-			WHERE origin = $1
-				AND lease_owner = $2
-				AND lease_generation = $3
-				AND lease_expires_at > $4
-		`,
-		lease.Origin.String(),
-		lease.WorkerID,
-		lease.Generation,
-		now,
-		availableAt.UTC(),
-		q.config.MinOriginInterval.Seconds(),
-	)
 	if err != nil {
 		return fmt.Errorf(
 			"store: reschedule queue work: %w",
 			err,
 		)
-	}
-
-	if commandTag.RowsAffected() != 1 {
-		return ErrLeaseLost
 	}
 
 	return nil
@@ -1034,7 +1142,13 @@ func (q *Queue) CompleteVerification(
 				return ErrLeaseLost
 			}
 
-			return nil
+			return releaseDomainInflight(
+				ctx,
+				tx,
+				domainInflightKey(lease.Origin),
+				lease.Origin,
+				lease.Generation,
+			)
 		},
 	)
 	if errors.Is(err, ErrLeaseLost) {

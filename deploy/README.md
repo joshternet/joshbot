@@ -285,13 +285,22 @@ from the heartbeat service slot.
 
 `JOSHBOT_SERVICE_INSTANCE_ID` identifies one logical worker or discovery slot
 in `crawl_service_heartbeats`. It must be non-empty after trimming, valid
-UTF-8, and no more than 128 bytes. Compose sets `worker` and `discovery`.
-When unset, the process generates `service-` followed by 16 lowercase
-hexadecimal characters. Keep Compose values stable across restarts of the
-same slot. Concurrent replicas must use distinct IDs. `started_at`
-distinguishes successive process generations that occupy one slot. Host
-overrides are `JOSHBOT_WORKER_SERVICE_INSTANCE_ID` and
-`JOSHBOT_DISCOVERY_SERVICE_INSTANCE_ID`.
+UTF-8, and no more than 128 bytes. Compose runs three verification workers
+(`worker`, `worker-2`, `worker-3`) plus `discovery`. When unset, the process
+generates `service-` followed by 16 lowercase hexadecimal characters. Keep
+Compose values stable across restarts of the same slot. Concurrent replicas
+must use distinct IDs. `started_at` distinguishes successive process
+generations that occupy one slot. Host overrides are
+`JOSHBOT_WORKER_SERVICE_INSTANCE_ID`,
+`JOSHBOT_WORKER_2_SERVICE_INSTANCE_ID`,
+`JOSHBOT_WORKER_3_SERVICE_INSTANCE_ID`, and
+`JOSHBOT_DISCOVERY_SERVICE_INSTANCE_ID`. A second discovery process needs its
+own distinct instance ID; Compose ships one discovery service by default.
+
+Claim exclusivity is one in-flight origin per registrable domain or private
+public suffix across verification and discovery. That is separate from
+`JOSHBOT_CRAWL_REQUEST_DELAY`, which still paces requests per origin and
+neighborhood inside each process.
 
 Review discovery timing:
 

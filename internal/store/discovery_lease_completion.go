@@ -140,6 +140,16 @@ func (s *DiscoveryStore) CompleteDiscoverySourceLeaseRetry(
 				return ErrDiscoverySourceLeaseLost
 			}
 
+			if err := releaseDomainInflight(
+				ctx,
+				tx,
+				domainInflightKey(lease.Origin),
+				lease.Origin,
+				lease.Generation,
+			); err != nil {
+				return err
+			}
+
 			if _, err := tx.Exec(
 				ctx,
 				`

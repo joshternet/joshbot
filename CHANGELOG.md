@@ -8,6 +8,15 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- Deployment smoke starts and stops all three verification workers
+  (`worker`, `worker-2`, `worker-3`) before seeding and restore checks, so
+  leftover replicas cannot claim scheduled origins and overwrite fixture
+  observation state.
+- Unit and integration coverage exercise domain-inflight
+  acquire/extend/release failures, busy-neighborhood claim skips, discovery
+  upsert races that release the domain slot, renew/complete paths that map
+  domain lease loss into origin lease-lost errors, and NeighborhoodKey
+  private-suffix / bare-ICANN hosts.
 - Independent integration coverage now re-enters domain-avoid unit paths and
   deferred-probe / regex-exclude store paths, and exercises worker and
   discovery fleet-budget construction failures that were only covered by unit
@@ -15,6 +24,14 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Added
 
+- Verification and discovery claims share one in-flight origin per registrable
+  domain or private public suffix (`domain_inflight_leases`, migration
+  `0032`). Sibling hosts wait until completion or lease expiry. Busy
+  neighborhoods are skipped by domain key until a free candidate is found.
+  Discovery acquires the domain slot before mutating source lease state.
+  Compose runs three verification workers with distinct
+  `JOSHBOT_SERVICE_INSTANCE_ID` values (`worker`, `worker-2`, `worker-3`)
+  (#128).
 - Domain-avoid rules accept hostname glob strings (`cbd-hash*`,
   `*bloginder.com`) and explicit RE2 patterns (`re:^cbd-hash`). Exact domain
   suffixes and `blogspot.*` families keep their prior meaning. Migration
@@ -44,11 +61,12 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   access and no GitHub token.
 - `registry-publish` publishes each new snapshot. An unchanged registry
   does not create a commit. It has the GitHub token and no database access.
-- The embedded schema now contains thirty-one migrations, `0001` through
-  `0031`, including durable candidate admission state, domain-avoid LIKE
+- The embedded schema now contains thirty-two migrations, `0001` through
+  `0032`, including durable candidate admission state, domain-avoid LIKE
   hardening, verification-queue `abandoned` events, removal of the WordPress
   domain-avoid rules, the running build identity on service heartbeats, crawl
-  fleet budget state, and hostname glob/regex domain-avoid patterns.
+  fleet budget state, hostname glob/regex domain-avoid patterns, and shared
+  domain in-flight leases.
 - Discovery and worker heartbeats record `build_version` and `build_commit`
   for the process that is running. The image build stamps those values from
   `VERSION` and `VCS_REF`.

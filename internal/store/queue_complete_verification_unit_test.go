@@ -623,6 +623,11 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 							"UPDATE 1",
 						),
 					},
+					{
+						tag: pgconn.NewCommandTag(
+							"DELETE 1",
+						),
+					},
 				},
 			}
 
@@ -671,6 +676,11 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 					{
 						tag: pgconn.NewCommandTag(
 							"UPDATE 1",
+						),
+					},
+					{
+						tag: pgconn.NewCommandTag(
+							"DELETE 1",
 						),
 					},
 				},
@@ -735,6 +745,11 @@ func TestCompleteVerificationUsesStaleParticipantRecheckWithoutDatabase(
 					"UPDATE 1",
 				),
 			},
+			{
+				tag: pgconn.NewCommandTag(
+					"DELETE 1",
+				),
+			},
 		},
 	}
 	tx := &completeVerificationCaptureTx{
@@ -765,9 +780,9 @@ func TestCompleteVerificationUsesStaleParticipantRecheckWithoutDatabase(
 		)
 	}
 
-	if len(tx.execArguments) != 1 {
+	if len(tx.execArguments) != 2 {
 		t.Fatalf(
-			"completion Exec count = %d, want 1",
+			"completion Exec count = %d, want 2",
 			len(tx.execArguments),
 		)
 	}
@@ -854,6 +869,11 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 					"UPDATE 1",
 				),
 			},
+			{
+				tag: pgconn.NewCommandTag(
+					"DELETE 1",
+				),
+			},
 		},
 	}
 	tx := &completeVerificationCaptureTx{
@@ -883,9 +903,9 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 		)
 	}
 
-	if len(tx.execArguments) != 1 {
+	if len(tx.execArguments) != 2 {
 		t.Fatalf(
-			"completion Exec count = %d, want 1",
+			"completion Exec count = %d, want 2",
 			len(tx.execArguments),
 		)
 	}
@@ -925,9 +945,9 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 		)
 	}
 
-	if len(tx.execQueries) != 1 {
+	if len(tx.execQueries) != 2 {
 		t.Fatalf(
-			"completion query count = %d, want 1",
+			"completion query count = %d, want 2",
 			len(tx.execQueries),
 		)
 	}

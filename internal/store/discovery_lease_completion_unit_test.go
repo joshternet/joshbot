@@ -533,6 +533,11 @@ func TestCompleteDiscoverySourceLeaseWithoutDatabase(
 							"UPDATE 1",
 						),
 					},
+					{
+						tag: pgconn.NewCommandTag(
+							"DELETE 1",
+						),
+					},
 					{},
 				},
 			}
@@ -712,6 +717,11 @@ func TestCompleteDiscoverySourceLeaseWithoutDatabase(
 							"UPDATE 1",
 						),
 					},
+					{
+						tag: pgconn.NewCommandTag(
+							"DELETE 1",
+						),
+					},
 					{},
 				},
 			}
@@ -823,6 +833,11 @@ func TestCompleteDiscoverySourceLeaseWithoutDatabase(
 					{
 						tag: pgconn.NewCommandTag(
 							"UPDATE 1",
+						),
+					},
+					{
+						tag: pgconn.NewCommandTag(
+							"DELETE 1",
 						),
 					},
 					{
