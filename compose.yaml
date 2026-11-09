@@ -5,6 +5,49 @@ x-joshbot-image: &joshbot-image
     context: .
     dockerfile: Dockerfile
 
+x-joshbot-worker: &joshbot-worker
+  <<: *joshbot-image
+  command:
+    - worker
+  restart: unless-stopped
+  stop_signal: SIGTERM
+  stop_grace_period: 30s
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  environment: &joshbot-worker-environment
+    JOSHBOT_DATABASE_URL: postgres://joshbot_app@postgres:5432/joshbot?sslmode=disable
+    JOSHBOT_DATABASE_PASSWORD_FILE: /run/secrets/joshbot_app_password
+    JOSHBOT_WEB_BOT_AUTH_MODE: required
+    JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE: /run/secrets/joshbot_web_bot_auth_active_private_key
+    JOSHBOT_LEASE_DURATION: ${JOSHBOT_LEASE_DURATION:-5m}
+    JOSHBOT_MIN_ORIGIN_INTERVAL: ${JOSHBOT_MIN_ORIGIN_INTERVAL:-1m}
+    JOSHBOT_CRAWL_REQUEST_DELAY: ${JOSHBOT_CRAWL_REQUEST_DELAY:-1s}
+    JOSHBOT_CRAWL_MAX_REQUESTS_PER_SECOND: ${JOSHBOT_CRAWL_MAX_REQUESTS_PER_SECOND:-1}
+    JOSHBOT_CRAWL_MAX_BYTES_PER_DAY: ${JOSHBOT_CRAWL_MAX_BYTES_PER_DAY:-1073741824}
+    JOSHBOT_ROBOTS_MAX_CRAWL_DELAY: ${JOSHBOT_ROBOTS_MAX_CRAWL_DELAY:-30s}
+    JOSHBOT_HTTP_DIAL_TIMEOUT: ${JOSHBOT_HTTP_DIAL_TIMEOUT:-5s}
+    JOSHBOT_HTTP_TLS_HANDSHAKE_TIMEOUT: ${JOSHBOT_HTTP_TLS_HANDSHAKE_TIMEOUT:-10s}
+    JOSHBOT_HTTP_RESPONSE_HEADER_TIMEOUT: ${JOSHBOT_HTTP_RESPONSE_HEADER_TIMEOUT:-15s}
+    JOSHBOT_POLL_INTERVAL: ${JOSHBOT_POLL_INTERVAL:-30s}
+    JOSHBOT_JOB_TIMEOUT: ${JOSHBOT_JOB_TIMEOUT:-2m}
+    JOSHBOT_COMPLETION_GRACE: ${JOSHBOT_COMPLETION_GRACE:-30s}
+    JOSHBOT_RECHECK_INTERVAL: ${JOSHBOT_RECHECK_INTERVAL:-24h}
+    JOSHBOT_FIRST_REPROBE_INTERVAL: ${JOSHBOT_FIRST_REPROBE_INTERVAL:-12h}
+  secrets:
+    - joshbot_app_password
+    - joshbot_web_bot_auth_active_private_key
+  networks:
+    - database
+    - egress
+  depends_on:
+    postgres:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+
 services:
   postgres:
     image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
@@ -67,48 +110,25 @@ services:
         condition: service_healthy
 
   worker:
-    <<: *joshbot-image
-    command:
-      - worker
+    <<: *joshbot-worker
     restart: unless-stopped
-    stop_signal: SIGTERM
-    stop_grace_period: 30s
-    read_only: true
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
     environment:
-      JOSHBOT_DATABASE_URL: postgres://joshbot_app@postgres:5432/joshbot?sslmode=disable
-      JOSHBOT_DATABASE_PASSWORD_FILE: /run/secrets/joshbot_app_password
-      JOSHBOT_WEB_BOT_AUTH_MODE: required
-      JOSHBOT_WEB_BOT_AUTH_ACTIVE_PRIVATE_KEY_FILE: /run/secrets/joshbot_web_bot_auth_active_private_key
+      <<: *joshbot-worker-environment
       JOSHBOT_SERVICE_INSTANCE_ID: ${JOSHBOT_WORKER_SERVICE_INSTANCE_ID:-worker}
-      JOSHBOT_LEASE_DURATION: ${JOSHBOT_LEASE_DURATION:-5m}
-      JOSHBOT_MIN_ORIGIN_INTERVAL: ${JOSHBOT_MIN_ORIGIN_INTERVAL:-1m}
-      JOSHBOT_CRAWL_REQUEST_DELAY: ${JOSHBOT_CRAWL_REQUEST_DELAY:-1s}
-      JOSHBOT_CRAWL_MAX_REQUESTS_PER_SECOND: ${JOSHBOT_CRAWL_MAX_REQUESTS_PER_SECOND:-1}
-      JOSHBOT_CRAWL_MAX_BYTES_PER_DAY: ${JOSHBOT_CRAWL_MAX_BYTES_PER_DAY:-1073741824}
-      JOSHBOT_ROBOTS_MAX_CRAWL_DELAY: ${JOSHBOT_ROBOTS_MAX_CRAWL_DELAY:-30s}
-      JOSHBOT_HTTP_DIAL_TIMEOUT: ${JOSHBOT_HTTP_DIAL_TIMEOUT:-5s}
-      JOSHBOT_HTTP_TLS_HANDSHAKE_TIMEOUT: ${JOSHBOT_HTTP_TLS_HANDSHAKE_TIMEOUT:-10s}
-      JOSHBOT_HTTP_RESPONSE_HEADER_TIMEOUT: ${JOSHBOT_HTTP_RESPONSE_HEADER_TIMEOUT:-15s}
-      JOSHBOT_POLL_INTERVAL: ${JOSHBOT_POLL_INTERVAL:-30s}
-      JOSHBOT_JOB_TIMEOUT: ${JOSHBOT_JOB_TIMEOUT:-2m}
-      JOSHBOT_COMPLETION_GRACE: ${JOSHBOT_COMPLETION_GRACE:-30s}
-      JOSHBOT_RECHECK_INTERVAL: ${JOSHBOT_RECHECK_INTERVAL:-24h}
-      JOSHBOT_FIRST_REPROBE_INTERVAL: ${JOSHBOT_FIRST_REPROBE_INTERVAL:-12h}
-    secrets:
-      - joshbot_app_password
-      - joshbot_web_bot_auth_active_private_key
-    networks:
-      - database
-      - egress
-    depends_on:
-      postgres:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+
+  worker-2:
+    <<: *joshbot-worker
+    restart: unless-stopped
+    environment:
+      <<: *joshbot-worker-environment
+      JOSHBOT_SERVICE_INSTANCE_ID: ${JOSHBOT_WORKER_2_SERVICE_INSTANCE_ID:-worker-2}
+
+  worker-3:
+    <<: *joshbot-worker
+    restart: unless-stopped
+    environment:
+      <<: *joshbot-worker-environment
+      JOSHBOT_SERVICE_INSTANCE_ID: ${JOSHBOT_WORKER_3_SERVICE_INSTANCE_ID:-worker-3}
 
   discovery:
     <<: *joshbot-image

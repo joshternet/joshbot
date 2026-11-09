@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestRenewWithoutDatabase(t *testing.T) {
@@ -101,7 +102,9 @@ func TestRenewWithoutDatabase(t *testing.T) {
 			)
 
 			queue := queueSimpleDatabaseStore(
-				&discoveryUnitDatabase{},
+				discoveryPolicyDatabase(
+					&discoveryPolicyUnitTx{},
+				),
 				queueUnitClock{
 					err: testErr,
 				},
@@ -125,7 +128,7 @@ func TestRenewWithoutDatabase(t *testing.T) {
 			) ||
 				!strings.Contains(
 					err.Error(),
-					"store: read queue clock",
+					"store: read queue claim clock",
 				) {
 				t.Fatalf(
 					"Renew() error = %v",
@@ -138,7 +141,7 @@ func TestRenewWithoutDatabase(t *testing.T) {
 	t.Run(
 		"lease lost",
 		func(t *testing.T) {
-			database := &discoveryUnitDatabase{
+			tx := &discoveryPolicyUnitTx{
 				rowResults: []discoveryUnitRow{
 					{
 						err: pgx.ErrNoRows,
@@ -147,7 +150,7 @@ func TestRenewWithoutDatabase(t *testing.T) {
 			}
 
 			queue := queueSimpleDatabaseStore(
-				database,
+				discoveryPolicyDatabase(tx),
 				queueUnitClock{
 					now: now,
 				},
@@ -185,7 +188,7 @@ func TestRenewWithoutDatabase(t *testing.T) {
 				"test renew database failure",
 			)
 
-			database := &discoveryUnitDatabase{
+			tx := &discoveryPolicyUnitTx{
 				rowResults: []discoveryUnitRow{
 					{
 						err: testErr,
@@ -194,7 +197,7 @@ func TestRenewWithoutDatabase(t *testing.T) {
 			}
 
 			queue := queueSimpleDatabaseStore(
-				database,
+				discoveryPolicyDatabase(tx),
 				queueUnitClock{
 					now: now,
 				},
@@ -248,7 +251,7 @@ func TestRenewWithoutDatabase(t *testing.T) {
 				20 * time.Minute,
 			)
 
-			database := &discoveryUnitDatabase{
+			tx := &discoveryPolicyUnitTx{
 				rowResults: []discoveryUnitRow{
 					{
 						values: []any{
@@ -259,10 +262,17 @@ func TestRenewWithoutDatabase(t *testing.T) {
 						},
 					},
 				},
+				execResults: []discoveryUnitExecResult{
+					{
+						tag: pgconn.NewCommandTag(
+							"UPDATE 1",
+						),
+					},
+				},
 			}
 
 			queue := queueSimpleDatabaseStore(
-				database,
+				discoveryPolicyDatabase(tx),
 				queueUnitClock{
 					now: now,
 				},

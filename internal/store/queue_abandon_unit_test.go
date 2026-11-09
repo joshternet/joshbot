@@ -89,7 +89,9 @@ func TestAbandonVerificationWithoutDatabase(
 			)
 
 			queue := queueSimpleDatabaseStore(
-				&discoveryUnitDatabase{},
+				discoveryPolicyDatabase(
+					&discoveryPolicyUnitTx{},
+				),
 				queueUnitClock{
 					err: testErr,
 				},
@@ -106,7 +108,7 @@ func TestAbandonVerificationWithoutDatabase(
 			) ||
 				!strings.Contains(
 					err.Error(),
-					"store: read queue clock",
+					"store: read queue claim clock",
 				) {
 				t.Fatalf(
 					"AbandonVerification() error = %v",
@@ -123,7 +125,7 @@ func TestAbandonVerificationWithoutDatabase(
 				"test abandon database failure",
 			)
 
-			database := &discoveryUnitDatabase{
+			tx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{
 						err: testErr,
@@ -132,7 +134,7 @@ func TestAbandonVerificationWithoutDatabase(
 			}
 
 			queue := queueSimpleDatabaseStore(
-				database,
+				discoveryPolicyDatabase(tx),
 				queueUnitClock{
 					now: now,
 				},
@@ -162,7 +164,7 @@ func TestAbandonVerificationWithoutDatabase(
 	t.Run(
 		"lease lost",
 		func(t *testing.T) {
-			database := &discoveryUnitDatabase{
+			tx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{
 						tag: pgconn.NewCommandTag(
@@ -173,7 +175,7 @@ func TestAbandonVerificationWithoutDatabase(
 			}
 
 			queue := queueSimpleDatabaseStore(
-				database,
+				discoveryPolicyDatabase(tx),
 				queueUnitClock{
 					now: now,
 				},
@@ -200,18 +202,23 @@ func TestAbandonVerificationWithoutDatabase(
 	t.Run(
 		"success",
 		func(t *testing.T) {
-			database := &discoveryUnitDatabase{
+			tx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{
 						tag: pgconn.NewCommandTag(
 							"UPDATE 1",
 						),
 					},
+					{
+						tag: pgconn.NewCommandTag(
+							"DELETE 1",
+						),
+					},
 				},
 			}
 
 			queue := queueSimpleDatabaseStore(
-				database,
+				discoveryPolicyDatabase(tx),
 				queueUnitClock{
 					now: now,
 				},

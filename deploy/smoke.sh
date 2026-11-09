@@ -535,7 +535,7 @@ compose up \
   --detach \
   --wait
 
-pass "PostgreSQL, migration, worker, discovery, and registry services started successfully"
+pass "PostgreSQL, migration, workers, discovery, and registry services started successfully"
 
 migrate_container="$(
   compose ps \
@@ -549,6 +549,20 @@ worker_container="$(
     --all \
     --quiet \
     worker
+)"
+
+worker_2_container="$(
+  compose ps \
+    --all \
+    --quiet \
+    worker-2
+)"
+
+worker_3_container="$(
+  compose ps \
+    --all \
+    --quiet \
+    worker-3
 )"
 
 discovery_container="$(
@@ -574,6 +588,14 @@ assert_nonempty \
   "worker container was not created"
 
 assert_nonempty \
+  "$worker_2_container" \
+  "worker-2 container was not created"
+
+assert_nonempty \
+  "$worker_3_container" \
+  "worker-3 container was not created"
+
+assert_nonempty \
   "$discovery_container" \
   "discovery container was not created"
 
@@ -597,6 +619,16 @@ assert_equal \
   "worker container state"
 
 assert_equal \
+  "$(docker inspect "$worker_2_container" --format '{{.State.Status}}')" \
+  "running" \
+  "worker-2 container state"
+
+assert_equal \
+  "$(docker inspect "$worker_3_container" --format '{{.State.Status}}')" \
+  "running" \
+  "worker-3 container state"
+
+assert_equal \
   "$(docker inspect "$worker_container" --format '{{.RestartCount}}')" \
   "0" \
   "worker restart count"
@@ -618,6 +650,18 @@ worker_environment="$(
     --format '{{range .Config.Env}}{{println .}}{{end}}'
 )"
 
+worker_2_environment="$(
+  docker inspect \
+    "$worker_2_container" \
+    --format '{{range .Config.Env}}{{println .}}{{end}}'
+)"
+
+worker_3_environment="$(
+  docker inspect \
+    "$worker_3_container" \
+    --format '{{range .Config.Env}}{{println .}}{{end}}'
+)"
+
 for expected_setting in \
   'JOSHBOT_CRAWL_MAX_REQUESTS_PER_SECOND=1' \
   'JOSHBOT_CRAWL_MAX_BYTES_PER_DAY=1048576' \
@@ -630,6 +674,18 @@ for expected_setting in \
     fail "worker environment is missing $expected_setting"
   fi
 done
+
+if ! grep -Fxq \
+  'JOSHBOT_SERVICE_INSTANCE_ID=worker-2' \
+  <<<"$worker_2_environment"; then
+  fail "worker-2 environment is missing JOSHBOT_SERVICE_INSTANCE_ID=worker-2"
+fi
+
+if ! grep -Fxq \
+  'JOSHBOT_SERVICE_INSTANCE_ID=worker-3' \
+  <<<"$worker_3_environment"; then
+  fail "worker-3 environment is missing JOSHBOT_SERVICE_INSTANCE_ID=worker-3"
+fi
 
 for expected_setting in \
   'JOSHBOT_CRAWL_MAX_DEPTH=2' \
@@ -897,9 +953,30 @@ compose \
 
 pass "one-shot discovery succeeded with no verified source and made no public request"
 
-compose stop registry-export registry-publish worker discovery
+compose stop \
+  registry-export \
+  registry-publish \
+  worker \
+  worker-2 \
+  worker-3 \
+  discovery
 
-pass "registry, worker, and discovery were stopped before seeding; smoke test performs no public crawl or publication"
+assert_equal \
+  "$(docker inspect "$worker_container" --format '{{.State.Status}}')" \
+  "exited" \
+  "worker stopped before seeding"
+
+assert_equal \
+  "$(docker inspect "$worker_2_container" --format '{{.State.Status}}')" \
+  "exited" \
+  "worker-2 stopped before seeding"
+
+assert_equal \
+  "$(docker inspect "$worker_3_container" --format '{{.State.Status}}')" \
+  "exited" \
+  "worker-3 stopped before seeding"
+
+pass "registry, workers, and discovery were stopped before seeding; smoke test performs no public crawl or publication"
 
 compose \
   --profile tools \

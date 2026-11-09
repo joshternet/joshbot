@@ -14,7 +14,6 @@ func TestSchedulerEvictionAndPolitenessIntegration(t *testing.T) {
 	t.Run("robots redirect", TestCheckerPinsRedirectedRobotsSchedule)
 	t.Run("scheduled getter validation", TestScheduledHopGetterStopsWhenWaitFails)
 	t.Run("input validation", TestCheckerRejectsInvalidInputs)
-	t.Run("neighborhood key", TestNeighborhoodKey)
 	t.Run("ip hosts", TestIPHostsDoNotShareANeighborhood)
 	t.Run("shared minimum", TestSiblingHostsShareOperatorMinimum)
 	t.Run("origin crawl delay", TestSiblingDoesNotInheritOriginCrawlDelay)

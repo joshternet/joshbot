@@ -119,7 +119,9 @@ func TestRescheduleWithoutDatabase(t *testing.T) {
 			)
 
 			queue := queueSimpleDatabaseStore(
-				&discoveryUnitDatabase{},
+				discoveryPolicyDatabase(
+					&discoveryPolicyUnitTx{},
+				),
 				queueUnitClock{
 					err: testErr,
 				},
@@ -137,7 +139,7 @@ func TestRescheduleWithoutDatabase(t *testing.T) {
 			) ||
 				!strings.Contains(
 					err.Error(),
-					"store: read queue clock",
+					"store: read queue claim clock",
 				) {
 				t.Fatalf(
 					"Reschedule() error = %v",
@@ -154,7 +156,7 @@ func TestRescheduleWithoutDatabase(t *testing.T) {
 				"test reschedule database failure",
 			)
 
-			database := &discoveryUnitDatabase{
+			tx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{
 						err: testErr,
@@ -163,7 +165,7 @@ func TestRescheduleWithoutDatabase(t *testing.T) {
 			}
 
 			queue := queueSimpleDatabaseStore(
-				database,
+				discoveryPolicyDatabase(tx),
 				queueUnitClock{
 					now: now,
 				},
@@ -194,7 +196,7 @@ func TestRescheduleWithoutDatabase(t *testing.T) {
 	t.Run(
 		"lease lost",
 		func(t *testing.T) {
-			database := &discoveryUnitDatabase{
+			tx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{
 						tag: pgconn.NewCommandTag(
@@ -205,7 +207,7 @@ func TestRescheduleWithoutDatabase(t *testing.T) {
 			}
 
 			queue := queueSimpleDatabaseStore(
-				database,
+				discoveryPolicyDatabase(tx),
 				queueUnitClock{
 					now: now,
 				},
@@ -233,18 +235,23 @@ func TestRescheduleWithoutDatabase(t *testing.T) {
 	t.Run(
 		"success",
 		func(t *testing.T) {
-			database := &discoveryUnitDatabase{
+			tx := &discoveryPolicyUnitTx{
 				execResults: []discoveryUnitExecResult{
 					{
 						tag: pgconn.NewCommandTag(
 							"UPDATE 1",
 						),
 					},
+					{
+						tag: pgconn.NewCommandTag(
+							"DELETE 1",
+						),
+					},
 				},
 			}
 
 			queue := queueSimpleDatabaseStore(
-				database,
+				discoveryPolicyDatabase(tx),
 				queueUnitClock{
 					now: now,
 				},

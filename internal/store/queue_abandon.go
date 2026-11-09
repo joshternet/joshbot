@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // AbandonVerification releases an authoritative verification lease without
@@ -28,37 +31,61 @@ func (q *Queue) AbandonVerification(
 		return errInvalidLease
 	}
 
-	now, err := q.now(ctx)
-	if err != nil {
-		return err
+	err := pgx.BeginFunc(
+		ctx,
+		q.pool,
+		func(tx pgx.Tx) error {
+			now, err := q.claimTime(ctx, tx)
+			if err != nil {
+				return err
+			}
+
+			commandTag, err := tx.Exec(
+				ctx,
+				`
+					UPDATE verification_queue
+					SET
+						lease_owner = NULL,
+						lease_expires_at = NULL
+					WHERE origin = $1
+						AND lease_owner = $2
+						AND lease_generation = $3
+						AND lease_expires_at > $4
+				`,
+				lease.Origin.String(),
+				lease.WorkerID,
+				lease.Generation,
+				now,
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"store: abandon verification lease: %w",
+					err,
+				)
+			}
+
+			if commandTag.RowsAffected() != 1 {
+				return ErrLeaseLost
+			}
+
+			return releaseDomainInflight(
+				ctx,
+				tx,
+				domainInflightKey(lease.Origin),
+				lease.Origin,
+				lease.Generation,
+			)
+		},
+	)
+	if errors.Is(err, ErrLeaseLost) {
+		return ErrLeaseLost
 	}
 
-	commandTag, err := q.pool.Exec(
-		ctx,
-		`
-			UPDATE verification_queue
-			SET
-				lease_owner = NULL,
-				lease_expires_at = NULL
-			WHERE origin = $1
-				AND lease_owner = $2
-				AND lease_generation = $3
-				AND lease_expires_at > $4
-		`,
-		lease.Origin.String(),
-		lease.WorkerID,
-		lease.Generation,
-		now,
-	)
 	if err != nil {
 		return fmt.Errorf(
 			"store: abandon verification lease: %w",
 			err,
 		)
-	}
-
-	if commandTag.RowsAffected() != 1 {
-		return ErrLeaseLost
 	}
 
 	return nil

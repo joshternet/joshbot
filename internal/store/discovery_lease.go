@@ -134,234 +134,324 @@ func (s *DiscoveryStore) ClaimDiscoverySourceLease(
 				s.automatic.Enabled &&
 					!automaticExpansionPaused
 
-			var storedOrigin string
+			skippedOrigins := make([]string, 0)
+			skippedDomains := make(map[string]struct{})
+			for {
+				var (
+					storedOrigin string
+					seeded       bool
+					currentGen   int64
+				)
 
-			scanErr := tx.QueryRow(
-				ctx,
-				`
-					WITH scheduled_candidate AS (
-						SELECT
-							schedule.source_origin,
-							source_state.last_attempted_at,
-							COALESCE(
-								source_state.seeded,
-								false
-							) AS seeded
-						FROM discovery_source_schedule
-							AS schedule
-						LEFT JOIN discovery_source_state
-							AS source_state
-							ON source_state.source_origin =
-								schedule.source_origin
-						LEFT JOIN LATERAL (
-							SELECT observation.outcome
-							FROM verification_observations
-								AS observation
-							WHERE observation.origin =
-								schedule.source_origin
-								AND observation.outcome IN (
-								'valid',
-								'absent',
-								'invalid',
-								'unsupported_version',
-								'cross_origin_redirect'
+				scanErr := tx.QueryRow(
+					ctx,
+					`
+						WITH scheduled_candidate AS (
+							SELECT
+								schedule.source_origin,
+								source_state.last_attempted_at,
+								COALESCE(
+									source_state.seeded,
+									false
+								) AS seeded,
+								COALESCE(
+									source_state.lease_generation,
+									0
+								) AS lease_generation
+							FROM discovery_source_schedule
+								AS schedule
+							LEFT JOIN discovery_source_state
+								AS source_state
+								ON source_state.source_origin =
+									schedule.source_origin
+							LEFT JOIN LATERAL (
+								SELECT observation.outcome
+								FROM verification_observations
+									AS observation
+								WHERE observation.origin =
+									schedule.source_origin
+									AND observation.outcome IN (
+									'valid',
+									'absent',
+									'invalid',
+									'unsupported_version',
+									'cross_origin_redirect'
+									)
+								ORDER BY
+									observation.observed_at DESC,
+									observation.id DESC
+								LIMIT 1
+							) AS effective ON true
+							CROSS JOIN LATERAL (
+								SELECT count(*) AS count
+								FROM (
+									SELECT 1
+									FROM verification_queue
+									WHERE `+activeProbeCapacityWhere("$1")+`
+									LIMIT $4::bigint
+								) AS pending_probe
+							) AS pending_probes
+							WHERE NOT COALESCE(
+									source_state.crawl_blocked,
+									false
+								)
+								AND (
+									source_state.next_attempt_at IS NULL
+									OR source_state.next_attempt_at <= $1
+								)
+								AND (
+									source_state.next_attempt_at IS NOT NULL
+									OR source_state.last_attempted_at
+									IS NULL
+									OR source_state.last_attempted_at
+									<= (
+									$1::timestamptz -
+									make_interval(
+									secs =>
+									$2::double precision
+									)
+									)
+								)
+								AND (
+									source_state.lease_expires_at IS NULL
+									OR source_state.lease_expires_at <= $1
+								)
+								AND (
+									COALESCE(
+									source_state.seeded,
+									false
+									)
+									OR effective.outcome = 'valid'
+									OR (
+									$3::boolean
+									AND pending_probes.count <
+									$4::bigint
+									)
+								)
+								AND NOT (
+									schedule.source_origin =
+										ANY ($5::text[])
 								)
 							ORDER BY
-								observation.observed_at DESC,
-								observation.id DESC
+								source_state.last_attempted_at
+									ASC NULLS FIRST,
+								schedule.source_origin ASC
+							FOR UPDATE OF schedule
+								SKIP LOCKED
 							LIMIT 1
-						) AS effective ON true
-						CROSS JOIN LATERAL (
-							SELECT count(*) AS count
-							FROM (
-								SELECT 1
-								FROM verification_queue
-								WHERE `+activeProbeCapacityWhere("$1")+`
-								LIMIT $4::bigint
-							) AS pending_probe
-						) AS pending_probes
-						WHERE NOT COALESCE(
-								source_state.crawl_blocked,
-								false
-							)
-							AND (
-								source_state.next_attempt_at IS NULL
-								OR source_state.next_attempt_at <= $1
-							)
-							AND (
-								source_state.next_attempt_at IS NOT NULL
-								OR source_state.last_attempted_at
-								IS NULL
-								OR source_state.last_attempted_at
-								<= (
-								$1::timestamptz -
-								make_interval(
-								secs =>
-								$2::double precision
-								)
-								)
-							)
-							AND (
-								source_state.lease_expires_at IS NULL
-								OR source_state.lease_expires_at <= $1
-							)
-							AND (
-								COALESCE(
-								source_state.seeded,
-								false
-								)
-								OR effective.outcome = 'valid'
-								OR (
-								$3::boolean
-								AND pending_probes.count <
-								$4::bigint
-								)
-							)
-						ORDER BY
-							source_state.last_attempted_at
-								ASC NULLS FIRST,
-							schedule.source_origin ASC
-						FOR UPDATE OF schedule
-							SKIP LOCKED
-						LIMIT 1
-					),
-					locked_state AS (
-						SELECT state.source_origin
-						FROM discovery_source_state
-							AS state
-						WHERE state.source_origin = (
-							SELECT source_origin
-							FROM scheduled_candidate
-						)
-						FOR UPDATE OF state
-					)
-					INSERT INTO discovery_source_state (
-						source_origin,
-						seeded,
-						lease_generation,
-						lease_owner,
-						last_claimed_at,
-						lease_expires_at
-					)
-					SELECT
-						candidate.source_origin,
-						candidate.seeded,
-						1,
-						$6::text,
-						$1::timestamptz,
-						$5::timestamptz
-					FROM scheduled_candidate AS candidate
-					WHERE (
-						SELECT count(*)
-						FROM locked_state
-					) >= 0
-					ON CONFLICT (source_origin) DO UPDATE
-					SET
-						lease_generation =
-							discovery_source_state.
-								lease_generation + 1,
-						lease_owner =
-							EXCLUDED.lease_owner,
-						last_claimed_at =
-							EXCLUDED.last_claimed_at,
-						lease_expires_at =
-							EXCLUDED.lease_expires_at
-					WHERE
-						discovery_source_state.
-							lease_expires_at IS NULL
-						OR discovery_source_state.
-							lease_expires_at <= $1
-					RETURNING
-						source_origin,
-						lease_generation,
-						last_claimed_at,
-						lease_expires_at
-				`,
-				now,
-				interval.Seconds(),
-				automaticCrawlEnabled,
-				s.automatic.maxPendingProbes(),
-				expiresAt,
-				leaseOwner,
-			).Scan(
-				&storedOrigin,
-				&lease.Generation,
-				&lease.ClaimedAt,
-				&lease.ExpiresAt,
-			)
-
-			if errors.Is(scanErr, pgx.ErrNoRows) {
-				return nil
-			}
-
-			if scanErr != nil {
-				return scanErr
-			}
-
-			source, err := origin.Parse(storedOrigin)
-			if err != nil {
-				return fmt.Errorf(
-					"store: invalid discovery source: %w",
-					err,
-				)
-			}
-
-			if _, err := tx.Exec(
-				ctx,
-				`
-					UPDATE crawl_runs
-					SET
-						finished_at = $2,
-						outcome = 'canceled',
-						stop_reason = 'lease_reclaimed'
-					WHERE source_origin = $1
-						AND outcome = 'running'
-						AND finished_at IS NULL
-				`,
-				source.String(),
-				now,
-			); err != nil {
-				return fmt.Errorf(
-					"store: cancel abandoned crawl runs: %w",
-					err,
-				)
-			}
-
-			if _, err := tx.Exec(
-				ctx,
-				`
-					UPDATE crawl_runs AS run
-					SET
-						finished_at = $1,
-						outcome = 'canceled',
-						stop_reason = 'abandoned'
-					WHERE run.outcome = 'running'
-						AND run.finished_at IS NULL
-						AND NOT EXISTS (
-							SELECT 1
+						),
+						locked_state AS (
+							SELECT state.source_origin
 							FROM discovery_source_state
 								AS state
-							WHERE state.source_origin =
-								run.source_origin
-								AND state.lease_expires_at
-									IS NOT NULL
-								AND state.lease_expires_at > $1
+							WHERE state.source_origin = (
+								SELECT source_origin
+								FROM scheduled_candidate
+							)
+							FOR UPDATE OF state
 						)
-				`,
-				now,
-			); err != nil {
-				return fmt.Errorf(
-					"store: cancel abandoned crawl runs: %w",
-					err,
+						SELECT
+							candidate.source_origin,
+							candidate.seeded,
+							candidate.lease_generation
+						FROM scheduled_candidate AS candidate
+						WHERE (
+							SELECT count(*)
+							FROM locked_state
+						) >= 0
+					`,
+					now,
+					interval.Seconds(),
+					automaticCrawlEnabled,
+					s.automatic.maxPendingProbes(),
+					skippedOrigins,
+				).Scan(
+					&storedOrigin,
+					&seeded,
+					&currentGen,
 				)
+
+				if errors.Is(scanErr, pgx.ErrNoRows) {
+					return nil
+				}
+
+				if scanErr != nil {
+					return scanErr
+				}
+
+				source, err := origin.Parse(storedOrigin)
+				if err != nil {
+					return fmt.Errorf(
+						"store: invalid discovery source: %w",
+						err,
+					)
+				}
+
+				domainKey := domainInflightKey(source)
+				if _, busy := skippedDomains[domainKey]; busy {
+					skippedOrigins = append(
+						skippedOrigins,
+						storedOrigin,
+					)
+					continue
+				}
+
+				nextGeneration := currentGen + 1
+				acquired, acquireErr := acquireDomainInflight(
+					ctx,
+					tx,
+					domainKey,
+					source,
+					leaseOwner,
+					nextGeneration,
+					now,
+					expiresAt,
+				)
+				if acquireErr != nil {
+					return acquireErr
+				}
+
+				if !acquired {
+					skippedDomains[domainKey] = struct{}{}
+					skippedOrigins = append(
+						skippedOrigins,
+						storedOrigin,
+					)
+					continue
+				}
+
+				scanErr = tx.QueryRow(
+					ctx,
+					`
+						INSERT INTO discovery_source_state (
+							source_origin,
+							seeded,
+							lease_generation,
+							lease_owner,
+							last_claimed_at,
+							lease_expires_at
+						)
+						VALUES (
+							$1,
+							$2,
+							$3,
+							$4,
+							$5,
+							$6
+						)
+						ON CONFLICT (source_origin) DO UPDATE
+						SET
+							lease_generation = $3,
+							lease_owner = EXCLUDED.lease_owner,
+							last_claimed_at =
+								EXCLUDED.last_claimed_at,
+							lease_expires_at =
+								EXCLUDED.lease_expires_at
+						WHERE
+							discovery_source_state.
+								lease_expires_at IS NULL
+							OR discovery_source_state.
+								lease_expires_at <= $5
+						RETURNING
+							source_origin,
+							lease_generation,
+							last_claimed_at,
+							lease_expires_at
+					`,
+					source.String(),
+					seeded,
+					nextGeneration,
+					leaseOwner,
+					now,
+					expiresAt,
+				).Scan(
+					&storedOrigin,
+					&lease.Generation,
+					&lease.ClaimedAt,
+					&lease.ExpiresAt,
+				)
+				if errors.Is(scanErr, pgx.ErrNoRows) {
+					// Race: another claim took the origin lease
+					// between select and upsert. Free the domain
+					// slot we just acquired and try another source.
+					if releaseErr := releaseDomainInflight(
+						ctx,
+						tx,
+						domainKey,
+						source,
+						nextGeneration,
+					); releaseErr != nil {
+						return releaseErr
+					}
+
+					skippedOrigins = append(
+						skippedOrigins,
+						source.String(),
+					)
+					continue
+				}
+
+				if scanErr != nil {
+					return scanErr
+				}
+
+				if _, err := tx.Exec(
+					ctx,
+					`
+						UPDATE crawl_runs
+						SET
+							finished_at = $2,
+							outcome = 'canceled',
+							stop_reason = 'lease_reclaimed'
+						WHERE source_origin = $1
+							AND outcome = 'running'
+							AND finished_at IS NULL
+					`,
+					source.String(),
+					now,
+				); err != nil {
+					return fmt.Errorf(
+						"store: cancel abandoned crawl runs: %w",
+						err,
+					)
+				}
+
+				if _, err := tx.Exec(
+					ctx,
+					`
+						UPDATE crawl_runs AS run
+						SET
+							finished_at = $1,
+							outcome = 'canceled',
+							stop_reason = 'abandoned'
+						WHERE run.outcome = 'running'
+							AND run.finished_at IS NULL
+							AND NOT EXISTS (
+								SELECT 1
+								FROM discovery_source_state
+									AS state
+								WHERE state.source_origin =
+									run.source_origin
+									AND state.lease_expires_at
+										IS NOT NULL
+									AND state.lease_expires_at > $1
+							)
+					`,
+					now,
+				); err != nil {
+					return fmt.Errorf(
+						"store: cancel abandoned crawl runs: %w",
+						err,
+					)
+				}
+
+				lease.Origin = source
+				lease.ClaimedAt = lease.ClaimedAt.UTC()
+				lease.ExpiresAt = lease.ExpiresAt.UTC()
+				found = true
+
+				return nil
 			}
-
-			lease.Origin = source
-			lease.ClaimedAt = lease.ClaimedAt.UTC()
-			lease.ExpiresAt = lease.ExpiresAt.UTC()
-			found = true
-
-			return nil
 		},
 	)
 	if err != nil {
@@ -472,9 +562,29 @@ func (s *DiscoveryStore) RenewDiscoverySourceLease(
 			renewed.ClaimedAt = renewed.ClaimedAt.UTC()
 			renewed.ExpiresAt = renewed.ExpiresAt.UTC()
 
+			if err := extendDomainInflight(
+				ctx,
+				tx,
+				domainInflightKey(lease.Origin),
+				lease.Origin,
+				lease.Generation,
+				renewed.ExpiresAt,
+			); err != nil {
+				if errors.Is(err, errDomainInflightLost) {
+					return ErrDiscoverySourceLeaseLost
+				}
+
+				return err
+			}
+
 			return nil
 		},
 	)
+	if errors.Is(err, ErrDiscoverySourceLeaseLost) {
+		return discovery.CrawlSourceLease{},
+			ErrDiscoverySourceLeaseLost
+	}
+
 	if err != nil {
 		return discovery.CrawlSourceLease{}, fmt.Errorf(
 			"store: renew discovery source lease: %w",
@@ -547,9 +657,19 @@ func (s *DiscoveryStore) ReleaseDiscoverySourceLease(
 				return ErrDiscoverySourceLeaseLost
 			}
 
-			return nil
+			return releaseDomainInflight(
+				ctx,
+				tx,
+				domainInflightKey(lease.Origin),
+				lease.Origin,
+				lease.Generation,
+			)
 		},
 	)
+	if errors.Is(err, ErrDiscoverySourceLeaseLost) {
+		return ErrDiscoverySourceLeaseLost
+	}
+
 	if err != nil {
 		return fmt.Errorf(
 			"store: release discovery source lease: %w",
