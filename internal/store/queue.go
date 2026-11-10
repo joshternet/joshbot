@@ -219,11 +219,6 @@ func (q *Queue) Schedule(
 	return nil
 }
 
-// Claim leases the first eligible origin visible to this claimant.
-//
-// Rows are selected by available_at and canonical origin. Locked rows are
-// skipped so concurrent consumers can claim different work without waiting.
-// A false found result with a nil error means no work is currently eligible.
 // VerificationPaused reports the durable verification processor pause state.
 func (q *Queue) VerificationPaused(ctx context.Context) (bool, error) {
 	if err := q.validate(ctx); err != nil {
@@ -244,6 +239,12 @@ func (q *Queue) VerificationPaused(ctx context.Context) (bool, error) {
 	return paused, nil
 }
 
+// Claim leases the first eligible origin visible to this claimant.
+//
+// Eligible rows prefer recurring work, then fresh probes, then reprobes, then
+// earliest available_at and canonical origin. Locked rows are skipped so
+// concurrent consumers can claim different work without waiting. A false found
+// result with a nil error means no work is currently eligible.
 func (q *Queue) Claim(
 	ctx context.Context,
 	workerID string,
@@ -333,8 +334,9 @@ func (q *Queue) Claim(
 							)
 						ORDER BY
 							CASE
-								WHEN mode = 'probe' THEN 0
-								ELSE 1
+								WHEN mode = 'recurring' THEN 0
+								WHEN mode = 'probe' THEN 1
+								ELSE 2
 							END ASC,
 							available_at ASC,
 							origin ASC

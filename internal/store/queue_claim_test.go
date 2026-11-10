@@ -310,7 +310,7 @@ func TestQueueClaimsEligibleWorkInDeterministicOrder(
 	}
 }
 
-func TestQueueClaimsFreshProbeBeforeOtherDueWork(
+func TestQueueClaimsRecurringBeforeProbeAndReprobe(
 	t *testing.T,
 ) {
 	ctx := context.Background()
@@ -395,11 +395,11 @@ func TestQueueClaimsFreshProbeBeforeOtherDueWork(
 	if !found {
 		t.Fatal("first Claim() found = false, want true")
 	}
-	if lease.Origin != probe {
+	if lease.Origin != recurring {
 		t.Fatalf(
-			"first Claim() origin = %q, want fresh probe %q",
+			"first Claim() origin = %q, want recurring %q",
 			lease.Origin,
-			probe,
+			recurring,
 		)
 	}
 
@@ -414,9 +414,27 @@ func TestQueueClaimsFreshProbeBeforeOtherDueWork(
 		t.Fatal("second Claim() found = false, want true")
 	}
 
+	if lease.Origin != probe {
+		t.Fatalf(
+			"second Claim() origin = %q, want probe %q",
+			lease.Origin,
+			probe,
+		)
+	}
+
+	lease, found, err = queue.Claim(
+		ctx,
+		"worker-c",
+	)
+	if err != nil {
+		t.Fatalf("third Claim() error = %v", err)
+	}
+	if !found {
+		t.Fatal("third Claim() found = false, want true")
+	}
 	if lease.Origin != reprobe {
 		t.Fatalf(
-			"second Claim() origin = %q, want oldest remaining work %q",
+			"third Claim() origin = %q, want reprobe %q",
 			lease.Origin,
 			reprobe,
 		)
