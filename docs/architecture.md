@@ -362,6 +362,12 @@ later valid reprobe promotes the origin to recurring work.
 A transient unavailable outcome retains the current queue mode with durable
 retry state and does not replace the latest authoritative declaration state.
 
+A non-transient unavailable probe (for example an unsupported-origin HTTP
+failure) is removed from the queue. The observation stores `failure_category`,
+and discovery sets a 24h candidate cooldown (`discovery_candidates.next_attempt_at`)
+so admission paths cannot immediately re-enqueue the same origin. After the
+cooldown, a newer rediscovery may schedule another probe.
+
 Transient work receives one immediate verification retry per claim. A second
 failure is scheduled for later. A probe waiting for that later try does not
 consume pending-probe capacity, so new sites can be checked in the meantime. Consecutive transient failures normally persist their category and next

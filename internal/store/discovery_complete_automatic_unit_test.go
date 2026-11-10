@@ -995,6 +995,255 @@ func TestCompleteAutomaticCandidatesDatabasePathsWithoutDatabase(
 		)
 	})
 
+	t.Run("suppressed probe policy deferred", func(t *testing.T) {
+		tx := &completeAutomaticCaptureTx{
+			discoveryPolicyUnitTx: completeAutomaticBaseTx(
+				1,
+				0,
+				0,
+				[]string{
+					candidateOrigin.String(),
+				},
+			),
+		}
+		tx.execResults = append(
+			tx.execResults,
+			completeAutomaticSuccessExec(),
+			discoveryUnitExecResult{
+				tag: pgconn.NewCommandTag("INSERT 0 0"),
+			},
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+			completeAutomaticSuccessExec(),
+		)
+		tx.rowResults = append(
+			tx.rowResults,
+			completeAutomaticAdmissionState(
+				false,
+				false,
+				false,
+				false,
+				false,
+				false,
+			),
+			discoveryUnitRow{
+				values: []any{false},
+			},
+		)
+
+		err := callCompleteAutomatic(
+			t,
+			ctx,
+			tx,
+			completeAutomaticClock{
+				now: now,
+			},
+			[]AutomaticCandidateResult{
+				successResult,
+			},
+		)
+		if err != nil {
+			t.Fatalf(
+				"CompleteAutomaticCandidates() error = %v",
+				err,
+			)
+		}
+
+		joined := strings.Join(tx.execQueries, "\n")
+		if !strings.Contains(
+			joined,
+			"SET outcome = 'policy_deferred'",
+		) {
+			t.Fatalf(
+				"suppressed probe did not policy-defer:\n%s",
+				joined,
+			)
+		}
+		if strings.Contains(
+			joined,
+			"INSERT INTO discovery_source_state",
+		) {
+			t.Fatalf(
+				"suppressed probe promoted a source:\n%s",
+				joined,
+			)
+		}
+	})
+
+	t.Run("suppressed probe recheck failure", func(t *testing.T) {
+		testErr := errors.New(
+			"test suppressed probe recheck failure",
+		)
+		tx := completeAutomaticBaseTx(
+			1,
+			0,
+			0,
+			[]string{
+				candidateOrigin.String(),
+			},
+		)
+		tx.execResults = append(
+			tx.execResults,
+			completeAutomaticSuccessExec(),
+			discoveryUnitExecResult{
+				tag: pgconn.NewCommandTag("INSERT 0 0"),
+			},
+		)
+		tx.rowResults = append(
+			tx.rowResults,
+			completeAutomaticAdmissionState(
+				false,
+				false,
+				false,
+				false,
+				false,
+				false,
+			),
+			discoveryUnitRow{
+				err: testErr,
+			},
+		)
+
+		err := callCompleteAutomatic(
+			t,
+			ctx,
+			tx,
+			completeAutomaticClock{
+				now: now,
+			},
+			[]AutomaticCandidateResult{
+				successResult,
+			},
+		)
+		assertCompleteAutomaticError(
+			t,
+			err,
+			testErr,
+			"recheck automatic candidate probe",
+		)
+	})
+
+	t.Run(
+		"suppressed probe policy deferred update failure",
+		func(t *testing.T) {
+			testErr := errors.New(
+				"test suppressed probe policy deferral failure",
+			)
+			tx := completeAutomaticBaseTx(
+				1,
+				0,
+				0,
+				[]string{
+					candidateOrigin.String(),
+				},
+			)
+			tx.execResults = append(
+				tx.execResults,
+				completeAutomaticSuccessExec(),
+				discoveryUnitExecResult{
+					tag: pgconn.NewCommandTag(
+						"INSERT 0 0",
+					),
+				},
+				discoveryUnitExecResult{
+					err: testErr,
+				},
+			)
+			tx.rowResults = append(
+				tx.rowResults,
+				completeAutomaticAdmissionState(
+					false,
+					false,
+					false,
+					false,
+					false,
+					false,
+				),
+				discoveryUnitRow{
+					values: []any{false},
+				},
+			)
+
+			err := callCompleteAutomatic(
+				t,
+				ctx,
+				tx,
+				completeAutomaticClock{
+					now: now,
+				},
+				[]AutomaticCandidateResult{
+					successResult,
+				},
+			)
+			assertCompleteAutomaticError(
+				t,
+				err,
+				testErr,
+				"record suppressed probe admission",
+			)
+		},
+	)
+
+	t.Run(
+		"zero-row probe insert still promotes when queue exists",
+		func(t *testing.T) {
+			tx := completeAutomaticBaseTx(
+				1,
+				0,
+				0,
+				[]string{
+					candidateOrigin.String(),
+				},
+			)
+			tx.execResults = append(
+				tx.execResults,
+				completeAutomaticSuccessExec(),
+				discoveryUnitExecResult{
+					tag: pgconn.NewCommandTag(
+						"INSERT 0 0",
+					),
+				},
+				completeAutomaticSuccessExec(),
+				completeAutomaticSuccessExec(),
+				completeAutomaticSuccessExec(),
+				completeAutomaticSuccessExec(),
+				completeAutomaticSuccessExec(),
+			)
+			tx.rowResults = append(
+				tx.rowResults,
+				completeAutomaticAdmissionState(
+					false,
+					false,
+					false,
+					false,
+					false,
+					false,
+				),
+				discoveryUnitRow{
+					values: []any{true},
+				},
+			)
+
+			err := callCompleteAutomatic(
+				t,
+				ctx,
+				tx,
+				completeAutomaticClock{
+					now: now,
+				},
+				[]AutomaticCandidateResult{
+					successResult,
+				},
+			)
+			if err != nil {
+				t.Fatalf(
+					"CompleteAutomaticCandidates() error = %v",
+					err,
+				)
+			}
+		},
+	)
+
 	t.Run("capacity deferred", func(t *testing.T) {
 		tx := completeAutomaticBaseTx(
 			0,

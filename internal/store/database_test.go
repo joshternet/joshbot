@@ -758,6 +758,7 @@ func TestStoreSchemaPersistsOnlySemanticColumns(
 				"outcome",
 				"version",
 				"identity",
+				"failure_category",
 			},
 		},
 	}

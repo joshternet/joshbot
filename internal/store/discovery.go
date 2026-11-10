@@ -994,7 +994,9 @@ func (s *DiscoveryStore) recordDiscovery(
 // row cannot stop discovery startup or lease drain. Origins with a current
 // authoritative valid declaration, or a terminal observation that is not
 // older than the latest discovery evidence, are left alone so the queue is
-// not blindly re-flooded.
+// not blindly re-flooded. Candidates under probe-failure suppression
+// (next_attempt_at or a recent non-transient unavailable observation) are
+// also skipped.
 //
 // @param ctx - request context for database work
 // @returns count of newly inserted probe rows
@@ -1048,7 +1050,11 @@ func (s *DiscoveryStore) SchedulePendingDiscoveryProbes(
 					AND candidate.last_discovered_at >
 						effective.observed_at
 				)
-			)
+			)`+
+		probeAdmissionNotSuppressedSQL(
+			"candidate.origin",
+			"statement_timestamp()",
+		)+`
 		ORDER BY candidate.origin
 	`)
 	if err != nil {
@@ -1175,7 +1181,11 @@ func (s *DiscoveryStore) scheduleProbeCandidatesCounted(
 				AND NOT EXISTS (
 					SELECT 1 FROM verification_queue
 					WHERE verification_queue.origin = candidate.origin
-				)
+				)`+
+			probeAdmissionNotSuppressedSQL(
+				"candidate.origin",
+				"$2::timestamptz",
+			)+`
 			ORDER BY candidate.origin
 			LIMIT GREATEST(
 				$3::bigint - (
@@ -1388,7 +1398,11 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 					AND NOT EXISTS (
 						SELECT 1 FROM verification_queue AS queue
 						WHERE queue.origin = candidate.origin
-					)
+					)`+
+				probeAdmissionNotSuppressedSQL(
+					"candidate.origin",
+					"$3::timestamptz",
+				)+`
 					AND NOT EXISTS (
 						SELECT 1
 						FROM unnest($1::text[]) AS excluded(pattern)
@@ -1655,6 +1669,8 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 				}
 				continue
 			}
+			// Clear transient admission-retry state only. Non-transient
+			// probe-failure suppression must keep next_attempt_at.
 			if _, err := tx.Exec(ctx, `
 				UPDATE discovery_candidates
 				SET
@@ -1662,6 +1678,12 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 					last_failure_category = NULL,
 					next_attempt_at = NULL
 				WHERE origin = $1
+					AND (
+						last_failure_category IS NULL
+						OR last_failure_category IN (`+
+				transientFailureCategoriesSQL+`
+						)
+					)
 			`, rawOrigin); err != nil {
 				return fmt.Errorf("reset admission retry streak: %w", err)
 			}
@@ -1766,15 +1788,50 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 				continue
 			}
 			if !queueExists && pendingProbes < s.automatic.maxPendingProbes() {
-				if _, err := tx.Exec(ctx, `
+				tag, err := tx.Exec(ctx, `
 					INSERT INTO verification_queue (origin, available_at, mode)
-					VALUES ($1, $2, 'probe')
+					SELECT input.origin, $2, 'probe'
+					FROM (VALUES ($1::text)) AS input(origin)
+					WHERE true`+
+					probeAdmissionNotSuppressedSQL(
+						"input.origin",
+						"$2::timestamptz",
+					)+`
 					ON CONFLICT (origin) DO NOTHING
-				`, rawOrigin, now.UTC()); err != nil {
-					return fmt.Errorf("schedule automatic candidate probe: %w", err)
+				`, rawOrigin, now.UTC())
+				if err != nil {
+					return fmt.Errorf(
+						"schedule automatic candidate probe: %w",
+						err,
+					)
 				}
-				queueExists = true
-				pendingProbes++
+				if tag.RowsAffected() > 0 {
+					queueExists = true
+					pendingProbes++
+				} else if err := tx.QueryRow(ctx, `
+					SELECT EXISTS (
+						SELECT 1 FROM verification_queue WHERE origin = $1
+					)
+				`, rawOrigin).Scan(&queueExists); err != nil {
+					return fmt.Errorf(
+						"recheck automatic candidate probe: %w",
+						err,
+					)
+				}
+				if !queueExists {
+					if _, err := tx.Exec(ctx, `
+						UPDATE crawl_run_automatic_admission_batches
+						SET outcome = 'policy_deferred'
+						WHERE admission_run_id = $1
+							AND candidate_origin = $2
+					`, int64(runID), rawOrigin); err != nil {
+						return fmt.Errorf(
+							"record suppressed probe admission: %w",
+							err,
+						)
+					}
+					continue
+				}
 			}
 			if !queueExists {
 				if _, err := tx.Exec(ctx, `

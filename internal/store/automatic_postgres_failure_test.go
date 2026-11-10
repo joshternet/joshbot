@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/declaration"
 	"github.com/joshternet/joshbot/internal/discovery"
@@ -606,6 +607,41 @@ func TestCompleteAutomaticCandidatesHandlesPolicyExistingAndCapacityFailures(t *
 			`,
 			want: "record stale-evidence admission deferral",
 		},
+		{
+			name: "suppressed probe outcome",
+			setup: func(t *testing.T, pool *pgxpool.Pool, candidate discovery.Candidate) {
+				t.Helper()
+				suppressUntil := time.Now().UTC().Add(12 * time.Hour).
+					Truncate(time.Microsecond)
+				if _, err := pool.Exec(ctx, `
+					DELETE FROM verification_queue WHERE origin = $1;
+					UPDATE discovery_candidates
+					SET
+						consecutive_failures = 1,
+						last_failure_category = 'unsupported_origin',
+						next_attempt_at = $2
+					WHERE origin = $1;
+					CREATE FUNCTION reject_suppressed_probe_outcome() RETURNS trigger
+					LANGUAGE plpgsql AS $$
+					BEGIN
+						IF NEW.outcome = 'policy_deferred' THEN
+							RAISE EXCEPTION 'reject suppressed probe outcome';
+						END IF;
+						RETURN NEW;
+					END $$;
+					CREATE TRIGGER reject_suppressed_probe_outcome
+						BEFORE UPDATE ON crawl_run_automatic_admission_batches
+						FOR EACH ROW EXECUTE FUNCTION reject_suppressed_probe_outcome()
+				`, pgx.QueryExecModeSimpleProtocol, candidate.Origin.String(), suppressUntil); err != nil {
+					t.Fatal(err)
+				}
+			},
+			cleanup: `
+				DROP TRIGGER reject_suppressed_probe_outcome ON crawl_run_automatic_admission_batches;
+				DROP FUNCTION reject_suppressed_probe_outcome()
+			`,
+			want: "record suppressed probe admission",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -623,6 +659,66 @@ func TestCompleteAutomaticCandidatesHandlesPolicyExistingAndCapacityFailures(t *
 			}
 		})
 	}
+}
+
+// TestCompleteAutomaticCandidatesSuppressedProbeRecheckFailure covers the
+// INSERT-0 recheck error wrap. A live Postgres session cannot fail that
+// follow-up SELECT after earlier queue reads in the same transaction already
+// succeeded, so this integration-listed case uses the shared fake tx.
+func TestCompleteAutomaticCandidatesSuppressedProbeRecheckFailure(
+	t *testing.T,
+) {
+	_ = newStoreTestPool(t)
+
+	ctx := context.Background()
+	now := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	candidateOrigin := mustStoreOrigin(t, "https://candidate.example")
+	successResult := AutomaticCandidateResult{
+		Candidate: discovery.Candidate{
+			Origin: candidateOrigin,
+			Kind:   discovery.KindLink,
+		},
+	}
+	testErr := errors.New("test suppressed probe recheck failure")
+	tx := completeAutomaticBaseTx(
+		1,
+		0,
+		0,
+		[]string{candidateOrigin.String()},
+	)
+	tx.execResults = append(
+		tx.execResults,
+		completeAutomaticSuccessExec(),
+		discoveryUnitExecResult{
+			tag: pgconn.NewCommandTag("INSERT 0 0"),
+		},
+	)
+	tx.rowResults = append(
+		tx.rowResults,
+		completeAutomaticAdmissionState(
+			false,
+			false,
+			false,
+			false,
+			false,
+			false,
+		),
+		discoveryUnitRow{err: testErr},
+	)
+
+	err := callCompleteAutomatic(
+		t,
+		ctx,
+		tx,
+		completeAutomaticClock{now: now},
+		[]AutomaticCandidateResult{successResult},
+	)
+	assertCompleteAutomaticError(
+		t,
+		err,
+		testErr,
+		"recheck automatic candidate probe",
+	)
 }
 
 func TestCompleteAutomaticCandidatesHandlesDatabaseStages(t *testing.T) {

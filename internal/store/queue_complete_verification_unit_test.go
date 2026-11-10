@@ -788,9 +788,9 @@ func TestCompleteVerificationUsesStaleParticipantRecheckWithoutDatabase(
 	}
 
 	arguments := tx.execArguments[0]
-	if len(arguments) != 14 {
+	if len(arguments) != 16 {
 		t.Fatalf(
-			"completion argument count = %d, want 14",
+			"completion argument count = %d, want 16",
 			len(arguments),
 		)
 	}
@@ -829,6 +829,16 @@ func TestCompleteVerificationUsesStaleParticipantRecheckWithoutDatabase(
 		t.Fatalf(
 			"completion transient = %#v, want true",
 			arguments[11],
+		)
+	}
+
+	observationCategory, ok := arguments[14].(string)
+	if !ok ||
+		observationCategory != string(retry.CategoryDNS) {
+		t.Fatalf(
+			"observation failure_category = %#v, want %q",
+			arguments[14],
+			retry.CategoryDNS,
 		)
 	}
 }
@@ -911,9 +921,9 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 	}
 
 	arguments := tx.execArguments[0]
-	if len(arguments) != 14 {
+	if len(arguments) != 16 {
 		t.Fatalf(
-			"completion argument count = %d, want 14",
+			"completion argument count = %d, want 16",
 			len(arguments),
 		)
 	}
@@ -931,6 +941,13 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 		t.Fatalf(
 			"reprobe availability = %#v, want time.Time",
 			arguments[13],
+		)
+	}
+
+	if arguments[14] != nil {
+		t.Fatalf(
+			"observation failure_category = %#v, want nil",
+			arguments[14],
 		)
 	}
 

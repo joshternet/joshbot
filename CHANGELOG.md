@@ -8,19 +8,14 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- Non-transient unavailable probe completions no longer loop through
+  remove-then-immediate rediscovery. Observations record `failure_category`,
+  discovery candidates take a 24h `next_attempt_at` cooldown, and every probe
+  admission path honors that suppression (migration `0033`).
 - Deployment smoke starts and stops all three verification workers
   (`worker`, `worker-2`, `worker-3`) before seeding and restore checks, so
   leftover replicas cannot claim scheduled origins and overwrite fixture
   observation state.
-- Unit and integration coverage exercise domain-inflight
-  acquire/extend/release failures, busy-neighborhood claim skips, discovery
-  upsert races that release the domain slot, renew/complete paths that map
-  domain lease loss into origin lease-lost errors, and NeighborhoodKey
-  private-suffix / bare-ICANN hosts.
-- Independent integration coverage now re-enters domain-avoid unit paths and
-  deferred-probe / regex-exclude store paths, and exercises worker and
-  discovery fleet-budget construction failures that were only covered by unit
-  tests.
 
 ### Added
 
@@ -32,17 +27,15 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   Compose runs three verification workers with distinct
   `JOSHBOT_SERVICE_INSTANCE_ID` values (`worker`, `worker-2`, `worker-3`)
   (#128).
-- Domain-avoid rules accept hostname glob strings (`cbd-hash*`,
-  `*bloginder.com`) and explicit RE2 patterns (`re:^cbd-hash`). Exact domain
-  suffixes and `blogspot.*` families keep their prior meaning. Migration
-  `0031` seeds `cbd-hash*` plus the free-blog farms hosting that spam:
-  `ampedpages.com`, `bligblogging.com`, `bloginder.com`, `blogocial.com`,
-  `blogolenta.com`, `blogoscience.com`, `blogzet.com`, `kylieblog.com`,
-  `review-blogger.com`, `total-blog.com`, and `webdesign96.com`.
+- Domain-avoid rules accept hostname glob strings (for example `spam-prefix*`,
+  `*example-blog-farm.example`) and explicit RE2 patterns
+  (`re:^spam-prefix`). Exact domain suffixes and shared free-blog families
+  keep their prior meaning. Migration `0031` seeds a common spam-host prefix
+  glob plus the free-blog neighborhoods that host that pattern.
 - Sibling hosts share `JOSHBOT_CRAWL_REQUEST_DELAY` by eTLD+1 or private public
   suffix. Robots `Crawl-delay` stays on the origin that published it (#57).
-- The durable domain avoid list includes `centerblog.net`, so that neighborhood
-  is not promoted automatically (#51).
+- The durable domain avoid list includes an additional free-blog neighborhood
+  so that neighborhood is not promoted automatically (#51).
 - Operators can pause automatic expansion without pausing discovery or
   verification. Curated seeds and verified origins stay eligible for discovery
   claims, candidate verification continues, and new automatic source claims
@@ -104,20 +97,6 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   budgets are unset.
 - Worker Compose also receives those fleet budget settings, and smoke asserts
   them on the worker container so workers do not crash-loop on startup.
-- Runtime config failure integration covers fleet budget load errors (missing,
-  non-integer, non-positive, and request-rate spacing overflow) so the
-  independent integration coverage gate includes those `crawl_config`
-  statement blocks.
-- Worker and discovery runtime tests supply fleet budget settings and stub
-  fleet-budget construction when the PostgreSQL pool is unavailable, and
-  pending-automatic unit mocks account for domain-avoid reads plus deferred
-  probe admission via `Query`.
-- Domain-avoid invalid-pattern tests reject reserved `.*` and other illegal
-  forms instead of hostname globs that are now valid. Deferred-probe failure
-  coverage accepts the collect-path error from statement triggers.
-- Unit coverage includes fleet-budget construction failures, the shared
-  fleet-budget wrapper body, domain-avoid edge cases, deferred-probe collect
-  failures, and regex-only probe exclusion cleanup.
 - Pending-probe drain skips stored candidate origins that fail current origin
   parsing instead of aborting discovery startup and every source-lease claim
   (#168).
@@ -151,14 +130,13 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   robots policies restore their learned delay (#155).
 - Registry export removes failed partial snapshots before retrying and stops
   on cleanup failures, including after a restart (#156).
-- Integration coverage includes HTTP limit rejection, a zero dial timeout, and the default guarded transport used when no HTTP limits are set.
 - Discovery startup blocks automatic sources that no longer parse as origins, instead of exiting when reconciliation finds one.
 - staticcheck v0.8.2 understands Go 1.27.2 export data.
 - Go 1.27.2 and `golang.org/x/net` v0.60.0 close the govulncheck HTTP/2, HTTP/1, TLS, MIME, and Windows `os.Root` findings (GO-2026-6603 through GO-2026-6617).
 - Registry snapshot entropy uses full reads, publish failures back off
   exponentially (capped), and cleanup only removes valid automatic snapshot
-  names. Snapshot pointer files stay mode `0644` so host-side export readers
-  (including deployment smoke) can read them across the container UID boundary.
+  names. Snapshot pointer files stay mode `0644` so export readers outside the
+  container can read them across the container UID boundary.
 - Service heartbeat messages truncate on a UTF-8 rune boundary within the
   256-byte limit.
 - GitHub publish tokens strip a trailing CR after LF, matching report and
@@ -219,15 +197,6 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 - Abandoning a verification lease records an `abandoned` queue event instead of
   `completed`.
 - Queue claim reads its clock inside the claim transaction.
-- Concurrent queue claim tests give each database attempt its own 30-second
-  limit. A shared deadline no longer cancels workers that are still claiming.
-  Each claim must still succeed, and distinct origins remain required.
-- Store tests borrow one of four isolated schemas, matching the four store
-  tests run at once. A schema is truncated after a test that left its tables
-  in place. A test that changes tables, indexes, triggers, or constraints gets
-  that same schema rebuilt before it is reused. The package no longer creates
-  and drops a spare schema for every test.
-
 ### Security
 
 - Go 1.27.3 closes GO-2026-6809 / CVE-2026-111943 by rejecting certificate
