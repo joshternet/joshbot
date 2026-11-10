@@ -354,9 +354,10 @@ A discovered candidate begins as a one-shot probe. A valid declaration
 promotes it to recurring work. An absent, invalid, unsupported-version,
 cross-origin, or robots-denied result converts a fresh probe into delayed
 reprobe work. The first reprobe defaults to 12 hours. Repeated terminal misses
-back off to 24 hours, 48 hours, 96 hours, then a seven-day cap. Fresh probes
-are claimed before reprobes so catch-up work cannot stall newly discovered
-origins. Reprobe work does not consume pending-probe backpressure capacity. A
+back off to 24 hours, 48 hours, 96 hours, then a seven-day cap. Recurring
+member rechecks are claimed before fresh probes, and fresh probes are claimed
+before reprobes, so verified-member upkeep cannot starve behind discovery
+catch-up. Reprobe work does not consume pending-probe backpressure capacity. A
 later valid reprobe promotes the origin to recurring work.
 
 A transient unavailable outcome retains the current queue mode with durable

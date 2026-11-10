@@ -8,6 +8,8 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- Verification claim order prefers recurring member work over fresh probes and
+  reprobes, so a large discovery backlog cannot starve due verified members.
 - Non-transient unavailable probe completions no longer loop through
   remove-then-immediate rediscovery. Observations record `failure_category`,
   discovery candidates take a 24h `next_attempt_at` cooldown, and every probe

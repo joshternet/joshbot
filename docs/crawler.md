@@ -150,10 +150,11 @@ verification, discovery pages, and redirect hops. Requests to different
 neighborhoods use independent schedules. Requests within one source crawl
 remain sequential.
 
-Claim selection uses the same neighborhood grouping across verification and
-discovery: only one origin in a neighborhood may be leased at a time.
-Completion frees the domain immediately; a crashed claimant frees it when
-the origin lease expires. That claim rule does not change
+Verification claim order prefers recurring member rechecks over fresh probes
+and reprobes. Claim selection also uses the same neighborhood grouping across
+verification and discovery: only one origin in a neighborhood may be leased at
+a time. Completion frees the domain immediately; a crashed claimant frees it
+when the origin lease expires. That claim rule does not change
 `JOSHBOT_CRAWL_REQUEST_DELAY` or sequential page walks inside one crawl.
 
 Each checker retains at most 1,024 robots policies, 1,024 origin schedules,
