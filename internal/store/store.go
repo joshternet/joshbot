@@ -121,6 +121,14 @@ func newStore(
 }
 
 // RecordVerification atomically records one completed verification.
+//
+// When result carries a failure category (including the unavailable default),
+// it is stored on the observation row for admission and ops visibility.
+//
+// @param ctx - request context for database work
+// @param observedAt - durable observation timestamp
+// @param result - verification outcome to persist
+// @returns nil on success
 func (s *Store) RecordVerification(
 	ctx context.Context,
 	observedAt time.Time,
@@ -143,6 +151,9 @@ func (s *Store) RecordVerification(
 	}
 
 	version, identity := storedDeclarationValues(result)
+	failureCategory := observationFailureCategoryValue(
+		resolvedFailureCategory(result),
+	)
 
 	err := pgx.BeginFunc(
 		ctx,
@@ -158,7 +169,8 @@ func (s *Store) RecordVerification(
 							$3::text AS outcome,
 							$4::integer AS version,
 							$5::text AS identity,
-							$6::boolean AS reprobe_miss
+							$6::boolean AS reprobe_miss,
+							$7::text AS failure_category
 					),
 					recorded_origin AS (
 						INSERT INTO origins (
@@ -301,14 +313,16 @@ func (s *Store) RecordVerification(
 						observed_at,
 						outcome,
 						version,
-						identity
+						identity,
+						failure_category
 					)
 					SELECT
 						recorded_reprobe_state.origin,
 						input.observed_at,
 						input.outcome,
 						input.version,
-						input.identity
+						input.identity,
+						input.failure_category
 					FROM recorded_reprobe_state
 					CROSS JOIN input
 				`,
@@ -318,6 +332,7 @@ func (s *Store) RecordVerification(
 				version,
 				identity,
 				shouldReprobeOutcome(result.Outcome),
+				failureCategory,
 			)
 
 			return execErr

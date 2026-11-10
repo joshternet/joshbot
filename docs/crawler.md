@@ -538,6 +538,14 @@ including unsafe addresses, policy blocks, robots denials, malformed or
 unsupported origins, unsupported or oversized content, and exhausted budgets,
 are terminal for retry scheduling.
 
+Verification observations may store `failure_category` alongside the outcome so
+operators can distinguish unavailable causes. When a probe completes with a
+non-transient unavailable category, the queue row is removed and discovery
+suppresses re-admission for 24 hours via `discovery_candidates.next_attempt_at`
+(and a matching recent-observation gate on every probe insert path). Transient
+unavailable probes stay on the queue with in-queue backoff and are not
+suppressed that way.
+
 Declaration verification, each frontier page of a source crawl, and
 automatic-admission DNS resolution make one immediate retry in a processing
 cycle. A second failure is scheduled for later and the current worker moves on.

@@ -660,7 +660,17 @@ func (q *Queue) Reschedule(
 // Recurring work remains queued. Valid probes and reprobes become recurring.
 // Reprobe-eligible terminal outcomes from fresh probes, including robots-denied
 // results, become delayed reprobes. Transient unavailable work retains its
-// queue mode with retry state.
+// queue mode with retry state. Non-transient unavailable probes are removed and
+// suppress discovery re-admission for probeFailureSuppressionInterval.
+//
+// Observations always store the resolved failure_category when present.
+//
+// @param ctx - request context for database work
+// @param lease - active queue lease being completed
+// @param result - verification outcome for the leased origin
+// @param recheckAfter - successful recheck delay for recurring work
+// @returns nil on success
+// @throws ErrLeaseLost when the lease is no longer held
 func (q *Queue) CompleteVerification(
 	ctx context.Context,
 	lease Lease,
@@ -692,12 +702,7 @@ func (q *Queue) CompleteVerification(
 	}
 
 	version, identity := storedDeclarationValues(result)
-	failureCategory := result.FailureCategory
-	if result.Outcome == declaration.OutcomeUnavailable &&
-		failureCategory == retry.CategoryNone {
-		failureCategory =
-			retry.CategoryDeclarationUnavailable
-	}
+	failureCategory := resolvedFailureCategory(result)
 
 	transient := result.Outcome ==
 		declaration.OutcomeUnavailable &&
@@ -1100,20 +1105,57 @@ func (q *Queue) CompleteVerification(
 									AND candidate.last_discovered_at >
 										$4::timestamptz
 							)
+					),
+					suppressed_probe_candidate AS (
+						INSERT INTO discovery_candidates (
+							origin,
+							first_discovered_at,
+							last_discovered_at,
+							consecutive_failures,
+							last_failure_category,
+							next_attempt_at
+						)
+						SELECT
+							removed_probe.origin,
+							$4::timestamptz,
+							$4::timestamptz,
+							1,
+							$15::text,
+							$16::timestamptz
+						FROM removed_probe
+						WHERE $7::text = 'unavailable'
+							AND NOT $12::boolean
+						ON CONFLICT (origin) DO UPDATE
+						SET
+							consecutive_failures = GREATEST(
+								discovery_candidates.consecutive_failures,
+								1
+							),
+							last_failure_category =
+								EXCLUDED.last_failure_category,
+							next_attempt_at = GREATEST(
+								COALESCE(
+									discovery_candidates.next_attempt_at,
+									'-infinity'::timestamptz
+								),
+								EXCLUDED.next_attempt_at
+							)
 					)
 					INSERT INTO verification_observations (
 						origin,
 						observed_at,
 						outcome,
 						version,
-						identity
+						identity,
+						failure_category
 					)
 					SELECT
 						recorded_reprobe_state.origin,
 						$4::timestamptz,
 						$7::text,
 						$8::integer,
-						$9::text
+						$9::text,
+						$15::text
 					FROM recorded_reprobe_state
 				`,
 				lease.Origin.String(),
@@ -1133,6 +1175,12 @@ func (q *Queue) CompleteVerification(
 				transient,
 				reprobe,
 				reprobeAvailableAt,
+				observationFailureCategoryValue(
+					failureCategory,
+				),
+				completedAt.Add(
+					probeFailureSuppressionInterval,
+				).UTC(),
 			)
 			if execErr != nil {
 				return execErr
