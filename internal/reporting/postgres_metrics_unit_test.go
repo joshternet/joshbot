@@ -70,6 +70,21 @@ func TestPostgresReaderMetricsWithoutDatabase(
 							"robots_temporary",
 							int64(4),
 						},
+						[]any{
+							"personal_site_qualification",
+							"assessed",
+							int64(5),
+						},
+						[]any{
+							"personal_site_assessment",
+							"60-79",
+							int64(6),
+						},
+						[]any{
+							"automatic_promotion_score_bucket",
+							"80-100",
+							int64(7),
+						},
 					),
 				},
 			},
@@ -127,6 +142,24 @@ func TestPostgresReaderMetricsWithoutDatabase(
 			{
 				Label: "robots_temporary",
 				Count: 4,
+			},
+		},
+		PersonalSiteQualifications: []MetricBreakdown{
+			{
+				Label: "assessed",
+				Count: 5,
+			},
+		},
+		PersonalSiteAssessments: []MetricBreakdown{
+			{
+				Label: "60-79",
+				Count: 6,
+			},
+		},
+		AutomaticPromotionsByScoreBucket: []MetricBreakdown{
+			{
+				Label: "80-100",
+				Count: 7,
 			},
 		},
 	}

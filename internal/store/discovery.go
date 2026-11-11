@@ -14,6 +14,7 @@ import (
 	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/domainavoid"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/personalsite"
 	"github.com/joshternet/joshbot/internal/retry"
 )
 
@@ -60,6 +61,9 @@ type AutomaticCrawlConfig struct {
 	MaxAutomaticPromotionsPerRun int
 	ExcludedHostSuffixes         string
 	RetryJitter                  retry.Jitter
+	// PersonalSiteScoring controls private personal-site qualification and
+	// optional admission ordering. Default off preserves upgrade behavior.
+	PersonalSiteScoring personalsite.ScoringMode
 }
 
 // CrawlSource describes the private operational classification of an origin.
@@ -1270,99 +1274,14 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 		)
 		remainingBatch := maxPromotions - batchCount
 		if remainingBatch > 0 {
-			if _, err := tx.Exec(ctx, `
-				WITH candidate_pool AS (
-					SELECT
-						candidate.origin,
-						COALESCE(
-							MIN(run_candidate.run_id),
-							$1::bigint
-						) AS discovered_run_id
-					FROM discovery_candidates AS candidate
-					LEFT JOIN crawl_run_discovery_candidates AS run_candidate
-						ON run_candidate.candidate_origin = candidate.origin
-					LEFT JOIN discovery_source_state AS source_state
-						ON source_state.source_origin = candidate.origin
-					LEFT JOIN discovery_source_schedule AS schedule
-						ON schedule.source_origin = candidate.origin
-					LEFT JOIN LATERAL (
-						SELECT
-							observation.observed_at,
-							observation.outcome
-						FROM verification_observations AS observation
-						WHERE observation.origin = candidate.origin
-							AND observation.outcome IN (
-								'valid',
-								'absent',
-								'invalid',
-								'unsupported_version',
-								'cross_origin_redirect'
-							)
-						ORDER BY
-							observation.observed_at DESC,
-							observation.id DESC
-						LIMIT 1
-					) AS effective ON true
-					WHERE EXISTS (
-						SELECT 1 FROM discovery_edges AS edge
-						WHERE edge.candidate_origin = candidate.origin
-							AND edge.kind = 'link'
-					)
-						AND (
-							candidate.next_attempt_at IS NULL
-							OR candidate.next_attempt_at <= $4
-						)
-						AND NOT COALESCE(
-							source_state.automatically_discovered,
-							false
-						)
-						AND NOT COALESCE(source_state.crawl_blocked, false)
-						AND schedule.source_origin IS NULL
-						AND (
-							effective.observed_at IS NULL
-							OR (
-								effective.outcome <> 'valid'
-								AND candidate.last_discovered_at >
-									effective.observed_at
-							)
-						)
-						AND NOT EXISTS (
-							SELECT 1
-							FROM discovery_candidate_admission_state AS durable
-							WHERE durable.candidate_origin = candidate.origin
-						)
-						AND NOT EXISTS (
-							SELECT 1
-							FROM crawl_run_automatic_admission_batches AS current
-							WHERE current.admission_run_id = $1
-								AND current.candidate_origin = candidate.origin
-						)
-						AND NOT EXISTS (
-							SELECT 1
-							FROM unnest($2::text[]) AS excluded(pattern)
-							CROSS JOIN LATERAL (
-								SELECT lower(trim(
-								both '[]' from substring(
-								candidate.origin
-								from '^https?://(\[[^]]+\]|[^:]+)'
-								)
-								)) AS hostname
-							) AS parsed
-							WHERE `+domainAvoidHostnameMatchSQL+`
-						)
-					GROUP BY candidate.origin
-					ORDER BY candidate.origin
-					LIMIT $3
-				)
-				INSERT INTO crawl_run_automatic_admission_batches (
-					admission_run_id,
-					candidate_origin,
-					discovered_run_id
-				)
-				SELECT $1, origin, discovered_run_id
-				FROM candidate_pool
-				ON CONFLICT (admission_run_id, candidate_origin) DO NOTHING
-			`, int64(runID), patterns, remainingBatch, now.UTC()); err != nil {
+			allocationSQL, allocationArgs := automaticAdmissionAllocationQuery(
+				s.automatic.PersonalSiteScoring,
+				int64(runID),
+				patterns,
+				remainingBatch,
+				now.UTC(),
+			)
+			if _, err := tx.Exec(ctx, allocationSQL, allocationArgs...); err != nil {
 				return fmt.Errorf("allocate automatic admission batch: %w", err)
 			}
 		}

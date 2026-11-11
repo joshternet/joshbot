@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/joshternet/joshbot/internal/discovery"
+	"github.com/joshternet/joshbot/internal/personalsite"
 	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 )
@@ -38,6 +39,7 @@ const (
 	automaticCrawlMaxPendingProbesEnvironment    = "JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES"
 	automaticCrawlMaxPromotionsPerRunEnvironment = "JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN"
 	automaticCrawlExcludedHostsEnvironment       = "JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS"
+	personalSiteScoringEnvironment               = "JOSHBOT_PERSONAL_SITE_SCORING"
 	crawlTelemetryRetentionEnvironment           = "JOSHBOT_CRAWL_TELEMETRY_RETENTION"
 
 	defaultAutomaticCrawlMaxPendingProbes    = 1000
@@ -172,6 +174,11 @@ func loadCrawlRuntimeSettings(
 	if err != nil {
 		return crawlRuntimeSettings{}, err
 	}
+	scoringMode, err := personalSiteScoringSetting(getenv)
+	if err != nil {
+		return crawlRuntimeSettings{}, err
+	}
+	automaticConfig.PersonalSiteScoring = scoringMode
 	if automaticEnabled {
 		automaticConfig.MaxPendingProbes, err =
 			optionalPositiveIntegerSetting(
@@ -323,6 +330,24 @@ func automaticCrawlEnabledSetting(
 	}
 
 	return parsed, nil
+}
+
+// personalSiteScoringSetting defaults to off so upgrades do not change
+// admission ordering until operators opt into shadow or order.
+func personalSiteScoringSetting(
+	getenv environmentGetter,
+) (personalsite.ScoringMode, error) {
+	mode, err := personalsite.ParseScoringMode(
+		getenv(personalSiteScoringEnvironment),
+	)
+	if err != nil {
+		return "", fmt.Errorf(
+			"%w: %s must be off, shadow, or order",
+			errInvalidRuntimeConfiguration,
+			personalSiteScoringEnvironment,
+		)
+	}
+	return mode, nil
 }
 
 func requiredIntegerSetting(

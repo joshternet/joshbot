@@ -8,6 +8,13 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- Go 1.27.4 closes GO-2026-6859 by fixing an HTTP/1 server crash from a
+  `MaxBytesReader` header race in `net/http`. The Docker build base and quality
+  gate image move to `golang:1.27.4-trixie`.
+- Independent integration coverage wrappers re-enter personal-site unit paths
+  (`personalsite`, `discovery` qualify, `cmd/joshbot` scoring wiring, store
+  assessment helpers) and reporting metrics emit personal-site breakdowns so
+  the dual unit/integration coverage gate stays at 100%.
 - Verification claim order prefers recurring member work over fresh probes and
   reprobes, so a large discovery backlog cannot starve due verified members.
 - Non-transient unavailable probe completions no longer loop through
@@ -21,6 +28,15 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Added
 
+- Private personal-site scoring for automatic crawl prioritization
+  (`internal/personalsite`, migration `0034`). JoshBot can qualify one root
+  page per eligible candidate through the existing robots/netguard path,
+  persist score/outcome/reason codes on `discovery_candidates` only, and
+  expose bucket metrics. `JOSHBOT_PERSONAL_SITE_SCORING=off|shadow|order`
+  defaults to `off`; `shadow` persists without changing admission order;
+  `order` ranks promotions by score with ~10% oldest-candidate exploration.
+  Scores never affect Josh identity, registry output, curated seeds, blocks,
+  robots, or promotion budgets.
 - Verification and discovery claims share one in-flight origin per registrable
   domain or private public suffix (`domain_inflight_leases`, migration
   `0032`). Sibling hosts wait until completion or lease expiry. Busy
@@ -56,12 +72,13 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   access and no GitHub token.
 - `registry-publish` publishes each new snapshot. An unchanged registry
   does not create a commit. It has the GitHub token and no database access.
-- The embedded schema now contains thirty-two migrations, `0001` through
-  `0032`, including durable candidate admission state, domain-avoid LIKE
+- The embedded schema now contains thirty-four migrations, `0001` through
+  `0034`, including durable candidate admission state, domain-avoid LIKE
   hardening, verification-queue `abandoned` events, removal of the WordPress
   domain-avoid rules, the running build identity on service heartbeats, crawl
-  fleet budget state, hostname glob/regex domain-avoid patterns, and shared
-  domain in-flight leases.
+  fleet budget state, hostname glob/regex domain-avoid patterns, shared
+  domain in-flight leases, verification observation failure categories, and
+  private personal-site assessments.
 - Discovery and worker heartbeats record `build_version` and `build_commit`
   for the process that is running. The image build stamps those values from
   `VERSION` and `VCS_REF`.

@@ -1,0 +1,36 @@
+{
+  "signals": {
+    "HasPersonSchema": false,
+    "HasOrganizationSchema": true,
+    "HasHCard": false,
+    "HasRelMe": false,
+    "HasFeed": false,
+    "HasAboutLink": true,
+    "HasNowLink": false,
+    "HasUsesLink": false,
+    "HasProjectsLink": false,
+    "HasBlogLink": false,
+    "HasAuthorMetadata": true,
+    "HasProductSchema": true,
+    "HasShoppingCart": true,
+    "HasCareersLink": true,
+    "HasInvestorLink": true,
+    "HasMarketplaceSignals": true,
+    "HasParkedDomain": true
+  },
+  "assessment": {
+    "Score": 0,
+    "Reasons": [
+      "about_link",
+      "author_metadata",
+      "careers_link",
+      "investor_link",
+      "marketplace",
+      "organization_schema",
+      "parked_domain",
+      "product_schema",
+      "shopping_cart"
+    ],
+    "Version": 1
+  }
+}

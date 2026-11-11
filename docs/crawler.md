@@ -252,6 +252,7 @@ Additional discovery controls are:
 | `JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES` | `1000` | Pause automatic source claims when this many probes are due or in progress. Future retries do not count |
 | `JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN` | `100` | Maximum newly promoted automatic sources in one durable crawl-run admission batch |
 | `JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS` | empty | Add emergency domain patterns beyond the durable operator-managed avoid list |
+| `JOSHBOT_PERSONAL_SITE_SCORING` | `off` | Private personal-site crawl prioritization: `off` (default), `shadow` (qualify + persist + metrics, admission order unchanged), or `order` (also rank automatic admission by score with ~10% oldest-candidate exploration) |
 
 Go duration syntax is used. For example, one week is `168h`, not `7d`.
 
@@ -310,10 +311,26 @@ automatic crawl sources.
 Every candidate and provenance edge is durable before admission, and eligible
 link origins are already probe-scheduled independently of promotion.
 Attribution belongs to the first crawl run that discovered the link origin.
-Each admission run allocates candidates in canonical-origin order up to that
-run's configured promotion limit; overflow remains unbatched and available to
-a later run. Canonical origin deduplication keeps repeated links from creating
+Each admission run allocates candidates up to that run's configured promotion
+limit; overflow remains unbatched and available to a later run. With
+`JOSHBOT_PERSONAL_SITE_SCORING=off` or `shadow`, allocation stays in
+canonical-origin order. With `order`, eligible candidates are ranked by the
+private personal-site score (descending, nulls last) after a small
+oldest-candidate exploration share fills first. Low scores never permanently
+exclude a candidate. Qualification failures stay unassessed rather than score
+0. Canonical origin deduplication keeps repeated links from creating
 duplicate sources.
+
+#### Personal-site scoring (private scheduling signal)
+
+JoshBot may GET one public root page through the existing robots/netguard
+boundary, extract bounded structural booleans (Person JSON-LD, h-card,
+`rel=me`, feeds, about/now/uses/projects/blog links, author metadata, and
+contrary commerce/organization/parked markers), and score them with a pure
+deterministic function. Assessments persist only on `discovery_candidates`
+and never enter the public registry, Josh identity, or participation
+outcomes. First intentional deploy should use `shadow`; switch to `order`
+after reviewing private metrics; roll back with `off` or `shadow`.
 
 Each allocated candidate receives one immediate retry when the failure is
 transient. A second failure is scheduled for later, and the worker moves on. Capacity, policy, transient-network, and

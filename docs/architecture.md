@@ -94,6 +94,13 @@ between validation and dialing. Redirects are retrieved through the same
 guarded path, and automatic admission performs a fresh all-address resolution
 after evidence is stored and immediately before promotion.
 
+When `JOSHBOT_PERSONAL_SITE_SCORING` is `shadow` or `order`, discovery also
+qualifies a bounded batch of eligible automatic candidates by fetching `/`
+through the same robots-aware getter, scoring structural HTML signals in
+`internal/personalsite`, and persisting a private assessment used only for
+admission ordering (after shadow review). Fetch failures remain unassessed;
+they are never treated as score 0.
+
 The network guard reduces SSRF risk but does not replace host firewall policy.
 
 ### `internal/robots`
@@ -243,6 +250,13 @@ occur transactionally.
 Defines the shared typed failure categories, one-immediate-retry bound,
 `Retry-After` parsing and cap, and durable delay schedule of `5m`, `30m`,
 `2h`, `12h`, then `24h`.
+
+### `internal/personalsite`
+
+Derives bounded structural booleans from one HTML root page and scores them
+with a pure deterministic function for private automatic-admission priority.
+It never retains page text, never changes Josh identity or registry output,
+and never invents a permanent deny from a low score.
 
 ### `internal/discovery`
 

@@ -577,6 +577,42 @@ func TestPostgresReaderMetricsBreakdowns(
 		)
 	}
 
+	if _, err := pool.Exec(ctx, `
+		UPDATE discovery_candidates
+		SET
+			personal_site_score = 72,
+			personal_site_assessment_version = 1,
+			personal_site_assessed_at = statement_timestamp(),
+			personal_site_qualification_outcome = 'assessed',
+			personal_site_reason_codes = '["feed"]'::jsonb
+		WHERE origin = 'https://blocked.example'
+	`); err != nil {
+		t.Fatalf(
+			"update personal site assessment: %v",
+			err,
+		)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO crawl_run_automatic_admission_batches (
+			admission_run_id,
+			candidate_origin,
+			discovered_run_id,
+			outcome
+		)
+		VALUES (
+			$1,
+			'https://blocked.example',
+			$1,
+			'promoted'
+		)
+	`, fixture.crawlID); err != nil {
+		t.Fatalf(
+			"insert automatic admission batch: %v",
+			err,
+		)
+	}
+
 	reader, err := NewPostgresReader(
 		pool,
 		PostgresConfig{
@@ -628,6 +664,39 @@ func TestPostgresReaderMetricsBreakdowns(
 		t.Errorf(
 			"VerificationQueueFailureCategories = %#v",
 			metrics.VerificationQueueFailureCategories,
+		)
+	}
+
+	if len(metrics.PersonalSiteQualifications) != 1 ||
+		metrics.PersonalSiteQualifications[0] != (MetricBreakdown{
+			Label: "assessed",
+			Count: 1,
+		}) {
+		t.Errorf(
+			"PersonalSiteQualifications = %#v",
+			metrics.PersonalSiteQualifications,
+		)
+	}
+
+	if len(metrics.PersonalSiteAssessments) != 1 ||
+		metrics.PersonalSiteAssessments[0] != (MetricBreakdown{
+			Label: "60-79",
+			Count: 1,
+		}) {
+		t.Errorf(
+			"PersonalSiteAssessments = %#v",
+			metrics.PersonalSiteAssessments,
+		)
+	}
+
+	if len(metrics.AutomaticPromotionsByScoreBucket) != 1 ||
+		metrics.AutomaticPromotionsByScoreBucket[0] != (MetricBreakdown{
+			Label: "60-79",
+			Count: 1,
+		}) {
+		t.Errorf(
+			"AutomaticPromotionsByScoreBucket = %#v",
+			metrics.AutomaticPromotionsByScoreBucket,
 		)
 	}
 }

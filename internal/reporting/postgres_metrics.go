@@ -11,6 +11,9 @@ const (
 	metricKindPageFailureCategory              = "page_failure_category"
 	metricKindHTTPStatus                       = "http_status"
 	metricKindVerificationQueueFailureCategory = "verification_queue_failure_category"
+	metricKindPersonalSiteQualification        = "personal_site_qualification"
+	metricKindPersonalSiteAssessment           = "personal_site_assessment"
+	metricKindAutomaticPromotionScoreBucket    = "automatic_promotion_score_bucket"
 )
 
 // MetricBreakdown is one labeled count within an operational metric family.
@@ -35,6 +38,9 @@ type OperationalMetrics struct {
 	PageFailureCategories              []MetricBreakdown
 	HTTPStatuses                       []MetricBreakdown
 	VerificationQueueFailureCategories []MetricBreakdown
+	PersonalSiteQualifications         []MetricBreakdown
+	PersonalSiteAssessments            []MetricBreakdown
+	AutomaticPromotionsByScoreBucket   []MetricBreakdown
 }
 
 type metricsReader interface {
@@ -117,12 +123,61 @@ func (reader *PostgresReader) Metrics(
 				FROM verification_queue
 				WHERE last_failure_category IS NOT NULL
 				GROUP BY last_failure_category
+
+				UNION ALL
+
+				SELECT
+					$4::text,
+					personal_site_qualification_outcome,
+					count(*)::bigint
+				FROM discovery_candidates
+				WHERE personal_site_qualification_outcome IS NOT NULL
+				GROUP BY personal_site_qualification_outcome
+
+				UNION ALL
+
+				SELECT
+					$5::text,
+					CASE
+						WHEN personal_site_score < 20 THEN '0-19'
+						WHEN personal_site_score < 40 THEN '20-39'
+						WHEN personal_site_score < 60 THEN '40-59'
+						WHEN personal_site_score < 80 THEN '60-79'
+						ELSE '80-100'
+					END,
+					count(*)::bigint
+				FROM discovery_candidates
+				WHERE personal_site_qualification_outcome = 'assessed'
+					AND personal_site_score IS NOT NULL
+				GROUP BY 2
+
+				UNION ALL
+
+				SELECT
+					$6::text,
+					CASE
+						WHEN candidate.personal_site_score IS NULL THEN 'unassessed'
+						WHEN candidate.personal_site_score < 20 THEN '0-19'
+						WHEN candidate.personal_site_score < 40 THEN '20-39'
+						WHEN candidate.personal_site_score < 60 THEN '40-59'
+						WHEN candidate.personal_site_score < 80 THEN '60-79'
+						ELSE '80-100'
+					END,
+					count(*)::bigint
+				FROM crawl_run_automatic_admission_batches AS batch
+				JOIN discovery_candidates AS candidate
+					ON candidate.origin = batch.candidate_origin
+				WHERE batch.outcome = 'promoted'
+				GROUP BY 2
 			) AS breakdowns
 			ORDER BY metric, label
 		`,
 		metricKindPageFailureCategory,
 		metricKindHTTPStatus,
 		metricKindVerificationQueueFailureCategory,
+		metricKindPersonalSiteQualification,
+		metricKindPersonalSiteAssessment,
+		metricKindAutomaticPromotionScoreBucket,
 	)
 	if err != nil {
 		return OperationalMetrics{}, fmt.Errorf(
@@ -174,6 +229,21 @@ func (reader *PostgresReader) Metrics(
 		case metricKindVerificationQueueFailureCategory:
 			metrics.VerificationQueueFailureCategories = append(
 				metrics.VerificationQueueFailureCategories,
+				breakdown,
+			)
+		case metricKindPersonalSiteQualification:
+			metrics.PersonalSiteQualifications = append(
+				metrics.PersonalSiteQualifications,
+				breakdown,
+			)
+		case metricKindPersonalSiteAssessment:
+			metrics.PersonalSiteAssessments = append(
+				metrics.PersonalSiteAssessments,
+				breakdown,
+			)
+		case metricKindAutomaticPromotionScoreBucket:
+			metrics.AutomaticPromotionsByScoreBucket = append(
+				metrics.AutomaticPromotionsByScoreBucket,
 				breakdown,
 			)
 		}

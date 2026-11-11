@@ -309,9 +309,10 @@ JOSHBOT_AUTOMATIC_CRAWL_ENABLED
 JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES
 JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN
 JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS
+JOSHBOT_PERSONAL_SITE_SCORING
 ```
 
-Automatic crawling is enabled unless explicitly disabled. Discovered link origins are admitted as crawl sources so later crawls can find more domains to check for `/.well-known/josh`. Robots rules, the domain avoid list, crawl blocks, automatic-expansion pause, probe-queue backpressure, the per-run promotion budget, page and depth limits, and network safety checks still apply. Set `JOSHBOT_AUTOMATIC_CRAWL_ENABLED=false` to stop admitting those crawl sources.
+Automatic crawling is enabled unless explicitly disabled. Discovered link origins are admitted as crawl sources so later crawls can find more domains to check for `/.well-known/josh`. Robots rules, the domain avoid list, crawl blocks, automatic-expansion pause, probe-queue backpressure, the per-run promotion budget, page and depth limits, and network safety checks still apply. Set `JOSHBOT_AUTOMATIC_CRAWL_ENABLED=false` to stop admitting those crawl sources. `JOSHBOT_PERSONAL_SITE_SCORING` defaults to `off`; use `shadow` then `order` to prioritize automatic admission by a private structural personal-site score without changing participation or registry output.
 
 When automatic crawling is enabled, operators can pause automatic expansion at
 runtime without pausing discovery or verification. Curated seeds and currently
@@ -331,12 +332,14 @@ JOSHBOT_AUTOMATIC_CRAWL_ENABLED=true
 JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES=1000
 JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN=100
 JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS=
+JOSHBOT_PERSONAL_SITE_SCORING=off
 JOSHBOT_CRAWL_TELEMETRY_RETENTION=720h
 ```
 
 Candidate origins and provenance edges are committed before automatic
 admission. Each crawl run allocates at most its configured promotion limit in
-canonical-origin order. Unallocated evidence remains durable for a later
+canonical-origin order (`off`/`shadow`) or by personal-site score with a
+small oldest-candidate exploration share (`order`). Unallocated evidence remains durable for a later
 run. Immediately before admission, each allocated origin is resolved again and
 every returned address must pass the public-address guard. A transient
 resolution failure is deferred durably; an unsafe address is retained as

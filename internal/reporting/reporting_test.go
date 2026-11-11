@@ -1037,6 +1037,24 @@ func TestMetricsExposeUnfinishedCrawlRunCount(
 					Count: 4,
 				},
 			},
+			PersonalSiteQualifications: []MetricBreakdown{
+				{
+					Label: "assessed",
+					Count: 5,
+				},
+			},
+			PersonalSiteAssessments: []MetricBreakdown{
+				{
+					Label: "60-79",
+					Count: 6,
+				},
+			},
+			AutomaticPromotionsByScoreBucket: []MetricBreakdown{
+				{
+					Label: "80-100",
+					Count: 7,
+				},
+			},
 		},
 	}
 
@@ -1075,6 +1093,9 @@ func TestMetricsExposeUnfinishedCrawlRunCount(
 		"# HELP joshbot_verification_queue_failures Current verification queue failures by category.",
 		"# TYPE joshbot_verification_queue_failures gauge",
 		`joshbot_verification_queue_failures{failure_category="robots_temporary"} 4`,
+		`joshbot_personal_site_qualification{outcome="assessed"} 5`,
+		`joshbot_personal_site_assessments{bucket="60-79"} 6`,
+		`joshbot_automatic_promotions_by_score_bucket{bucket="80-100"} 7`,
 	} {
 		if !strings.Contains(
 			body,

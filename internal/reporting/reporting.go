@@ -1063,6 +1063,57 @@ func (h *handler) metrics(
 
 	_, _ = fmt.Fprintln(
 		writer,
+		"# HELP joshbot_personal_site_qualification Private personal-site qualification outcomes.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_personal_site_qualification gauge",
+	)
+	for _, breakdown := range durable.PersonalSiteQualifications {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_personal_site_qualification{outcome=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
+		"# HELP joshbot_personal_site_assessments Private personal-site score buckets.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_personal_site_assessments gauge",
+	)
+	for _, breakdown := range durable.PersonalSiteAssessments {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_personal_site_assessments{bucket=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
+		"# HELP joshbot_automatic_promotions_by_score_bucket Automatic promotions by personal-site score bucket.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_automatic_promotions_by_score_bucket gauge",
+	)
+	for _, breakdown := range durable.AutomaticPromotionsByScoreBucket {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_automatic_promotions_by_score_bucket{bucket=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
 		"# HELP joshbot_service_heartbeat_age_seconds Age of the latest service heartbeat.",
 	)
 	_, _ = fmt.Fprintln(
