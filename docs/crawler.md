@@ -310,10 +310,34 @@ automatic crawl sources.
 Every candidate and provenance edge is durable before admission, and eligible
 link origins are already probe-scheduled independently of promotion.
 Attribution belongs to the first crawl run that discovered the link origin.
-Each admission run allocates candidates in canonical-origin order up to that
-run's configured promotion limit; overflow remains unbatched and available to
-a later run. Canonical origin deduplication keeps repeated links from creating
-duplicate sources.
+Each admission run allocates only current-version assessed candidates up to
+that run's configured promotion limit, ordered by personal-site score
+(highest first) then origin. Overflow remains unbatched and available to a
+later run. Score `0` remains eligible at lowest priority. Unassessed
+candidates are never admitted. Qualification failures stay unscored and retry
+on an outcome-based schedule. Canonical origin deduplication keeps repeated
+links from creating duplicate sources; sibling subdomains remain distinct
+candidates.
+
+#### Personal-site scoring
+
+When automatic admission is enabled, JoshBot fetches one public root page
+through the same robots and network safety path used for crawling, then scores
+structural signals such as Person JSON-LD, h-card, `rel=me`, feeds,
+about/now/uses/projects/blog links, author metadata, and contrary commerce,
+organization, or parked-domain markers. Oversized HTML is assessed from a
+bounded prefix and flagged as truncated. The assessment is private scheduling
+state only. It never enters the public registry, Josh identity, or
+participation outcomes.
+
+Operators can read assessments through the reporting API
+(`GET /api/v1/personal-sites`, `GET /api/v1/personal-sites/detail`) and mutate
+priority through the control API. A manual override score changes admission
+ordering via `COALESCE(override, calculated)` without rewriting the calculated
+score. `POST /api/v1/control/personal-sites/rescore` marks a candidate due for
+the next qualification claim—including already admitted sources—without a
+synchronous remote fetch. `POST /api/v1/control/origins/crawl` nudges an
+existing crawl source onto the schedule.
 
 Each allocated candidate receives one immediate retry when the failure is
 transient. A second failure is scheduled for later, and the worker moves on. Capacity, policy, transient-network, and

@@ -38,6 +38,13 @@ const (
 var (
 	errCommanderUnavailable = errors.New("control: commander is unavailable")
 	errTokenUnavailable     = errors.New("control: authentication token is invalid")
+
+	// ErrConflict means an optimistic-concurrency or state conflict.
+	ErrConflict = errors.New("control: conflict")
+	// ErrNotFound means the target origin or resource does not exist.
+	ErrNotFound = errors.New("control: not found")
+	// ErrForbidden means the target is blocked or otherwise ineligible.
+	ErrForbidden = errors.New("control: forbidden")
 )
 
 // Audit describes one bounded authenticated mutation attempt.
@@ -61,6 +68,29 @@ type Commander interface {
 	AddDomainAvoid(context.Context, string, Audit) error
 	RemoveDomainAvoid(context.Context, string, Audit) error
 	SetOriginBlocked(context.Context, string, bool, Audit) error
+	SetPersonalSiteOverride(
+		context.Context,
+		string,
+		int,
+		int64,
+		Audit,
+	) error
+	ClearPersonalSiteOverride(
+		context.Context,
+		string,
+		int64,
+		Audit,
+	) error
+	RequestPersonalSiteRescore(
+		context.Context,
+		string,
+		Audit,
+	) (string, error)
+	RequestOriginCrawl(
+		context.Context,
+		string,
+		Audit,
+	) (string, error)
 	RecordRejected(context.Context, Audit) error
 }
 
@@ -93,6 +123,24 @@ type domainRequest struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+type personalSiteOverrideRequest struct {
+	Origin           string `json:"origin"`
+	Score            *int   `json:"score"`
+	ExpectedRevision *int64 `json:"expected_revision"`
+	// Actor is caller-declared audit metadata under the shared operator
+	// bearer token. It is not an authenticated login identity.
+	Actor  string `json:"actor,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type personalSiteRescoreRequest struct {
+	Origin string `json:"origin"`
+	// Actor is caller-declared audit metadata under the shared operator
+	// bearer token. It is not an authenticated login identity.
+	Actor  string `json:"actor,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
 // NewHandler constructs the private operator control HTTP handler.
 func NewHandler(commander Commander, token string) (http.Handler, error) {
 	if commander == nil {
@@ -114,6 +162,10 @@ func NewHandler(commander Commander, token string) (http.Handler, error) {
 	api.HandleFunc("POST /api/v1/control/domain-avoid", runtime.addDomainAvoid)
 	api.HandleFunc("DELETE /api/v1/control/domain-avoid/{pattern}", runtime.removeDomainAvoid)
 	api.HandleFunc("POST /api/v1/control/origins/{operation}", runtime.origin)
+	api.HandleFunc("PUT /api/v1/control/personal-sites/override", runtime.putPersonalSiteOverride)
+	api.HandleFunc("DELETE /api/v1/control/personal-sites/override", runtime.deletePersonalSiteOverride)
+	api.HandleFunc("POST /api/v1/control/personal-sites/rescore", runtime.postPersonalSiteRescore)
+	api.HandleFunc("POST /api/v1/control/origins/crawl", runtime.postOriginCrawl)
 	api.HandleFunc("/api/v1/control/", runtime.invalidControlRequest)
 
 	root := http.NewServeMux()
@@ -210,7 +262,10 @@ func knownControlPath(path string) bool {
 		return operation == "pause" || operation == "resume"
 	}
 	return path == "/api/v1/control/origins/block" ||
-		path == "/api/v1/control/origins/allow"
+		path == "/api/v1/control/origins/allow" ||
+		path == "/api/v1/control/origins/crawl" ||
+		path == "/api/v1/control/personal-sites/override" ||
+		path == "/api/v1/control/personal-sites/rescore"
 }
 
 func (h *handler) processor(writer http.ResponseWriter, request *http.Request) {
@@ -339,20 +394,181 @@ func (h *handler) origin(writer http.ResponseWriter, request *http.Request) {
 	})
 }
 
+func (h *handler) putPersonalSiteOverride(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	audit := h.newAudit(request, "personal-site.override.set", "")
+	var body personalSiteOverrideRequest
+	if status, code := decodeJSON(writer, request, &body); status != 0 {
+		h.reject(writer, request, audit, status, code)
+		return
+	}
+	source, err := origin.Parse(body.Origin)
+	if err == nil {
+		audit.Target = boundedTarget(source.String())
+	}
+	metadataValid := applyMetadata(&audit, body.Actor, body.Reason)
+	if err != nil ||
+		body.Score == nil ||
+		*body.Score < 0 ||
+		*body.Score > 100 ||
+		body.ExpectedRevision == nil ||
+		*body.ExpectedRevision < 0 ||
+		strings.TrimSpace(body.Reason) == "" ||
+		!metadataValid {
+		h.reject(writer, request, audit, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	h.mutate(writer, request, audit, func(success Audit) error {
+		return h.commander.SetPersonalSiteOverride(
+			request.Context(),
+			source.String(),
+			*body.Score,
+			*body.ExpectedRevision,
+			success,
+		)
+	})
+}
+
+func (h *handler) deletePersonalSiteOverride(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	audit := h.newAudit(request, "personal-site.override.clear", "")
+	var body personalSiteOverrideRequest
+	if status, code := decodeJSON(writer, request, &body); status != 0 {
+		h.reject(writer, request, audit, status, code)
+		return
+	}
+	source, err := origin.Parse(body.Origin)
+	if err == nil {
+		audit.Target = boundedTarget(source.String())
+	}
+	metadataValid := applyMetadata(&audit, body.Actor, body.Reason)
+	if err != nil ||
+		body.ExpectedRevision == nil ||
+		*body.ExpectedRevision < 1 ||
+		!metadataValid {
+		h.reject(writer, request, audit, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	h.mutate(writer, request, audit, func(success Audit) error {
+		return h.commander.ClearPersonalSiteOverride(
+			request.Context(),
+			source.String(),
+			*body.ExpectedRevision,
+			success,
+		)
+	})
+}
+
+func (h *handler) postPersonalSiteRescore(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	audit := h.newAudit(request, "personal-site.rescore.request", "")
+	var body personalSiteRescoreRequest
+	if status, code := decodeJSON(writer, request, &body); status != 0 {
+		h.reject(writer, request, audit, status, code)
+		return
+	}
+	source, err := origin.Parse(body.Origin)
+	if err == nil {
+		audit.Target = boundedTarget(source.String())
+	}
+	metadataValid := applyMetadata(&audit, body.Actor, body.Reason)
+	if err != nil || !metadataValid {
+		h.reject(writer, request, audit, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	h.mutateStatus(writer, request, audit, func(success Audit) (string, error) {
+		return h.commander.RequestPersonalSiteRescore(
+			request.Context(),
+			source.String(),
+			success,
+		)
+	})
+}
+
+func (h *handler) postOriginCrawl(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	audit := h.newAudit(request, "origin.crawl.request", "")
+	var body originRequest
+	if status, code := decodeJSON(writer, request, &body); status != 0 {
+		h.reject(writer, request, audit, status, code)
+		return
+	}
+	source, err := origin.Parse(body.Origin)
+	if err == nil {
+		audit.Target = boundedTarget(source.String())
+	}
+	metadataValid := applyMetadata(&audit, body.Actor, body.Reason)
+	if err != nil || !metadataValid {
+		h.reject(writer, request, audit, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	h.mutateStatus(writer, request, audit, func(success Audit) (string, error) {
+		return h.commander.RequestOriginCrawl(
+			request.Context(),
+			source.String(),
+			success,
+		)
+	})
+}
+
 func (h *handler) mutate(
 	writer http.ResponseWriter,
 	request *http.Request,
 	audit Audit,
 	mutation func(Audit) error,
 ) {
+	h.mutateStatus(writer, request, audit, func(success Audit) (string, error) {
+		if err := mutation(success); err != nil {
+			return "", err
+		}
+		return "ok", nil
+	})
+}
+
+func (h *handler) mutateStatus(
+	writer http.ResponseWriter,
+	request *http.Request,
+	audit Audit,
+	mutation func(Audit) (string, error),
+) {
 	audit.Result = ResultSuccess
-	if err := mutation(audit); err != nil {
+	status, err := mutation(audit)
+	if err != nil {
 		audit.Result = ResultRejected
-		_ = h.commander.RecordRejected(request.Context(), audit)
-		writeError(writer, http.StatusInternalServerError, "internal_error")
-		return
+		switch {
+		case errors.Is(err, ErrConflict):
+			if strings.HasPrefix(audit.Action, "personal-site.override") {
+				audit.Action = "personal-site.override.conflict"
+			}
+			_ = h.commander.RecordRejected(request.Context(), audit)
+			writeError(writer, http.StatusConflict, "conflict")
+			return
+		case errors.Is(err, ErrNotFound):
+			_ = h.commander.RecordRejected(request.Context(), audit)
+			writeError(writer, http.StatusNotFound, "not_found")
+			return
+		case errors.Is(err, ErrForbidden):
+			_ = h.commander.RecordRejected(request.Context(), audit)
+			writeError(writer, http.StatusForbidden, "forbidden")
+			return
+		default:
+			_ = h.commander.RecordRejected(request.Context(), audit)
+			writeError(writer, http.StatusInternalServerError, "internal_error")
+			return
+		}
 	}
-	writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
+	if status == "" {
+		status = "ok"
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"status": status})
 }
 
 func (h *handler) reject(

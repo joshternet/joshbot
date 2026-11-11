@@ -283,7 +283,7 @@ func TestPendingAutomaticCandidatesHandlesListAndCollectionFailures(t *testing.T
 		{
 			name:            "collection",
 			candidateColumn: "text",
-			value:           "NULL",
+			value:           "'bad'",
 			want:            "collect pending automatic candidates",
 		},
 	} {
@@ -298,6 +298,26 @@ func TestPendingAutomaticCandidatesHandlesListAndCollectionFailures(t *testing.T
 				)
 			`); err != nil {
 				t.Fatal(err)
+			}
+			if test.name == "collection" {
+				if _, err := pool.Exec(ctx, `
+					ALTER TABLE discovery_candidates
+						DROP CONSTRAINT IF EXISTS discovery_candidates_origin_check
+				`); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := pool.Exec(ctx, `
+					INSERT INTO discovery_candidates (
+						origin, first_discovered_at, last_discovered_at
+					) VALUES (
+						'bad',
+						statement_timestamp(),
+						statement_timestamp()
+					)
+					ON CONFLICT (origin) DO NOTHING
+				`); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if _, err := pool.Exec(
 				ctx,

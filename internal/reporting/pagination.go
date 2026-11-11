@@ -231,6 +231,13 @@ func (h *handler) withPagination(
 				) {
 					h.pagedAudits(writer, request, reader)
 				}
+			case "/api/v1/personal-sites":
+				pageHandler = func(
+					writer http.ResponseWriter,
+					request *http.Request,
+				) {
+					h.personalSites(writer, request)
+				}
 			default:
 				next.ServeHTTP(
 					writer,

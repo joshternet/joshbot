@@ -1,0 +1,26 @@
+{
+  "signals": {
+    "HasPersonSchema": false,
+    "HasOrganizationSchema": false,
+    "HasHCard": false,
+    "HasRelMe": false,
+    "HasFeed": false,
+    "HasAboutLink": false,
+    "HasNowLink": false,
+    "HasUsesLink": false,
+    "HasProjectsLink": false,
+    "HasBlogLink": false,
+    "HasAuthorMetadata": false,
+    "HasProductSchema": false,
+    "HasShoppingCart": false,
+    "HasCareersLink": false,
+    "HasInvestorLink": false,
+    "HasMarketplaceSignals": false,
+    "HasParkedDomain": false
+  },
+  "assessment": {
+    "Score": 0,
+    "Reasons": [],
+    "Version": 1
+  }
+}

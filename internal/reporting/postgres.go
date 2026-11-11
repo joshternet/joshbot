@@ -727,6 +727,8 @@ func (reader *PostgresReader) Services(
 				state,
 				current_origin,
 				message,
+				COALESCE(build_version, ''),
+				COALESCE(build_commit, ''),
 				started_at,
 				updated_at
 			FROM crawl_service_heartbeats
@@ -753,6 +755,8 @@ func (reader *PostgresReader) Services(
 				&service.State,
 				&service.CurrentOrigin,
 				&service.Message,
+				&service.BuildVersion,
+				&service.BuildCommit,
 				&service.StartedAt,
 				&service.UpdatedAt,
 			)

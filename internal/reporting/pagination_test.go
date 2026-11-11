@@ -33,6 +33,10 @@ type fakePagedReader struct {
 	auditPageResult auditPage
 	auditPageErr    error
 	auditQuery      auditQuery
+
+	personalSitePageResult personalSitePage
+	personalSitePageErr    error
+	personalSiteQuery      personalSiteQuery
 }
 
 func (reader *fakePagedReader) SourcesPage(
@@ -81,6 +85,21 @@ func (reader *fakePagedReader) AuditsPage(
 ) (auditPage, error) {
 	reader.auditQuery = query
 	return reader.auditPageResult, reader.auditPageErr
+}
+
+func (reader *fakePagedReader) PersonalSitesPage(
+	_ context.Context,
+	query personalSiteQuery,
+) (personalSitePage, error) {
+	reader.personalSiteQuery = query
+	return reader.personalSitePageResult, reader.personalSitePageErr
+}
+
+func (reader *fakePagedReader) PersonalSite(
+	context.Context,
+	string,
+) (PersonalSite, bool, error) {
+	return PersonalSite{}, false, nil
 }
 
 func TestPagedHandlersPreserveArrayBodiesAndExposeNextCursor(
@@ -155,6 +174,14 @@ func TestPagedHandlersPreserveArrayBodiesAndExposeNextCursor(
 				},
 			},
 			NextCursor: "next-event",
+		},
+		personalSitePageResult: personalSitePage{
+			Items: []PersonalSite{
+				{
+					Origin: "https://personal.example",
+				},
+			},
+			NextCursor: "next-personal",
 		},
 	}
 
@@ -323,6 +350,21 @@ func TestPagedHandlersPreserveArrayBodiesAndExposeNextCursor(
 					t.Errorf(
 						"queue event query = %#v",
 						query,
+					)
+				}
+			},
+		},
+		{
+			name:       "personal sites",
+			path:       "/api/v1/personal-sites?limit=4",
+			wantCursor: "next-personal",
+			wantBody:   `"origin":"https://personal.example"`,
+			check: func(t *testing.T) {
+				t.Helper()
+				if reader.personalSiteQuery.Limit != 4 {
+					t.Errorf(
+						"personal site query = %#v",
+						reader.personalSiteQuery,
 					)
 				}
 			},

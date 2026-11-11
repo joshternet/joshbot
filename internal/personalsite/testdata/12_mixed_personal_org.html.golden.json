@@ -1,0 +1,35 @@
+{
+  "signals": {
+    "HasPersonSchema": true,
+    "HasOrganizationSchema": true,
+    "HasHCard": true,
+    "HasRelMe": true,
+    "HasFeed": true,
+    "HasAboutLink": true,
+    "HasNowLink": false,
+    "HasUsesLink": false,
+    "HasProjectsLink": true,
+    "HasBlogLink": true,
+    "HasAuthorMetadata": false,
+    "HasProductSchema": false,
+    "HasShoppingCart": false,
+    "HasCareersLink": false,
+    "HasInvestorLink": false,
+    "HasMarketplaceSignals": false,
+    "HasParkedDomain": false
+  },
+  "assessment": {
+    "Score": 85,
+    "Reasons": [
+      "about_link",
+      "blog_link",
+      "feed",
+      "h_card",
+      "organization_schema",
+      "person_schema",
+      "projects_link",
+      "rel_me"
+    ],
+    "Version": 1
+  }
+}

@@ -80,6 +80,8 @@ type ServiceStatus struct {
 	State         string    `json:"state"`
 	CurrentOrigin string    `json:"current_origin,omitempty"`
 	Message       string    `json:"message,omitempty"`
+	BuildVersion  string    `json:"build_version,omitempty"`
+	BuildCommit   string    `json:"build_commit,omitempty"`
 	StartedAt     time.Time `json:"started_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
@@ -256,6 +258,7 @@ type handler struct {
 	reader                    Reader
 	expectedAuthorizationHash [sha256.Size]byte
 	now                       func() time.Time
+	build                     BuildInfo
 }
 
 // NewHandler constructs the private reporting HTTP handler.
@@ -263,10 +266,28 @@ func NewHandler(
 	reader Reader,
 	token string,
 ) (http.Handler, error) {
+	return NewHandlerWithBuild(
+		reader,
+		token,
+		BuildInfo{
+			Version: "unknown",
+			Commit:  "unknown",
+			State:   "unknown",
+		},
+	)
+}
+
+// NewHandlerWithBuild constructs the reporting handler with process build identity.
+func NewHandlerWithBuild(
+	reader Reader,
+	token string,
+	build BuildInfo,
+) (http.Handler, error) {
 	return newHandler(
 		reader,
 		token,
 		time.Now,
+		build,
 	)
 }
 
@@ -274,6 +295,7 @@ func newHandler(
 	reader Reader,
 	token string,
 	now func() time.Time,
+	build BuildInfo,
 ) (http.Handler, error) {
 	if reader == nil {
 		return nil, errReaderUnavailable
@@ -282,13 +304,30 @@ func newHandler(
 	if !operatortoken.Valid(token) {
 		return nil, errTokenUnavailable
 	}
+	if build.State == "" {
+		if build.Version == "" ||
+			build.Version == "unknown" ||
+			build.Commit == "" ||
+			build.Commit == "unknown" {
+			build.State = "unknown"
+		} else {
+			build.State = "available"
+		}
+	}
+	if build.Version == "" {
+		build.Version = "unknown"
+	}
+	if build.Commit == "" {
+		build.Commit = "unknown"
+	}
 
 	runtime := &handler{
 		reader: reader,
 		expectedAuthorizationHash: reportingAuthorizationDigest(
 			"Bearer " + token,
 		),
-		now: now,
+		now:   now,
+		build: build,
 	}
 
 	mux := http.NewServeMux()
@@ -316,6 +355,27 @@ func newHandler(
 		"GET /api/v1/sources/detail",
 		runtime.authorize(
 			http.HandlerFunc(runtime.sourceDetail),
+		),
+	)
+
+	mux.Handle(
+		"GET /api/v1/personal-sites",
+		runtime.authorize(
+			http.HandlerFunc(runtime.personalSites),
+		),
+	)
+
+	mux.Handle(
+		"GET /api/v1/personal-sites/detail",
+		runtime.authorize(
+			http.HandlerFunc(runtime.personalSiteDetail),
+		),
+	)
+
+	mux.Handle(
+		"GET /api/v1/build",
+		runtime.authorize(
+			http.HandlerFunc(runtime.buildIdentity),
 		),
 	)
 
@@ -1056,6 +1116,91 @@ func (h *handler) metrics(
 		_, _ = fmt.Fprintf(
 			writer,
 			"joshbot_verification_queue_failures{failure_category=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
+		"# HELP joshbot_personal_site_qualification Private personal-site qualification outcomes.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_personal_site_qualification gauge",
+	)
+	for _, breakdown := range durable.PersonalSiteQualifications {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_personal_site_qualification{outcome=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
+		"# HELP joshbot_personal_site_assessments Private personal-site score buckets.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_personal_site_assessments gauge",
+	)
+	for _, breakdown := range durable.PersonalSiteAssessments {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_personal_site_assessments{bucket=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
+		"# HELP joshbot_personal_site_truncated Assessed personal-site roots by truncation state.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_personal_site_truncated gauge",
+	)
+	for _, breakdown := range durable.PersonalSiteTruncated {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_personal_site_truncated{state=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
+		"# HELP joshbot_personal_site_awaiting Candidates awaiting current-version personal-site qualification.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_personal_site_awaiting gauge",
+	)
+	for _, breakdown := range durable.PersonalSiteAwaiting {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_personal_site_awaiting{state=\"%s\"} %d\n",
+			metricLabel(breakdown.Label),
+			breakdown.Count,
+		)
+	}
+
+	_, _ = fmt.Fprintln(
+		writer,
+		"# HELP joshbot_automatic_promotions_by_score_bucket Automatic promotions by personal-site score bucket.",
+	)
+	_, _ = fmt.Fprintln(
+		writer,
+		"# TYPE joshbot_automatic_promotions_by_score_bucket gauge",
+	)
+	for _, breakdown := range durable.AutomaticPromotionsByScoreBucket {
+		_, _ = fmt.Fprintf(
+			writer,
+			"joshbot_automatic_promotions_by_score_bucket{bucket=\"%s\"} %d\n",
 			metricLabel(breakdown.Label),
 			breakdown.Count,
 		)

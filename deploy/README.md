@@ -678,12 +678,15 @@ GET /healthz
 GET /api/v1/status
 GET /api/v1/sources
 GET /api/v1/sources/detail
+GET /api/v1/personal-sites
+GET /api/v1/personal-sites/detail
 GET /api/v1/crawls
 GET /api/v1/crawls/{id}
 GET /api/v1/queue
 GET /api/v1/queue/events
 GET /api/v1/audit
 GET /api/v1/services
+GET /api/v1/build
 GET /metrics
 ```
 
@@ -733,6 +736,10 @@ POST /api/v1/control/domain-avoid
 DELETE /api/v1/control/domain-avoid/{pattern}
 POST /api/v1/control/origins/block
 POST /api/v1/control/origins/allow
+PUT /api/v1/control/personal-sites/override
+DELETE /api/v1/control/personal-sites/override
+POST /api/v1/control/personal-sites/rescore
+POST /api/v1/control/origins/crawl
 ```
 
 Only `/healthz` is unauthenticated. All `/api/` routes require the independent

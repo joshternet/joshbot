@@ -12,6 +12,7 @@ import (
 	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/netguard"
 	"github.com/joshternet/joshbot/internal/origin"
+	"github.com/joshternet/joshbot/internal/personalsite"
 	"github.com/joshternet/joshbot/internal/retry"
 	"github.com/joshternet/joshbot/internal/store"
 )
@@ -41,8 +42,12 @@ type discoveryCandidateStore interface {
 }
 
 type runtimeCandidateSink struct {
-	store    discoveryCandidateStore
-	resolver netguard.Resolver
+	store                  discoveryCandidateStore
+	resolver               netguard.Resolver
+	getter                 discovery.Getter
+	leaseOwner             string
+	maxAutomaticPromotions int
+	logger                 *slog.Logger
 }
 
 type runDiscoveryCandidateStore interface {
@@ -103,6 +108,19 @@ type automaticCandidateStore interface {
 	) error
 }
 
+type personalSiteAssessmentStore interface {
+	ClaimPersonalSiteQualifications(
+		context.Context,
+		string,
+		int,
+	) ([]store.PersonalSiteQualifyClaim, error)
+	CompletePersonalSiteQualification(
+		context.Context,
+		store.PersonalSiteQualifyClaim,
+		personalsite.Qualification,
+	) error
+}
+
 const discoveryAdmissionDNSRetryDelay = 100 * time.Millisecond
 
 var sleepAdmissionDNSRetry = sleepRegistryInterval
@@ -116,6 +134,10 @@ func (sink runtimeCandidateSink) FinalizeCandidates(
 	admissionStore, ok := sink.store.(automaticCandidateStore)
 	if !ok {
 		return nil
+	}
+
+	if err := sink.qualifyPersonalSiteCandidates(ctx); err != nil {
+		return err
 	}
 
 	pending, err := admissionStore.PendingAutomaticCandidates(
@@ -180,6 +202,88 @@ func (sink runtimeCandidateSink) FinalizeCandidates(
 		runID,
 		decisions,
 	)
+}
+
+// DrainPersonalSiteQualifications runs due personal-site qualification work
+// even when no crawl source is claimed.
+func (sink runtimeCandidateSink) DrainPersonalSiteQualifications(
+	ctx context.Context,
+) error {
+	return sink.qualifyPersonalSiteCandidates(ctx)
+}
+
+func (sink runtimeCandidateSink) qualifyPersonalSiteCandidates(
+	ctx context.Context,
+) error {
+	if sink.getter == nil {
+		return nil
+	}
+
+	assessmentStore, ok := sink.store.(personalSiteAssessmentStore)
+	if !ok {
+		return nil
+	}
+
+	owner := sink.leaseOwner
+	if owner == "" {
+		owner = "discovery"
+	}
+	limit := personalSiteQualificationLimit(sink.maxAutomaticPromotions)
+	claims, err := assessmentStore.ClaimPersonalSiteQualifications(
+		ctx,
+		owner,
+		limit,
+	)
+	if err != nil {
+		return err
+	}
+
+	for _, claim := range claims {
+		started := time.Now().UTC()
+		qualification, qualifyErr := discovery.QualifyPersonalSite(
+			ctx,
+			sink.getter,
+			claim.Origin,
+		)
+		if qualifyErr != nil {
+			return qualifyErr
+		}
+		if err := assessmentStore.CompletePersonalSiteQualification(
+			ctx,
+			claim,
+			qualification,
+		); err != nil {
+			if errors.Is(err, store.ErrPersonalSiteClaimLost) {
+				continue
+			}
+			return err
+		}
+		if sink.logger != nil {
+			sink.logger.Info(
+				"personal site assessment",
+				"origin", claim.Origin.String(),
+				"outcome", string(qualification.Outcome),
+				"score", qualification.Assessment.Score,
+				"version", qualification.Assessment.Version,
+				"truncated", qualification.Truncated,
+				"http_status", qualification.HTTPStatus,
+				"reasons", qualification.Assessment.Reasons,
+				"duration_ms", time.Since(started).Milliseconds(),
+			)
+		}
+	}
+	return nil
+}
+
+func personalSiteQualificationLimit(maxPromotions int) int {
+	if maxPromotions <= 0 {
+		maxPromotions = 100
+	}
+	bound := maxPromotions * 2
+	if bound > 200 {
+		return 200
+	}
+	return bound
 }
 
 type discoveryRuntimeStore interface {
@@ -337,8 +441,12 @@ func newDiscoveryRuntimeWithStoreFactory(
 	crawler, err := discovery.NewMultiPageCrawlerWithTelemetry(
 		checker,
 		runtimeCandidateSink{
-			store:    discoveryStore,
-			resolver: net.DefaultResolver,
+			store:                  discoveryStore,
+			resolver:               net.DefaultResolver,
+			getter:                 checker,
+			leaseOwner:             settings.leaseOwner,
+			maxAutomaticPromotions: settings.automatic.MaxAutomaticPromotionsPerRun,
+			logger:                 slog.Default(),
 		},
 		discoveryStore,
 		settings.crawl,

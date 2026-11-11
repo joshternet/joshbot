@@ -1,0 +1,30 @@
+{
+  "signals": {
+    "HasPersonSchema": false,
+    "HasOrganizationSchema": false,
+    "HasHCard": false,
+    "HasRelMe": false,
+    "HasFeed": false,
+    "HasAboutLink": false,
+    "HasNowLink": false,
+    "HasUsesLink": false,
+    "HasProjectsLink": false,
+    "HasBlogLink": false,
+    "HasAuthorMetadata": false,
+    "HasProductSchema": true,
+    "HasShoppingCart": true,
+    "HasCareersLink": false,
+    "HasInvestorLink": false,
+    "HasMarketplaceSignals": true,
+    "HasParkedDomain": false
+  },
+  "assessment": {
+    "Score": 0,
+    "Reasons": [
+      "marketplace",
+      "product_schema",
+      "shopping_cart"
+    ],
+    "Version": 1
+  }
+}

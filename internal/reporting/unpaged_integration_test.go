@@ -948,6 +948,36 @@ func TestUnpagedReportingIntegrationMetricsEmitsDurableBreakdowns(
 					Count: 4,
 				},
 			},
+			PersonalSiteQualifications: []reporting.MetricBreakdown{
+				{
+					Label: "assessed",
+					Count: 5,
+				},
+			},
+			PersonalSiteAssessments: []reporting.MetricBreakdown{
+				{
+					Label: "60-79",
+					Count: 6,
+				},
+			},
+			AutomaticPromotionsByScoreBucket: []reporting.MetricBreakdown{
+				{
+					Label: "80-100",
+					Count: 7,
+				},
+			},
+			PersonalSiteTruncated: []reporting.MetricBreakdown{
+				{
+					Label: "truncated",
+					Count: 8,
+				},
+			},
+			PersonalSiteAwaiting: []reporting.MetricBreakdown{
+				{
+					Label: "due",
+					Count: 9,
+				},
+			},
 		},
 	}
 
@@ -976,6 +1006,11 @@ func TestUnpagedReportingIntegrationMetricsEmitsDurableBreakdowns(
 		`joshbot_retained_page_attempt_failures{failure_category="transport"} 2`,
 		`joshbot_retained_page_http_statuses{status="503"} 3`,
 		`joshbot_verification_queue_failures{failure_category="robots_temporary"} 4`,
+		`joshbot_personal_site_qualification{outcome="assessed"} 5`,
+		`joshbot_personal_site_assessments{bucket="60-79"} 6`,
+		`joshbot_automatic_promotions_by_score_bucket{bucket="80-100"} 7`,
+		`joshbot_personal_site_truncated{state="truncated"} 8`,
+		`joshbot_personal_site_awaiting{state="due"} 9`,
 		`joshbot_service_heartbeat_age_seconds{service="future-worker",state="running"} 0`,
 		"# EOF",
 	}

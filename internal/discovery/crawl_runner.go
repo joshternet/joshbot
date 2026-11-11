@@ -490,6 +490,17 @@ func (runner *CrawlRunner) noSource(
 		}
 	}
 
+	if drainer, ok := runner.crawler.(PersonalSiteQualificationDrainer); ok {
+		if err := drainer.DrainPersonalSiteQualifications(ctx); err != nil {
+			runner.observe(
+				"failed",
+				origin.Origin{},
+				"personal_site_qualify_failed",
+			)
+			return CrawlReport{}, err
+		}
+	}
+
 	runner.observe(
 		state,
 		origin.Origin{},
