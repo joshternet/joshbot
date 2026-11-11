@@ -26,6 +26,46 @@ func TestPersonalSiteIntegrationCoverage(t *testing.T) {
 			name: "valid outcome",
 			run:  TestValidPersonalSiteOutcome,
 		},
+		{
+			name: "claim without database",
+			run:  TestClaimPersonalSiteQualificationsWithoutDatabase,
+		},
+		{
+			name: "complete without database",
+			run:  TestCompletePersonalSiteQualificationWithoutDatabase,
+		},
+		{
+			name: "upsert transaction paths",
+			run:  TestUpsertPersonalSiteAssessmentTransactionPaths,
+		},
+		{
+			name: "persist and backfill",
+			run:  TestPersonalSitePersistStateAndBackfill,
+		},
+		{
+			name: "pending backfill",
+			run:  TestPendingAutomaticCandidatesBackfillWithoutDatabase,
+		},
+		{
+			name: "set override",
+			run:  TestSetPersonalSiteOverrideWithoutDatabase,
+		},
+		{
+			name: "clear override",
+			run:  TestClearPersonalSiteOverrideWithoutDatabase,
+		},
+		{
+			name: "request rescore",
+			run:  TestRequestPersonalSiteRescoreWithoutDatabase,
+		},
+		{
+			name: "request crawl",
+			run:  TestRequestOriginCrawlWithoutDatabase,
+		},
+		{
+			name: "reject avoided",
+			run:  TestRejectDomainAvoidedOriginWithoutDatabase,
+		},
 	}
 
 	for _, test := range tests {

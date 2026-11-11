@@ -639,6 +639,7 @@ func admitResolvedAutomaticCandidates(
 	source origin.Origin,
 ) {
 	t.Helper()
+	discoveryStore.testBackfillPersonalSiteAssessments = true
 	runID := beginAutomaticAdmissionRun(
 		t,
 		discoveryStore,

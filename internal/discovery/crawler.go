@@ -54,6 +54,12 @@ type CandidateFinalizer interface {
 	FinalizeCandidates(context.Context, CrawlRunID) error
 }
 
+// PersonalSiteQualificationDrainer runs due personal-site qualification when
+// discovery is otherwise idle.
+type PersonalSiteQualificationDrainer interface {
+	DrainPersonalSiteQualifications(context.Context) error
+}
+
 // CrawlConfig bounds one source crawl attempt.
 type CrawlConfig struct {
 	MaxDepth                     int
@@ -101,6 +107,21 @@ type crawledPage struct {
 	failureCategory retry.Category
 	retryAfter      time.Duration
 	err             error
+}
+
+// DrainPersonalSiteQualifications delegates idle qualification work to the
+// candidate sink when it implements PersonalSiteQualificationDrainer.
+func (crawler *MultiPageCrawler) DrainPersonalSiteQualifications(
+	ctx context.Context,
+) error {
+	if crawler == nil {
+		return nil
+	}
+	drainer, ok := crawler.sink.(PersonalSiteQualificationDrainer)
+	if !ok {
+		return nil
+	}
+	return drainer.DrainPersonalSiteQualifications(ctx)
 }
 
 // NewMultiPageCrawlerWithTelemetry constructs a crawler that durably reports

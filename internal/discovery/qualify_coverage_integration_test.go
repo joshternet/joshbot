@@ -25,7 +25,7 @@ func TestQualifyPersonalSiteIntegrationCoverage(t *testing.T) {
 		},
 		{
 			name: "too large",
-			run:  TestQualifyPersonalSiteTooLarge,
+			run:  TestQualifyPersonalSiteOversizedAssessed,
 		},
 		{
 			name: "http error",
@@ -58,6 +58,22 @@ func TestQualifyPersonalSiteIntegrationCoverage(t *testing.T) {
 		{
 			name: "extract statuses",
 			run:  TestQualifyPersonalSiteExtractStatuses,
+		},
+		{
+			name: "retry after",
+			run:  TestQualifyPersonalSiteRetryAfter,
+		},
+		{
+			name: "drain idle",
+			run:  TestCrawlRunnerDrainsPersonalSiteQualificationsWhenIdle,
+		},
+		{
+			name: "drain failure",
+			run:  TestCrawlRunnerReturnsPersonalSiteDrainFailure,
+		},
+		{
+			name: "crawler drain",
+			run:  TestMultiPageCrawlerDrainPersonalSiteQualifications,
 		},
 	}
 

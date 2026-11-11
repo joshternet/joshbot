@@ -31,6 +31,37 @@ func (*controlTestCommander) RemoveDomainAvoid(context.Context, string, control.
 func (*controlTestCommander) SetOriginBlocked(context.Context, string, bool, control.Audit) error {
 	return nil
 }
+func (*controlTestCommander) SetPersonalSiteOverride(
+	context.Context,
+	string,
+	int,
+	int64,
+	control.Audit,
+) error {
+	return nil
+}
+func (*controlTestCommander) ClearPersonalSiteOverride(
+	context.Context,
+	string,
+	int64,
+	control.Audit,
+) error {
+	return nil
+}
+func (*controlTestCommander) RequestPersonalSiteRescore(
+	context.Context,
+	string,
+	control.Audit,
+) (string, error) {
+	return "ok", nil
+}
+func (*controlTestCommander) RequestOriginCrawl(
+	context.Context,
+	string,
+	control.Audit,
+) (string, error) {
+	return "ok", nil
+}
 func (*controlTestCommander) RecordRejected(context.Context, control.Audit) error {
 	return nil
 }

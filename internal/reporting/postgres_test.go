@@ -584,11 +584,27 @@ func TestPostgresReaderMetricsBreakdowns(
 			personal_site_assessment_version = 1,
 			personal_site_assessed_at = statement_timestamp(),
 			personal_site_qualification_outcome = 'assessed',
-			personal_site_reason_codes = '["feed"]'::jsonb
+			personal_site_reason_codes = '["feed"]'::jsonb,
+			personal_site_truncated = true
 		WHERE origin = 'https://blocked.example'
 	`); err != nil {
 		t.Fatalf(
 			"update personal site assessment: %v",
+			err,
+		)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE discovery_candidates
+		SET
+			personal_site_qualification_outcome = 'timeout',
+			personal_site_assessed_at = statement_timestamp(),
+			personal_site_next_attempt_at = statement_timestamp()
+				- interval '1 minute'
+		WHERE origin = 'https://auto.example'
+	`); err != nil {
+		t.Fatalf(
+			"update awaiting personal site candidate: %v",
 			err,
 		)
 	}
@@ -667,15 +683,24 @@ func TestPostgresReaderMetricsBreakdowns(
 		)
 	}
 
-	if len(metrics.PersonalSiteQualifications) != 1 ||
-		metrics.PersonalSiteQualifications[0] != (MetricBreakdown{
-			Label: "assessed",
-			Count: 1,
-		}) {
+	wantQualifications := map[string]int64{
+		"assessed": 1,
+		"timeout":  1,
+	}
+	if len(metrics.PersonalSiteQualifications) != len(wantQualifications) {
 		t.Errorf(
 			"PersonalSiteQualifications = %#v",
 			metrics.PersonalSiteQualifications,
 		)
+	}
+	for _, breakdown := range metrics.PersonalSiteQualifications {
+		if wantQualifications[breakdown.Label] != breakdown.Count {
+			t.Errorf(
+				"PersonalSiteQualifications = %#v",
+				metrics.PersonalSiteQualifications,
+			)
+			break
+		}
 	}
 
 	if len(metrics.PersonalSiteAssessments) != 1 ||
@@ -697,6 +722,28 @@ func TestPostgresReaderMetricsBreakdowns(
 		t.Errorf(
 			"AutomaticPromotionsByScoreBucket = %#v",
 			metrics.AutomaticPromotionsByScoreBucket,
+		)
+	}
+
+	if len(metrics.PersonalSiteTruncated) != 1 ||
+		metrics.PersonalSiteTruncated[0] != (MetricBreakdown{
+			Label: "truncated",
+			Count: 1,
+		}) {
+		t.Errorf(
+			"PersonalSiteTruncated = %#v",
+			metrics.PersonalSiteTruncated,
+		)
+	}
+
+	if len(metrics.PersonalSiteAwaiting) != 1 ||
+		metrics.PersonalSiteAwaiting[0] != (MetricBreakdown{
+			Label: "due",
+			Count: 1,
+		}) {
+		t.Errorf(
+			"PersonalSiteAwaiting = %#v",
+			metrics.PersonalSiteAwaiting,
 		)
 	}
 }

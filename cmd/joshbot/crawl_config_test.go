@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/joshternet/joshbot/internal/discovery"
-	"github.com/joshternet/joshbot/internal/personalsite"
 	"github.com/joshternet/joshbot/internal/robots"
 	"github.com/joshternet/joshbot/internal/store"
 )
@@ -33,7 +32,6 @@ func TestCrawlRuntimeConfigurationUsesExplicitBudgets(
 			MaxPendingProbes:             defaultAutomaticCrawlMaxPendingProbes,
 			MaxAutomaticPromotionsPerRun: defaultAutomaticCrawlMaxPromotionsPerRun,
 			ExcludedHostSuffixes:         defaultAutomaticCrawlExcludedHosts,
-			PersonalSiteScoring:          personalsite.ScoringModeOff,
 		},
 		runner: discovery.CrawlRunnerConfig{
 			DiscoveryInterval: defaultDiscoveryInterval,
@@ -114,7 +112,6 @@ func TestCrawlRuntimeConfigurationOverridesEverySetting(
 			MaxPendingProbes:             250,
 			MaxAutomaticPromotionsPerRun: 17,
 			ExcludedHostSuffixes:         "hosted.example,social.example",
-			PersonalSiteScoring:          personalsite.ScoringModeOff,
 		},
 	}
 
@@ -124,41 +121,6 @@ func TestCrawlRuntimeConfigurationOverridesEverySetting(
 			settings,
 			want,
 		)
-	}
-}
-
-func TestCrawlRuntimeConfigurationPersonalSiteScoring(
-	t *testing.T,
-) {
-	environment := validCrawlRuntimeEnvironment()
-	environment[personalSiteScoringEnvironment] = "shadow"
-
-	settings, err := loadCrawlRuntimeSettings(environment.get)
-	if err != nil {
-		t.Fatalf("loadCrawlRuntimeSettings() error = %v", err)
-	}
-	if settings.automatic.PersonalSiteScoring != personalsite.ScoringModeShadow {
-		t.Fatalf(
-			"PersonalSiteScoring = %q, want shadow",
-			settings.automatic.PersonalSiteScoring,
-		)
-	}
-
-	environment[personalSiteScoringEnvironment] = "order"
-	settings, err = loadCrawlRuntimeSettings(environment.get)
-	if err != nil {
-		t.Fatalf("loadCrawlRuntimeSettings(order) error = %v", err)
-	}
-	if settings.automatic.PersonalSiteScoring != personalsite.ScoringModeOrder {
-		t.Fatalf(
-			"PersonalSiteScoring = %q, want order",
-			settings.automatic.PersonalSiteScoring,
-		)
-	}
-
-	environment[personalSiteScoringEnvironment] = "maybe"
-	if _, err := loadCrawlRuntimeSettings(environment.get); err == nil {
-		t.Fatal("loadCrawlRuntimeSettings(maybe) error = nil")
 	}
 }
 

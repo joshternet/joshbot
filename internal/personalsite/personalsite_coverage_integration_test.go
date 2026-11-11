@@ -23,6 +23,10 @@ func TestPersonalsiteIntegrationCoverage(t *testing.T) {
 			run:  TestExtractSignalsEdgeCases,
 		},
 		{
+			name: "extract oversized commerce",
+			run:  TestExtractSignalsOversizedCommercePrefix,
+		},
+		{
 			name: "score weights",
 			run:  TestScorePersonalSiteWeights,
 		},
@@ -35,8 +39,44 @@ func TestPersonalsiteIntegrationCoverage(t *testing.T) {
 			run:  TestScoreBucket,
 		},
 		{
-			name: "scoring mode",
-			run:  TestParseScoringMode,
+			name: "retry ladders",
+			run:  TestRetryDelayLadders,
+		},
+		{
+			name: "retry classes",
+			run:  TestRetryClassForHTTPStatuses,
+		},
+		{
+			name: "retry all outcomes",
+			run:  TestRetryClassForAllOutcomes,
+		},
+		{
+			name: "retry delay branches",
+			run:  TestNextFailureStepNoneAndRetryDelayBranches,
+		},
+		{
+			name: "parse retry after",
+			run:  TestParseRetryAfter,
+		},
+		{
+			name: "parse retry after edges",
+			run:  TestParseRetryAfterEdgeCases,
+		},
+		{
+			name: "next failure step reset",
+			run:  TestNextFailureStepResetsOnClassChange,
+		},
+		{
+			name: "reason weights",
+			run:  TestReasonWeightAllCodes,
+		},
+		{
+			name: "contributions skip unknown",
+			run:  TestContributionsFromReasonsSkipsUnknown,
+		},
+		{
+			name: "contributions clamping",
+			run:  TestContributionsFromReasonsClamping,
 		},
 	}
 

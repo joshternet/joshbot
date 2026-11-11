@@ -147,6 +147,7 @@ func TestNewHandlerValidatesDependencies(
 			func() time.Time {
 				return testNow
 			},
+			BuildInfo{State: "unknown"},
 		); !errors.Is(err, errTokenUnavailable) {
 			t.Errorf(
 				"newHandler(%q) error = %v, want %v",
@@ -171,6 +172,35 @@ func TestNewHandlerValidatesDependencies(
 	if handler == nil {
 		t.Fatal(
 			"NewHandler() = nil, want handler",
+		)
+	}
+
+	unknownBuild, err := NewHandlerWithBuild(
+		reader,
+		testToken,
+		BuildInfo{},
+	)
+	if err != nil || unknownBuild == nil {
+		t.Fatalf(
+			"NewHandlerWithBuild(empty) = %v err=%v",
+			unknownBuild,
+			err,
+		)
+	}
+
+	availableBuild, err := NewHandlerWithBuild(
+		reader,
+		testToken,
+		BuildInfo{
+			Version: "1.2.3",
+			Commit:  "abcdef0",
+		},
+	)
+	if err != nil || availableBuild == nil {
+		t.Fatalf(
+			"NewHandlerWithBuild(available) = %v err=%v",
+			availableBuild,
+			err,
 		)
 	}
 }
@@ -1055,6 +1085,18 @@ func TestMetricsExposeUnfinishedCrawlRunCount(
 					Count: 7,
 				},
 			},
+			PersonalSiteTruncated: []MetricBreakdown{
+				{
+					Label: "truncated",
+					Count: 8,
+				},
+			},
+			PersonalSiteAwaiting: []MetricBreakdown{
+				{
+					Label: "due",
+					Count: 9,
+				},
+			},
 		},
 	}
 
@@ -1096,6 +1138,8 @@ func TestMetricsExposeUnfinishedCrawlRunCount(
 		`joshbot_personal_site_qualification{outcome="assessed"} 5`,
 		`joshbot_personal_site_assessments{bucket="60-79"} 6`,
 		`joshbot_automatic_promotions_by_score_bucket{bucket="80-100"} 7`,
+		`joshbot_personal_site_truncated{state="truncated"} 8`,
+		`joshbot_personal_site_awaiting{state="due"} 9`,
 	} {
 		if !strings.Contains(
 			body,
@@ -1121,6 +1165,11 @@ func mustReportingHandler(
 		testToken,
 		func() time.Time {
 			return testNow
+		},
+		BuildInfo{
+			Version: "test",
+			Commit:  "abc123",
+			State:   "available",
 		},
 	)
 	if err != nil {

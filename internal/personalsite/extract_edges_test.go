@@ -16,7 +16,7 @@ func TestExtractSignalsEdgeCases(t *testing.T) {
 
 	t.Run("sniff_html_when_content_type_empty", func(t *testing.T) {
 		body := []byte(`<!doctype html><html><body><a href="/about">a</a></body></html>`)
-		signals, status, err := ExtractSignals(pageURL, "", body)
+		signals, status, _, err := ExtractSignals(pageURL, "", body)
 		if err != nil {
 			t.Fatalf("ExtractSignals() error = %v", err)
 		}
@@ -31,7 +31,7 @@ func TestExtractSignalsEdgeCases(t *testing.T) {
 
 	t.Run("anchor_hcard_without_href", func(t *testing.T) {
 		body := []byte(`<!doctype html><a class="h-card" rel="me">x</a>`)
-		signals, status, err := ExtractSignals(
+		signals, status, _, err := ExtractSignals(
 			pageURL,
 			"text/html",
 			body,
@@ -52,7 +52,7 @@ func TestExtractSignalsEdgeCases(t *testing.T) {
 				`<a href="https://example.com/blog/post">blog</a>` +
 				`<base href="https://cdn.example/">`,
 		)
-		signals, status, err := ExtractSignals(
+		signals, status, _, err := ExtractSignals(
 			pageURL,
 			"text/html",
 			body,
@@ -70,7 +70,7 @@ func TestExtractSignalsEdgeCases(t *testing.T) {
 <script type="application/ld+json"></script>
 <script type="application/ld+json">{"@type":["Person","CreativeWork"]}</script>
 <script type="text/javascript">{"@type":"Person"}</script>`)
-		signals, status, err := ExtractSignals(
+		signals, status, _, err := ExtractSignals(
 			pageURL,
 			"text/html",
 			body,
@@ -87,7 +87,7 @@ func TestExtractSignalsEdgeCases(t *testing.T) {
 		body := []byte(
 			`<!doctype html><script type="application/ld+json">{</script>`,
 		)
-		signals, status, err := ExtractSignals(
+		signals, status, _, err := ExtractSignals(
 			pageURL,
 			"text/html",
 			body,
@@ -106,7 +106,7 @@ func TestExtractSignalsEdgeCases(t *testing.T) {
 		parseHTMLDocument = func(io.Reader) (*html.Node, error) {
 			return nil, errors.New("forced parse failure")
 		}
-		_, status, err := ExtractSignals(
+		_, status, _, err := ExtractSignals(
 			pageURL,
 			"text/html",
 			[]byte(`<html></html>`),
@@ -125,7 +125,7 @@ func TestExtractSignalsEdgeCases(t *testing.T) {
 		decodeHTMLBody = func([]byte, string) ([]byte, bool, error) {
 			return nil, false, errors.New("forced decode failure")
 		}
-		_, status, err := ExtractSignals(
+		_, status, _, err := ExtractSignals(
 			pageURL,
 			"text/html",
 			[]byte(`<html></html>`),
@@ -138,13 +138,13 @@ func TestExtractSignalsEdgeCases(t *testing.T) {
 		}
 	})
 
-	t.Run("decode_too_large_status", func(t *testing.T) {
+	t.Run("decode_truncated_still_assessed", func(t *testing.T) {
 		original := decodeHTMLBody
 		t.Cleanup(func() { decodeHTMLBody = original })
 		decodeHTMLBody = func([]byte, string) ([]byte, bool, error) {
-			return nil, true, nil
+			return []byte(`<html><body><a href="/cart">c</a></body></html>`), true, nil
 		}
-		_, status, err := ExtractSignals(
+		signals, status, truncated, err := ExtractSignals(
 			pageURL,
 			"text/html",
 			[]byte(`<html></html>`),
@@ -152,18 +152,25 @@ func TestExtractSignalsEdgeCases(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ExtractSignals() error = %v", err)
 		}
-		if status != ExtractStatusTooLarge {
-			t.Fatalf("status = %v, want too large", status)
+		if status != ExtractStatusComplete || !truncated {
+			t.Fatalf(
+				"status=%v truncated=%v, want complete+truncated",
+				status,
+				truncated,
+			)
+		}
+		if !signals.HasShoppingCart {
+			t.Fatalf("signals = %#v, want cart", signals)
 		}
 	})
 
-	t.Run("decoded_too_large", func(t *testing.T) {
+	t.Run("decoded_too_large_keeps_prefix", func(t *testing.T) {
 		reader := bytes.NewReader(bytes.Repeat([]byte("a"), maxDecodedBody+1))
 		data, tooLarge, err := readBounded(reader, maxDecodedBody)
 		if err != nil {
 			t.Fatalf("readBounded() error = %v", err)
 		}
-		if !tooLarge || data != nil {
+		if !tooLarge || len(data) != maxDecodedBody {
 			t.Fatalf(
 				"readBounded() = %d tooLarge=%v",
 				len(data),
@@ -239,7 +246,7 @@ func TestExtractSignalsEdgeCases(t *testing.T) {
 		body := []byte(
 			`<!doctype html><link rel="me"><link rel="alternate" type="application/feed+json">`,
 		)
-		signals, status, err := ExtractSignals(
+		signals, status, _, err := ExtractSignals(
 			pageURL,
 			"text/html",
 			body,
@@ -262,7 +269,7 @@ func TestExtractSignalsEdgeCases(t *testing.T) {
 <a rel="author" href="/profile">a</a>
 <meta name="googlebot" content="noindex, parked">
 `)
-		signals, status, err := ExtractSignals(
+		signals, status, _, err := ExtractSignals(
 			pageURL,
 			"text/html",
 			body,

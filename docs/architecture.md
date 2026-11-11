@@ -94,12 +94,11 @@ between validation and dialing. Redirects are retrieved through the same
 guarded path, and automatic admission performs a fresh all-address resolution
 after evidence is stored and immediately before promotion.
 
-When `JOSHBOT_PERSONAL_SITE_SCORING` is `shadow` or `order`, discovery also
-qualifies a bounded batch of eligible automatic candidates by fetching `/`
-through the same robots-aware getter, scoring structural HTML signals in
-`internal/personalsite`, and persisting a private assessment used only for
-admission ordering (after shadow review). Fetch failures remain unassessed;
-they are never treated as score 0.
+When automatic admission is enabled, discovery qualifies eligible automatic
+candidates by fetching `/` through the same robots-aware path, scoring
+structural HTML signals (including bounded truncated prefixes), and storing a
+private current-version assessment used only for crawl scheduling. Fetch
+failures stay unassessed and retry later; they are never treated as score 0.
 
 The network guard reduces SSRF risk but does not replace host firewall policy.
 
@@ -253,10 +252,16 @@ Defines the shared typed failure categories, one-immediate-retry bound,
 
 ### `internal/personalsite`
 
-Derives bounded structural booleans from one HTML root page and scores them
-with a pure deterministic function for private automatic-admission priority.
-It never retains page text, never changes Josh identity or registry output,
-and never invents a permanent deny from a low score.
+Scores one HTML root page from structural signals such as Person markup,
+indieweb-style links, feeds, and contrary commerce or parked-domain markers.
+Oversized roots are scored from a bounded truncated prefix with an explicit
+truncation flag. Unassessable fetch or parse outcomes keep a null score and
+retry on an outcome-based schedule. Reason-code weights are also exposed for
+reporting explanations without persisting a second weight table. The score is
+a private scheduling signal for automatic crawl admission. Operator overrides
+may change effective admission priority while preserving the calculated score.
+It does not retain page text, change Josh identity or registry output, or
+permanently exclude an origin for a low score.
 
 ### `internal/discovery`
 
@@ -448,11 +453,11 @@ Joshternet participation. An origin becomes a participant only through its own
 effective valid declaration.
 
 When automatic expansion is enabled, candidate evidence is attributed to its
-first durable crawl run before bounded admission. Eligible link candidates are
-allocated in canonical-origin order, up to the admission run's snapshotted
-promotion limit. Overflow remains unbatched durable evidence for a later crawl
-run. Each allocated origin then receives a fresh all-address netguard
-resolution. A transient resolution failure receives one immediate retry and
+first durable crawl run before bounded admission. Only current-version
+assessed link candidates are allocated, up to the admission run's snapshotted
+promotion limit, ordered by private personal-site score descending then
+origin. Overflow remains unbatched durable evidence for a later crawl run.
+Each allocated origin then receives a fresh all-address netguard resolution. A transient resolution failure receives one immediate retry and
 then a durable due time; unsafe addresses are retained as evidence but
 recorded as network-rejected. Capacity, policy, transient, and
 automatic-expansion-pause deferrals do not erase the candidate or provenance.

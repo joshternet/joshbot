@@ -966,6 +966,18 @@ func TestUnpagedReportingIntegrationMetricsEmitsDurableBreakdowns(
 					Count: 7,
 				},
 			},
+			PersonalSiteTruncated: []reporting.MetricBreakdown{
+				{
+					Label: "truncated",
+					Count: 8,
+				},
+			},
+			PersonalSiteAwaiting: []reporting.MetricBreakdown{
+				{
+					Label: "due",
+					Count: 9,
+				},
+			},
 		},
 	}
 
@@ -997,6 +1009,8 @@ func TestUnpagedReportingIntegrationMetricsEmitsDurableBreakdowns(
 		`joshbot_personal_site_qualification{outcome="assessed"} 5`,
 		`joshbot_personal_site_assessments{bucket="60-79"} 6`,
 		`joshbot_automatic_promotions_by_score_bucket{bucket="80-100"} 7`,
+		`joshbot_personal_site_truncated{state="truncated"} 8`,
+		`joshbot_personal_site_awaiting{state="due"} 9`,
 		`joshbot_service_heartbeat_age_seconds{service="future-worker",state="running"} 0`,
 		"# EOF",
 	}

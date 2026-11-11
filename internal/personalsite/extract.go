@@ -31,25 +31,27 @@ var newCharsetReader = charset.NewReader
 //
 // It never executes scripts, never loads external resources, and never
 // returns page text. Malformed HTML yields ExtractStatusUnavailable without
-// panicking.
+// panicking. Oversized bodies are truncated to the configured bounds and
+// still assessed; truncated is true when a prefix was used.
 //
 // @param pageURL - Canonical URL of the page being inspected.
 // @param contentType - Declared Content-Type, or empty to sniff.
-// @param body - Raw response body bytes, already size-bounded by the caller
-// when fetched over the network.
-// @returns SiteSignals, ExtractStatus, and a non-nil error only for invalid
-// arguments.
+// @param body - Raw response body bytes.
+// @returns SiteSignals, ExtractStatus, whether input was truncated, and a
+// non-nil error only for invalid arguments.
 func ExtractSignals(
 	pageURL *url.URL,
 	contentType string,
 	body []byte,
-) (SiteSignals, ExtractStatus, error) {
+) (SiteSignals, ExtractStatus, bool, error) {
 	if pageURL == nil {
-		return SiteSignals{}, 0, errInvalidPageURL
+		return SiteSignals{}, 0, false, errInvalidPageURL
 	}
 
+	truncated := false
 	if len(body) > maxRawBody {
-		return SiteSignals{}, ExtractStatusTooLarge, nil
+		body = body[:maxRawBody]
+		truncated = true
 	}
 
 	effectiveContentType := contentType
@@ -60,25 +62,26 @@ func ExtractSignals(
 	if !isHTMLContentType(effectiveContentType) {
 		return SiteSignals{},
 			ExtractStatusUnsupportedContent,
+			truncated,
 			nil
 	}
 
-	decoded, tooLarge, decodeErr := decodeHTMLBody(
+	decoded, decodeTruncated, decodeErr := decodeHTMLBody(
 		body,
 		effectiveContentType,
 	)
 	if decodeErr != nil {
-		return SiteSignals{}, ExtractStatusUnavailable, nil
+		return SiteSignals{}, ExtractStatusUnavailable, truncated, nil
 	}
-	if tooLarge {
-		return SiteSignals{}, ExtractStatusTooLarge, nil
+	if decodeTruncated {
+		truncated = true
 	}
 
 	document, parseErr := parseHTMLDocument(
 		bytes.NewReader(decoded),
 	)
 	if parseErr != nil {
-		return SiteSignals{}, ExtractStatusUnavailable, nil
+		return SiteSignals{}, ExtractStatusUnavailable, truncated, nil
 	}
 
 	baseURL := documentBaseURL(document, pageURL)
@@ -103,7 +106,7 @@ func ExtractSignals(
 		}
 	}
 
-	return signals, ExtractStatusComplete, nil
+	return signals, ExtractStatusComplete, truncated, nil
 }
 
 func inspectAnchor(
@@ -363,7 +366,8 @@ func readBounded(
 		return nil, false, err
 	}
 	if len(data) > limit {
-		return nil, true, nil
+		// Keep the bounded prefix so oversized HTML can still be assessed.
+		return data[:limit], true, nil
 	}
 	return data, false, nil
 }

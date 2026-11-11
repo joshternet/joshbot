@@ -153,7 +153,7 @@ func TestScorePersonalSiteFixtureGoldens(t *testing.T) {
 			t.Parallel()
 
 			body := readTestdata(t, file)
-			signals, status, err := ExtractSignals(
+			signals, status, _, err := ExtractSignals(
 				pageURL,
 				"text/html; charset=utf-8",
 				body,

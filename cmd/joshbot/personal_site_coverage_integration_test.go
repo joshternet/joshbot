@@ -24,8 +24,8 @@ func TestPersonalSiteIntegrationCoverage(t *testing.T) {
 			run:  TestFinalizeCandidatesQualifyError,
 		},
 		{
-			name: "scoring configuration",
-			run:  TestCrawlRuntimeConfigurationPersonalSiteScoring,
+			name: "drain qualifications",
+			run:  TestDrainPersonalSiteQualifications,
 		},
 	}
 

@@ -13,6 +13,8 @@ const (
 	metricKindVerificationQueueFailureCategory = "verification_queue_failure_category"
 	metricKindPersonalSiteQualification        = "personal_site_qualification"
 	metricKindPersonalSiteAssessment           = "personal_site_assessment"
+	metricKindPersonalSiteTruncated            = "personal_site_truncated"
+	metricKindPersonalSiteAwaiting             = "personal_site_awaiting"
 	metricKindAutomaticPromotionScoreBucket    = "automatic_promotion_score_bucket"
 )
 
@@ -40,6 +42,8 @@ type OperationalMetrics struct {
 	VerificationQueueFailureCategories []MetricBreakdown
 	PersonalSiteQualifications         []MetricBreakdown
 	PersonalSiteAssessments            []MetricBreakdown
+	PersonalSiteTruncated              []MetricBreakdown
+	PersonalSiteAwaiting               []MetricBreakdown
 	AutomaticPromotionsByScoreBucket   []MetricBreakdown
 }
 
@@ -169,6 +173,37 @@ func (reader *PostgresReader) Metrics(
 					ON candidate.origin = batch.candidate_origin
 				WHERE batch.outcome = 'promoted'
 				GROUP BY 2
+
+				UNION ALL
+
+				SELECT
+					$7::text,
+					CASE
+						WHEN personal_site_truncated THEN 'truncated'
+						ELSE 'full'
+					END,
+					count(*)::bigint
+				FROM discovery_candidates
+				WHERE personal_site_qualification_outcome = 'assessed'
+				GROUP BY 2
+
+				UNION ALL
+
+				SELECT
+					$8::text,
+					CASE
+						WHEN personal_site_next_attempt_at IS NULL
+							OR personal_site_next_attempt_at
+								<= statement_timestamp()
+						THEN 'due'
+						ELSE 'scheduled'
+					END,
+					count(*)::bigint
+				FROM discovery_candidates
+				WHERE personal_site_qualification_outcome IS NULL
+					OR personal_site_qualification_outcome <> 'assessed'
+					OR personal_site_assessment_version IS DISTINCT FROM 1
+				GROUP BY 2
 			) AS breakdowns
 			ORDER BY metric, label
 		`,
@@ -178,6 +213,8 @@ func (reader *PostgresReader) Metrics(
 		metricKindPersonalSiteQualification,
 		metricKindPersonalSiteAssessment,
 		metricKindAutomaticPromotionScoreBucket,
+		metricKindPersonalSiteTruncated,
+		metricKindPersonalSiteAwaiting,
 	)
 	if err != nil {
 		return OperationalMetrics{}, fmt.Errorf(
@@ -239,6 +276,16 @@ func (reader *PostgresReader) Metrics(
 		case metricKindPersonalSiteAssessment:
 			metrics.PersonalSiteAssessments = append(
 				metrics.PersonalSiteAssessments,
+				breakdown,
+			)
+		case metricKindPersonalSiteTruncated:
+			metrics.PersonalSiteTruncated = append(
+				metrics.PersonalSiteTruncated,
+				breakdown,
+			)
+		case metricKindPersonalSiteAwaiting:
+			metrics.PersonalSiteAwaiting = append(
+				metrics.PersonalSiteAwaiting,
 				breakdown,
 			)
 		case metricKindAutomaticPromotionScoreBucket:

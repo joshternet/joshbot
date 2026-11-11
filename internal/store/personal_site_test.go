@@ -227,30 +227,6 @@ func TestUpsertPersonalSiteAssessmentUnknownCandidate(t *testing.T) {
 	}
 }
 
-func TestExplorationSlotCount(t *testing.T) {
-	t.Parallel()
-
-	cases := map[int]int{
-		0:  0,
-		4:  0,
-		5:  1,
-		9:  1,
-		10: 1,
-		20: 2,
-		99: 9,
-	}
-	for remaining, want := range cases {
-		if got := explorationSlotCount(remaining); got != want {
-			t.Fatalf(
-				"explorationSlotCount(%d) = %d, want %d",
-				remaining,
-				got,
-				want,
-			)
-		}
-	}
-}
-
 func TestCandidatesNeedingPersonalSiteAssessment(t *testing.T) {
 	pool := newStoreTestPool(t)
 	ctx := context.Background()

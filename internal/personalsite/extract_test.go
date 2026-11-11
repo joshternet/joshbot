@@ -125,7 +125,7 @@ func TestExtractSignalsFixtures(t *testing.T) {
 			t.Parallel()
 
 			body := readTestdata(t, testCase.file)
-			got, status, err := ExtractSignals(
+			got, status, _, err := ExtractSignals(
 				pageURL,
 				"text/html; charset=utf-8",
 				body,
@@ -155,16 +155,44 @@ func TestExtractSignalsFixtures(t *testing.T) {
 	}
 }
 
+func TestExtractSignalsOversizedCommercePrefix(t *testing.T) {
+	t.Parallel()
+
+	pageURL := mustParseURL(t, "https://shop.example/")
+	body := append(
+		readTestdata(t, "13_oversized_commerce_prefix.html"),
+		make([]byte, maxRawBody)...,
+	)
+	signals, status, truncated, err := ExtractSignals(
+		pageURL,
+		"text/html",
+		body,
+	)
+	if err != nil {
+		t.Fatalf("ExtractSignals() error = %v", err)
+	}
+	if status != ExtractStatusComplete || !truncated {
+		t.Fatalf("status=%v truncated=%v", status, truncated)
+	}
+	assessment := ScorePersonalSite(signals)
+	if assessment.Score == 0 && !signals.HasShoppingCart && !signals.HasProductSchema {
+		t.Fatalf("signals=%#v assessment=%#v", signals, assessment)
+	}
+	if !signals.HasShoppingCart || !signals.HasProductSchema {
+		t.Fatalf("signals = %#v, want commerce markers", signals)
+	}
+}
+
 func TestExtractSignalsRejectsInvalidInputs(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := ExtractSignals(nil, "text/html", []byte("<html></html>"))
+	_, _, _, err := ExtractSignals(nil, "text/html", []byte("<html></html>"))
 	if err == nil {
 		t.Fatal("ExtractSignals(nil) error = nil, want error")
 	}
 
 	pageURL := mustParseURL(t, "https://example.com/")
-	_, status, err := ExtractSignals(
+	_, status, _, err := ExtractSignals(
 		pageURL,
 		"application/json",
 		[]byte(`{"ok":true}`),
@@ -179,8 +207,12 @@ func TestExtractSignalsRejectsInvalidInputs(t *testing.T) {
 		)
 	}
 
-	tooLarge := make([]byte, maxRawBody+1)
-	_, status, err = ExtractSignals(
+	// Oversized HTML is assessed from a bounded prefix, not rejected.
+	tooLarge := append(
+		[]byte("<html><body><a href=\"/cart\">cart</a></body></html>"),
+		make([]byte, maxRawBody)...,
+	)
+	signals, status, truncated, err := ExtractSignals(
 		pageURL,
 		"text/html",
 		tooLarge,
@@ -188,8 +220,15 @@ func TestExtractSignalsRejectsInvalidInputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExtractSignals() error = %v", err)
 	}
-	if status != ExtractStatusTooLarge {
-		t.Fatalf("status = %v, want too large", status)
+	if status != ExtractStatusComplete || !truncated {
+		t.Fatalf(
+			"status=%v truncated=%v, want complete+truncated",
+			status,
+			truncated,
+		)
+	}
+	if !signals.HasShoppingCart {
+		t.Fatalf("signals = %#v, want shopping cart from prefix", signals)
 	}
 }
 

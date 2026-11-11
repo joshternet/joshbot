@@ -19,9 +19,12 @@ type recordingCommander struct {
 	pattern                  string
 	source                   string
 	blocked                  bool
+	score                    int
+	revision                 int64
 	audit                    Audit
 	rejected                 []Audit
 	err                      error
+	status                   string
 	auditErr                 error
 }
 
@@ -79,6 +82,52 @@ func (commander *recordingCommander) SetOriginBlocked(
 	return commander.err
 }
 
+func (commander *recordingCommander) SetPersonalSiteOverride(
+	_ context.Context,
+	source string,
+	score int,
+	revision int64,
+	audit Audit,
+) error {
+	commander.source = source
+	commander.score = score
+	commander.revision = revision
+	commander.audit = audit
+	return commander.err
+}
+
+func (commander *recordingCommander) ClearPersonalSiteOverride(
+	_ context.Context,
+	source string,
+	revision int64,
+	audit Audit,
+) error {
+	commander.source = source
+	commander.revision = revision
+	commander.audit = audit
+	return commander.err
+}
+
+func (commander *recordingCommander) RequestPersonalSiteRescore(
+	_ context.Context,
+	source string,
+	audit Audit,
+) (string, error) {
+	commander.source = source
+	commander.audit = audit
+	return commander.status, commander.err
+}
+
+func (commander *recordingCommander) RequestOriginCrawl(
+	_ context.Context,
+	source string,
+	audit Audit,
+) (string, error) {
+	commander.source = source
+	commander.audit = audit
+	return commander.status, commander.err
+}
+
 func (commander *recordingCommander) RecordRejected(
 	_ context.Context,
 	audit Audit,
@@ -133,6 +182,31 @@ func TestAuthorizationComparisonUsesFixedLengthDigests(t *testing.T) {
 	}
 	if !authorizationMatches(expected, "Bearer "+controlTestToken) {
 		t.Error("authorizationMatches rejected exact bearer value")
+	}
+}
+
+func TestHandlerPersonalSiteRoutesMethodNotAllowed(t *testing.T) {
+	handler := mustControlHandler(t, &recordingCommander{})
+	for _, path := range []string{
+		"/api/v1/control/personal-sites/override",
+		"/api/v1/control/personal-sites/rescore",
+		"/api/v1/control/origins/crawl",
+	} {
+		response := controlRequest(
+			handler,
+			http.MethodGet,
+			path,
+			"Bearer "+controlTestToken,
+			"",
+		)
+		if response.Code != http.StatusMethodNotAllowed {
+			t.Fatalf(
+				"%s status = %d, want %d",
+				path,
+				response.Code,
+				http.StatusMethodNotAllowed,
+			)
+		}
 	}
 }
 
@@ -457,6 +531,11 @@ func TestControlValidationHelpersCoverBoundaries(t *testing.T) {
 		"/api/v1/control/automatic-expansion/other":      false,
 		"/api/v1/control/automatic-expansion/":           false,
 		"/api/v1/control/automatic-expansion":            false,
+		"/api/v1/control/origins/block":                  true,
+		"/api/v1/control/origins/allow":                  true,
+		"/api/v1/control/origins/crawl":                  true,
+		"/api/v1/control/personal-sites/override":        true,
+		"/api/v1/control/personal-sites/rescore":         true,
 	} {
 		if got := knownControlPath(path); got != want {
 			t.Errorf("knownControlPath(%q) = %v, want %v", path, got, want)

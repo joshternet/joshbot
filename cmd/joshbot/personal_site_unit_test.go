@@ -17,29 +17,30 @@ import (
 )
 
 type personalSiteAssessmentFake struct {
-	candidates []origin.Origin
-	listErr    error
-	upsertErr  error
-	upserted   []origin.Origin
+	claims      []store.PersonalSiteQualifyClaim
+	claimErr    error
+	completeErr error
+	completed   []origin.Origin
 }
 
-func (fake *personalSiteAssessmentFake) CandidatesNeedingPersonalSiteAssessment(
+func (fake *personalSiteAssessmentFake) ClaimPersonalSiteQualifications(
 	context.Context,
+	string,
 	int,
-) ([]origin.Origin, error) {
-	if fake.listErr != nil {
-		return nil, fake.listErr
+) ([]store.PersonalSiteQualifyClaim, error) {
+	if fake.claimErr != nil {
+		return nil, fake.claimErr
 	}
-	return fake.candidates, nil
+	return fake.claims, nil
 }
 
-func (fake *personalSiteAssessmentFake) UpsertPersonalSiteAssessment(
+func (fake *personalSiteAssessmentFake) CompletePersonalSiteQualification(
 	_ context.Context,
-	candidate origin.Origin,
+	claim store.PersonalSiteQualifyClaim,
 	_ personalsite.Qualification,
 ) error {
-	fake.upserted = append(fake.upserted, candidate)
-	return fake.upsertErr
+	fake.completed = append(fake.completed, claim.Origin)
+	return fake.completeErr
 }
 
 type personalSiteAdmissionFake struct {
@@ -106,24 +107,16 @@ func (getter personalSiteGetterFunc) Get(
 func TestQualifyPersonalSiteCandidates(t *testing.T) {
 	t.Parallel()
 
-	candidate := mustParseTestOrigin(t, "https://personal.example")
+	candidate := mustParseOrigin(t, "https://personal.example")
+	claim := store.PersonalSiteQualifyClaim{
+		Origin:     candidate,
+		Generation: 1,
+		Owner:      "discovery",
+	}
 
-	t.Run("inactive_or_nil_getter", func(t *testing.T) {
+	t.Run("nil_getter", func(t *testing.T) {
 		t.Parallel()
-		sink := runtimeCandidateSink{
-			scoring: personalsite.ScoringModeOff,
-			getter: personalSiteGetterFunc(func(context.Context, *url.URL) (*http.Response, error) {
-				return nil, errors.New("unused")
-			}),
-		}
-		if err := sink.qualifyPersonalSiteCandidates(context.Background()); err != nil {
-			t.Fatalf("error = %v", err)
-		}
-
-		sink = runtimeCandidateSink{
-			scoring: personalsite.ScoringModeShadow,
-			getter:  nil,
-		}
+		sink := runtimeCandidateSink{getter: nil}
 		if err := sink.qualifyPersonalSiteCandidates(context.Background()); err != nil {
 			t.Fatalf("error = %v", err)
 		}
@@ -132,8 +125,7 @@ func TestQualifyPersonalSiteCandidates(t *testing.T) {
 	t.Run("store_without_assessment_api", func(t *testing.T) {
 		t.Parallel()
 		sink := runtimeCandidateSink{
-			store:   admissionOnlyFake{},
-			scoring: personalsite.ScoringModeShadow,
+			store: admissionOnlyFake{},
 			getter: personalSiteGetterFunc(func(context.Context, *url.URL) (*http.Response, error) {
 				return nil, errors.New("unused")
 			}),
@@ -143,23 +135,22 @@ func TestQualifyPersonalSiteCandidates(t *testing.T) {
 		}
 	})
 
-	t.Run("list_error", func(t *testing.T) {
+	t.Run("claim_error", func(t *testing.T) {
 		t.Parallel()
 		fake := &personalSiteAssessmentFake{
-			listErr: errors.New("list failed"),
+			claimErr: errors.New("claim failed"),
 		}
 		sink := runtimeCandidateSink{
 			store: personalSiteAdmissionFake{
 				personalSiteAssessmentFake: fake,
 			},
-			scoring:                personalsite.ScoringModeShadow,
 			maxAutomaticPromotions: 3,
 			getter: personalSiteGetterFunc(func(context.Context, *url.URL) (*http.Response, error) {
 				return nil, errors.New("unused")
 			}),
 		}
 		err := sink.qualifyPersonalSiteCandidates(context.Background())
-		if err == nil || !strings.Contains(err.Error(), "list failed") {
+		if err == nil || !strings.Contains(err.Error(), "claim failed") {
 			t.Fatalf("error = %v", err)
 		}
 	})
@@ -167,13 +158,16 @@ func TestQualifyPersonalSiteCandidates(t *testing.T) {
 	t.Run("qualify_error", func(t *testing.T) {
 		t.Parallel()
 		fake := &personalSiteAssessmentFake{
-			candidates: []origin.Origin{{}},
+			claims: []store.PersonalSiteQualifyClaim{{
+				Origin:     origin.Origin{},
+				Generation: 1,
+				Owner:      "discovery",
+			}},
 		}
 		sink := runtimeCandidateSink{
 			store: personalSiteAdmissionFake{
 				personalSiteAssessmentFake: fake,
 			},
-			scoring: personalsite.ScoringModeOrder,
 			getter: personalSiteGetterFunc(func(context.Context, *url.URL) (*http.Response, error) {
 				return nil, errors.New("unused")
 			}),
@@ -184,17 +178,41 @@ func TestQualifyPersonalSiteCandidates(t *testing.T) {
 		}
 	})
 
-	t.Run("upsert_error", func(t *testing.T) {
+	t.Run("claim_lost_continue", func(t *testing.T) {
 		t.Parallel()
 		fake := &personalSiteAssessmentFake{
-			candidates: []origin.Origin{candidate},
-			upsertErr:  errors.New("upsert failed"),
+			claims:      []store.PersonalSiteQualifyClaim{claim},
+			completeErr: store.ErrPersonalSiteClaimLost,
 		}
 		sink := runtimeCandidateSink{
 			store: personalSiteAdmissionFake{
 				personalSiteAssessmentFake: fake,
 			},
-			scoring: personalsite.ScoringModeShadow,
+			getter: personalSiteGetterFunc(func(context.Context, *url.URL) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/html"}},
+					Body: io.NopCloser(strings.NewReader(
+						`<!doctype html><html><body><a href="/about">a</a></body></html>`,
+					)),
+				}, nil
+			}),
+		}
+		if err := sink.qualifyPersonalSiteCandidates(context.Background()); err != nil {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("complete_error", func(t *testing.T) {
+		t.Parallel()
+		fake := &personalSiteAssessmentFake{
+			claims:      []store.PersonalSiteQualifyClaim{claim},
+			completeErr: errors.New("complete failed"),
+		}
+		sink := runtimeCandidateSink{
+			store: personalSiteAdmissionFake{
+				personalSiteAssessmentFake: fake,
+			},
 			getter: personalSiteGetterFunc(func(context.Context, *url.URL) (*http.Response, error) {
 				return &http.Response{
 					StatusCode: http.StatusOK,
@@ -207,7 +225,7 @@ func TestQualifyPersonalSiteCandidates(t *testing.T) {
 			logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}
 		err := sink.qualifyPersonalSiteCandidates(context.Background())
-		if err == nil || !strings.Contains(err.Error(), "upsert failed") {
+		if err == nil || !strings.Contains(err.Error(), "complete failed") {
 			t.Fatalf("error = %v", err)
 		}
 	})
@@ -215,13 +233,12 @@ func TestQualifyPersonalSiteCandidates(t *testing.T) {
 	t.Run("success_with_log", func(t *testing.T) {
 		t.Parallel()
 		fake := &personalSiteAssessmentFake{
-			candidates: []origin.Origin{candidate},
+			claims: []store.PersonalSiteQualifyClaim{claim},
 		}
 		sink := runtimeCandidateSink{
 			store: personalSiteAdmissionFake{
 				personalSiteAssessmentFake: fake,
 			},
-			scoring:                personalsite.ScoringModeShadow,
 			maxAutomaticPromotions: 0,
 			getter: personalSiteGetterFunc(func(context.Context, *url.URL) (*http.Response, error) {
 				return &http.Response{
@@ -237,10 +254,27 @@ func TestQualifyPersonalSiteCandidates(t *testing.T) {
 		if err := sink.qualifyPersonalSiteCandidates(context.Background()); err != nil {
 			t.Fatalf("error = %v", err)
 		}
-		if len(fake.upserted) != 1 {
-			t.Fatalf("upserted = %#v", fake.upserted)
+		if len(fake.completed) != 1 {
+			t.Fatalf("completed = %#v", fake.completed)
 		}
 	})
+}
+
+func TestDrainPersonalSiteQualifications(t *testing.T) {
+	t.Parallel()
+
+	fake := &personalSiteAssessmentFake{}
+	sink := runtimeCandidateSink{
+		store: personalSiteAdmissionFake{
+			personalSiteAssessmentFake: fake,
+		},
+		getter: personalSiteGetterFunc(func(context.Context, *url.URL) (*http.Response, error) {
+			return nil, errors.New("unused")
+		}),
+	}
+	if err := sink.DrainPersonalSiteQualifications(context.Background()); err != nil {
+		t.Fatalf("error = %v", err)
+	}
 }
 
 func TestPersonalSiteQualificationLimit(t *testing.T) {
@@ -261,29 +295,19 @@ func TestFinalizeCandidatesQualifyError(t *testing.T) {
 	t.Parallel()
 
 	fake := &personalSiteAssessmentFake{
-		listErr: errors.New("qualify list failed"),
+		claimErr: errors.New("qualify claim failed"),
 	}
 	sink := runtimeCandidateSink{
 		store: personalSiteAdmissionFake{
 			personalSiteAssessmentFake: fake,
 		},
-		scoring: personalsite.ScoringModeShadow,
 		getter: personalSiteGetterFunc(func(context.Context, *url.URL) (*http.Response, error) {
 			return nil, errors.New("unused")
 		}),
 	}
 
 	err := sink.FinalizeCandidates(context.Background(), 1)
-	if err == nil || !strings.Contains(err.Error(), "qualify list failed") {
+	if err == nil || !strings.Contains(err.Error(), "qualify claim failed") {
 		t.Fatalf("error = %v", err)
 	}
-}
-
-func mustParseTestOrigin(t *testing.T, raw string) origin.Origin {
-	t.Helper()
-	parsed, err := origin.Parse(raw)
-	if err != nil {
-		t.Fatalf("origin.Parse(%q) error = %v", raw, err)
-	}
-	return parsed
 }

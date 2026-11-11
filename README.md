@@ -309,10 +309,9 @@ JOSHBOT_AUTOMATIC_CRAWL_ENABLED
 JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES
 JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN
 JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS
-JOSHBOT_PERSONAL_SITE_SCORING
 ```
 
-Automatic crawling is enabled unless explicitly disabled. Discovered link origins are admitted as crawl sources so later crawls can find more domains to check for `/.well-known/josh`. Robots rules, the domain avoid list, crawl blocks, automatic-expansion pause, probe-queue backpressure, the per-run promotion budget, page and depth limits, and network safety checks still apply. Set `JOSHBOT_AUTOMATIC_CRAWL_ENABLED=false` to stop admitting those crawl sources. `JOSHBOT_PERSONAL_SITE_SCORING` defaults to `off`; use `shadow` then `order` to prioritize automatic admission by a private structural personal-site score without changing participation or registry output.
+Automatic crawling is enabled unless explicitly disabled. Discovered link origins are admitted as crawl sources so later crawls can find more domains to check for `/.well-known/josh`. Robots rules, the domain avoid list, crawl blocks, automatic-expansion pause, probe-queue backpressure, the per-run promotion budget, page and depth limits, and network safety checks still apply. Set `JOSHBOT_AUTOMATIC_CRAWL_ENABLED=false` to stop admitting those crawl sources. When automatic admission is enabled, JoshBot qualifies each eligible candidate with a private structural personal-site score before promotion and ranks admissions by that score. Scoring never changes participation or registry output.
 
 When automatic crawling is enabled, operators can pause automatic expansion at
 runtime without pausing discovery or verification. Curated seeds and currently
@@ -325,25 +324,24 @@ The pending-probe limit provides backpressure between discovery and declaration
 verification. This prevents discovery from producing verification work faster
 than the verification queue can reasonably absorb.
 
-Runtime defaults are:
+Deploy and compose defaults are:
 
 ```dotenv
 JOSHBOT_AUTOMATIC_CRAWL_ENABLED=true
 JOSHBOT_AUTOMATIC_CRAWL_MAX_PENDING_PROBES=1000
 JOSHBOT_AUTOMATIC_CRAWL_MAX_PROMOTIONS_PER_RUN=100
 JOSHBOT_AUTOMATIC_CRAWL_EXCLUDED_HOSTS=
-JOSHBOT_PERSONAL_SITE_SCORING=off
 JOSHBOT_CRAWL_TELEMETRY_RETENTION=720h
 ```
 
 Candidate origins and provenance edges are committed before automatic
-admission. Each crawl run allocates at most its configured promotion limit in
-canonical-origin order (`off`/`shadow`) or by personal-site score with a
-small oldest-candidate exploration share (`order`). Unallocated evidence remains durable for a later
-run. Immediately before admission, each allocated origin is resolved again and
-every returned address must pass the public-address guard. A transient
-resolution failure is deferred durably; an unsafe address is retained as
-evidence but rejected from automatic admission.
+admission. Each crawl run allocates at most its configured promotion limit
+from current-version assessed candidates, ordered by personal-site score
+descending then origin ascending. Unallocated evidence remains durable for a
+later run. Immediately before admission, each allocated origin is resolved
+again and every returned address must pass the public-address guard. A
+transient resolution failure is deferred durably; an unsafe address is
+retained as evidence but rejected from automatic admission.
 
 Operators can inspect and override individual private source eligibility with:
 
@@ -497,12 +495,15 @@ GET /healthz
 GET /api/v1/status
 GET /api/v1/sources
 GET /api/v1/sources/detail
+GET /api/v1/personal-sites
+GET /api/v1/personal-sites/detail
 GET /api/v1/crawls
 GET /api/v1/crawls/{id}
 GET /api/v1/queue
 GET /api/v1/queue/events
 GET /api/v1/audit
 GET /api/v1/services
+GET /api/v1/build
 GET /metrics
 ```
 
@@ -515,11 +516,16 @@ Reporting failures return generic client-facing errors rather than leaking
 database or internal implementation details.
 
 The list routes `/api/v1/sources`, `/api/v1/crawls`, `/api/v1/queue`,
-`/api/v1/queue/events`, and `/api/v1/audit` use stable keyset pagination.
-`limit` defaults to `100` and must be from `1` through `1000`; `cursor` is an
-opaque route-specific value. Each response body is a JSON array, including an
-empty result. When another page exists, its cursor is returned in the
-`X-JoshBot-Next-Cursor` response header. Audit events are ordered newest first.
+`/api/v1/queue/events`, `/api/v1/audit`, and `/api/v1/personal-sites` use
+stable keyset pagination. `limit` defaults to `100` and must be from `1`
+through `1000`; `cursor` is an opaque route-specific value. Each response body
+is a JSON array, including an empty result. When another page exists, its
+cursor is returned in the `X-JoshBot-Next-Cursor` response header. Audit
+events are ordered newest first. Personal-site rows expose calculated and
+effective scores, truncation, overrides, retry state, and admission/crawl
+derived fields. `GET /api/v1/build` reports the reporter process build
+identity separately from discovery/worker heartbeat builds on
+`GET /api/v1/services`.
 
 ## Operator control API
 
@@ -542,11 +548,18 @@ POST /api/v1/control/domain-avoid
 DELETE /api/v1/control/domain-avoid/{pattern}
 POST /api/v1/control/origins/block
 POST /api/v1/control/origins/allow
+PUT /api/v1/control/personal-sites/override
+DELETE /api/v1/control/personal-sites/override
+POST /api/v1/control/personal-sites/rescore
+POST /api/v1/control/origins/crawl
 ```
 
 Authenticated attempts are durably audited. Successful mutations and their
 success audits commit atomically, while rejected attempts are audited after
 rollback. Responses never include token, reason, or database error details.
+Personal-site overrides require a reason and `expected_revision` for
+optimistic concurrency. Rescore and crawl requests are asynchronous schedule
+mutations; they do not fetch remote pages inside the control handler.
 
 The automatic-expansion pause is independent from the discovery processor
 pause. It prevents discovery claims for scheduled sources that are neither

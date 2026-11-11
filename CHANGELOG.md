@@ -8,13 +8,19 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- Independent unit coverage includes the operator personal-site control,
+  reporting, claim/complete, drain, retry, and score paths so the quality gate
+  stays at exact 100% statement coverage for the new API surface.
+- Independent integration coverage wrappers re-enter those personal-site control,
+  reporting pagination/build, ParseRetryAfter, and oversized extract paths so
+  the integration gate also stays at exact 100%.
+- Operator personal-site controls reject rescore while a qualify claim is
+  active, require a current-version assessed score before overrides, map
+  forbidden mutations to HTTP 403, return 400 for invalid personal-site detail
+  origins, and report 405 for wrong methods on the new control routes.
 - Go 1.27.4 closes GO-2026-6859 by fixing an HTTP/1 server crash from a
-  `MaxBytesReader` header race in `net/http`. The Docker build base and quality
-  gate image move to `golang:1.27.4-trixie`.
-- Independent integration coverage wrappers re-enter personal-site unit paths
-  (`personalsite`, `discovery` qualify, `cmd/joshbot` scoring wiring, store
-  assessment helpers) and reporting metrics emit personal-site breakdowns so
-  the dual unit/integration coverage gate stays at 100%.
+  `MaxBytesReader` header race in `net/http`. The Docker build base moves to
+  `golang:1.27.4-trixie`.
 - Verification claim order prefers recurring member work over fresh probes and
   reprobes, so a large discovery backlog cannot starve due verified members.
 - Non-transient unavailable probe completions no longer loop through
@@ -28,15 +34,21 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Added
 
-- Private personal-site scoring for automatic crawl prioritization
-  (`internal/personalsite`, migration `0034`). JoshBot can qualify one root
-  page per eligible candidate through the existing robots/netguard path,
-  persist score/outcome/reason codes on `discovery_candidates` only, and
-  expose bucket metrics. `JOSHBOT_PERSONAL_SITE_SCORING=off|shadow|order`
-  defaults to `off`; `shadow` persists without changing admission order;
-  `order` ranks promotions by score with ~10% oldest-candidate exploration.
-  Scores never affect Josh identity, registry output, curated seeds, blocks,
-  robots, or promotion budgets.
+- Operator scoring and administration API for the JoshBot Dashboard (migration
+  `0036`). Reporting exposes `GET /api/v1/personal-sites`,
+  `GET /api/v1/personal-sites/detail`, and `GET /api/v1/build`. Control exposes
+  score override set/clear, async personal-site rescore, and crawl schedule
+  nudge endpoints. Overrides change admission priority via
+  `COALESCE(override, calculated)` without altering calculated scores; rescore
+  requests reuse claim fencing and may reassess already admitted sources.
+- Mandatory personal-site scoring for automatic crawl admission (migrations
+  `0034`–`0035`). Eligible automatic candidates must receive a current-version
+  structural assessment before promotion. Admissions are ordered by score
+  descending then origin. Oversized HTML is scored from a bounded truncated
+  prefix. Unassessable outcomes keep null scores and retry on an outcome-based
+  schedule with atomic claims. Scores never change Josh identity,
+  participation, curated seeds, blocks, robots decisions, or promotion
+  budgets.
 - Verification and discovery claims share one in-flight origin per registrable
   domain or private public suffix (`domain_inflight_leases`, migration
   `0032`). Sibling hosts wait until completion or lease expiry. Busy
@@ -72,13 +84,14 @@ The format follows Keep a Changelog, and releases use semantic versioning.
   access and no GitHub token.
 - `registry-publish` publishes each new snapshot. An unchanged registry
   does not create a commit. It has the GitHub token and no database access.
-- The embedded schema now contains thirty-four migrations, `0001` through
-  `0034`, including durable candidate admission state, domain-avoid LIKE
+- The embedded schema now contains thirty-six migrations, `0001` through
+  `0036`, including durable candidate admission state, domain-avoid LIKE
   hardening, verification-queue `abandoned` events, removal of the WordPress
   domain-avoid rules, the running build identity on service heartbeats, crawl
   fleet budget state, hostname glob/regex domain-avoid patterns, shared
-  domain in-flight leases, verification observation failure categories, and
-  private personal-site assessments.
+  domain in-flight leases, verification observation failure categories,
+  personal-site assessment scheduling/claims, and operator override/rescore
+  columns.
 - Discovery and worker heartbeats record `build_version` and `build_commit`
   for the process that is running. The image build stamps those values from
   `VERSION` and `VCS_REF`.

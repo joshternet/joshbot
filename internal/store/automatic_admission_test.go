@@ -1071,6 +1071,7 @@ func newAutomaticAdmissionStore(
 	if err != nil {
 		t.Fatalf("construct automatic discovery store: %v", err)
 	}
+	discoveryStore.testBackfillPersonalSiteAssessments = true
 	return discoveryStore
 }
 

@@ -105,6 +105,85 @@ func clampScore(value int) int {
 	return value
 }
 
+// ScoreContribution is one reason code and its AssessmentVersion weight.
+type ScoreContribution struct {
+	Code   ReasonCode `json:"code"`
+	Weight int        `json:"weight"`
+}
+
+// ReasonWeight returns the AssessmentVersion weight for a reason code.
+//
+// @param code - Observed reason code.
+// @returns Weight and whether the code is known for this version.
+func ReasonWeight(code ReasonCode) (int, bool) {
+	switch code {
+	case ReasonPersonSchema:
+		return weightPersonSchema, true
+	case ReasonHCard:
+		return weightHCard, true
+	case ReasonRelMe:
+		return weightRelMe, true
+	case ReasonFeed:
+		return weightFeed, true
+	case ReasonAboutLink:
+		return weightAboutLink, true
+	case ReasonNowLink:
+		return weightNowLink, true
+	case ReasonUsesLink:
+		return weightUsesLink, true
+	case ReasonProjectsLink:
+		return weightProjectsLink, true
+	case ReasonBlogLink:
+		return weightBlogLink, true
+	case ReasonAuthorMetadata:
+		return weightAuthorMetadata, true
+	case ReasonOrganizationSchema:
+		return weightOrganizationSchema, true
+	case ReasonProductSchema:
+		return weightProductSchema, true
+	case ReasonShoppingCart:
+		return weightShoppingCart, true
+	case ReasonCareersLink:
+		return weightCareersLink, true
+	case ReasonInvestorLink:
+		return weightInvestorLink, true
+	case ReasonMarketplace:
+		return weightMarketplaceSignals, true
+	case ReasonParkedDomain:
+		return weightParkedDomain, true
+	default:
+		return 0, false
+	}
+}
+
+// ContributionsFromReasons derives per-reason weights from scoring constants.
+//
+// Unknown codes are omitted. score_clamped is true when the sum of known
+// weights differs from the persisted calculated score after clamping.
+//
+// @param reasons - Persisted reason codes from an assessed row.
+// @param calculatedScore - Persisted clamped score.
+// @returns Contributions and whether clamping changed the sum.
+func ContributionsFromReasons(
+	reasons []ReasonCode,
+	calculatedScore int,
+) ([]ScoreContribution, bool) {
+	contributions := make([]ScoreContribution, 0, len(reasons))
+	total := 0
+	for _, code := range reasons {
+		weight, ok := ReasonWeight(code)
+		if !ok {
+			continue
+		}
+		contributions = append(contributions, ScoreContribution{
+			Code:   code,
+			Weight: weight,
+		})
+		total += weight
+	}
+	return contributions, clampScore(total) != calculatedScore || total != calculatedScore
+}
+
 // ScoreBucket returns the private metrics bucket for a score in 0..100.
 //
 // @param score - Assessment score.

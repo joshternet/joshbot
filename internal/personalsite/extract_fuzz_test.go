@@ -43,12 +43,12 @@ func FuzzExtractSignals(f *testing.F) {
 			body = body[:maxRawBody]
 		}
 
-		first, firstStatus, firstErr := ExtractSignals(
+		first, firstStatus, _, firstErr := ExtractSignals(
 			pageURL,
 			"text/html; charset=utf-8",
 			body,
 		)
-		second, secondStatus, secondErr := ExtractSignals(
+		second, secondStatus, _, secondErr := ExtractSignals(
 			pageURL,
 			"text/html; charset=utf-8",
 			body,

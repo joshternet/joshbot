@@ -85,6 +85,16 @@ func TestPostgresReaderMetricsWithoutDatabase(
 							"80-100",
 							int64(7),
 						},
+						[]any{
+							"personal_site_truncated",
+							"truncated",
+							int64(8),
+						},
+						[]any{
+							"personal_site_awaiting",
+							"due",
+							int64(9),
+						},
 					),
 				},
 			},
@@ -160,6 +170,18 @@ func TestPostgresReaderMetricsWithoutDatabase(
 			{
 				Label: "80-100",
 				Count: 7,
+			},
+		},
+		PersonalSiteTruncated: []MetricBreakdown{
+			{
+				Label: "truncated",
+				Count: 8,
+			},
+		},
+		PersonalSiteAwaiting: []MetricBreakdown{
+			{
+				Label: "due",
+				Count: 9,
 			},
 		},
 	}

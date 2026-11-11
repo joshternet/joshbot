@@ -14,7 +14,6 @@ import (
 	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/domainavoid"
 	"github.com/joshternet/joshbot/internal/origin"
-	"github.com/joshternet/joshbot/internal/personalsite"
 	"github.com/joshternet/joshbot/internal/retry"
 )
 
@@ -50,6 +49,10 @@ type DiscoveryStore struct {
 	clock       transactionQueueClock
 	automatic   AutomaticCrawlConfig
 	retryPolicy retry.Policy
+	// testBackfillPersonalSiteAssessments fills missing assessments before
+	// admission allocation so legacy automatic-admission tests can focus on
+	// promotion mechanics. Score-gated tests must leave this false.
+	testBackfillPersonalSiteAssessments bool
 }
 
 // AutomaticCrawlConfig controls promotion of discovered origins into crawl
@@ -61,9 +64,6 @@ type AutomaticCrawlConfig struct {
 	MaxAutomaticPromotionsPerRun int
 	ExcludedHostSuffixes         string
 	RetryJitter                  retry.Jitter
-	// PersonalSiteScoring controls private personal-site qualification and
-	// optional admission ordering. Default off preserves upgrade behavior.
-	PersonalSiteScoring personalsite.ScoringMode
 }
 
 // CrawlSource describes the private operational classification of an origin.
@@ -1231,6 +1231,11 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 	if runID <= 0 {
 		return nil, errInvalidCrawlRun
 	}
+	if s.testBackfillPersonalSiteAssessments {
+		if err := s.backfillPersonalSiteAssessmentsForTests(ctx); err != nil {
+			return nil, err
+		}
+	}
 
 	var pending []discovery.Candidate
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
@@ -1275,7 +1280,6 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 		remainingBatch := maxPromotions - batchCount
 		if remainingBatch > 0 {
 			allocationSQL, allocationArgs := automaticAdmissionAllocationQuery(
-				s.automatic.PersonalSiteScoring,
 				int64(runID),
 				patterns,
 				remainingBatch,
@@ -1368,10 +1372,18 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 		}
 
 		rows, err := tx.Query(ctx, `
-			SELECT candidate_origin
-			FROM crawl_run_automatic_admission_batches
-			WHERE admission_run_id = $1 AND outcome = 'pending'
-			ORDER BY candidate_origin
+			SELECT batch.candidate_origin
+			FROM crawl_run_automatic_admission_batches AS batch
+			JOIN discovery_candidates AS candidate
+				ON candidate.origin = batch.candidate_origin
+			WHERE batch.admission_run_id = $1
+				AND batch.outcome = 'pending'
+			ORDER BY
+				COALESCE(
+					candidate.personal_site_override_score,
+					candidate.personal_site_score
+				) DESC,
+				batch.candidate_origin ASC
 		`, int64(runID))
 		if err != nil {
 			return fmt.Errorf("list pending automatic candidates: %w", err)

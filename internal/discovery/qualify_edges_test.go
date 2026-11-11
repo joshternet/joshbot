@@ -296,9 +296,9 @@ func TestQualifyPersonalSiteExtractStatuses(t *testing.T) {
 		want   personalsite.QualificationOutcome
 	}{
 		{
-			name:   "too_large",
+			name:   "too_large_legacy_status_assessed",
 			status: personalsite.ExtractStatusTooLarge,
-			want:   personalsite.QualificationTooLarge,
+			want:   personalsite.QualificationAssessed,
 		},
 		{
 			name:   "unavailable",
@@ -320,8 +320,8 @@ func TestQualifyPersonalSiteExtractStatuses(t *testing.T) {
 				*url.URL,
 				string,
 				[]byte,
-			) (personalsite.SiteSignals, personalsite.ExtractStatus, error) {
-				return personalsite.SiteSignals{}, testCase.status, nil
+			) (personalsite.SiteSignals, personalsite.ExtractStatus, bool, error) {
+				return personalsite.SiteSignals{}, testCase.status, true, nil
 			}
 
 			qualification, err := QualifyPersonalSite(

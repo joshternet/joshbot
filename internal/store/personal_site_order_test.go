@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/joshternet/joshbot/internal/discovery"
 	"github.com/joshternet/joshbot/internal/origin"
@@ -17,14 +16,14 @@ func TestPendingAutomaticCandidatesOrdersByPersonalSiteScore(
 	ctx := context.Background()
 
 	store := newAutomaticAdmissionStore(t, pool, 5, 1000)
-	store.automatic.PersonalSiteScoring = personalsite.ScoringModeOrder
+	store.testBackfillPersonalSiteAssessments = false
 
 	source := mustStoreOrigin(t, "https://source.example")
 	low := mustStoreOrigin(t, "https://low.example")
 	high := mustStoreOrigin(t, "https://high.example")
 	mid := mustStoreOrigin(t, "https://mid.example")
-	oldUnassessed := mustStoreOrigin(t, "https://old.example")
-	newerUnassessed := mustStoreOrigin(t, "https://newer.example")
+	unassessed := mustStoreOrigin(t, "https://unassessed.example")
+	zero := mustStoreOrigin(t, "https://zero.example")
 
 	if err := store.AddCrawlSeed(ctx, source); err != nil {
 		t.Fatal(err)
@@ -39,26 +38,11 @@ func TestPendingAutomaticCandidatesOrdersByPersonalSiteScore(
 			{Origin: low, Kind: discovery.KindLink},
 			{Origin: high, Kind: discovery.KindLink},
 			{Origin: mid, Kind: discovery.KindLink},
-			{Origin: oldUnassessed, Kind: discovery.KindLink},
-			{Origin: newerUnassessed, Kind: discovery.KindLink},
+			{Origin: unassessed, Kind: discovery.KindLink},
+			{Origin: zero, Kind: discovery.KindLink},
 		},
 	); err != nil {
 		t.Fatalf("RecordDiscoveryForRun() error = %v", err)
-	}
-
-	if _, err := pool.Exec(ctx, `
-		UPDATE discovery_candidates
-		SET first_discovered_at = $2
-		WHERE origin = $1
-	`, oldUnassessed.String(), time.Now().UTC().Add(-48*time.Hour)); err != nil {
-		t.Fatalf("age old candidate: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `
-		UPDATE discovery_candidates
-		SET first_discovered_at = $2
-		WHERE origin = $1
-	`, newerUnassessed.String(), time.Now().UTC().Add(-1*time.Hour)); err != nil {
-		t.Fatalf("age newer candidate: %v", err)
 	}
 
 	upsertScore := func(candidate origin.Origin, score int) {
@@ -85,41 +69,39 @@ func TestPendingAutomaticCandidatesOrdersByPersonalSiteScore(
 	upsertScore(low, 10)
 	upsertScore(mid, 50)
 	upsertScore(high, 90)
+	upsertScore(zero, 0)
 
 	pending, err := store.PendingAutomaticCandidates(ctx, runID)
 	if err != nil {
 		t.Fatalf("PendingAutomaticCandidates() error = %v", err)
 	}
-	if len(pending) != 5 {
-		t.Fatalf("pending len = %d, want 5", len(pending))
+	if len(pending) != 4 {
+		t.Fatalf("pending len = %d, want 4 assessed only", len(pending))
 	}
 
+	wantOrder := []string{
+		high.String(),
+		mid.String(),
+		low.String(),
+		zero.String(),
+	}
+	for index, want := range wantOrder {
+		if pending[index].Origin.String() != want {
+			t.Fatalf(
+				"pending[%d] = %s, want %s (full=%#v)",
+				index,
+				pending[index].Origin.String(),
+				want,
+				pendingOrigins(pending),
+			)
+		}
+	}
+}
+
+func pendingOrigins(pending []discovery.Candidate) []string {
 	origins := make([]string, 0, len(pending))
 	for _, item := range pending {
 		origins = append(origins, item.Origin.String())
 	}
-
-	if !containsString(origins, oldUnassessed.String()) {
-		t.Fatalf(
-			"pending origins = %#v, want exploration pick %s",
-			origins,
-			oldUnassessed.String(),
-		)
-	}
-	if !containsString(origins, high.String()) ||
-		!containsString(origins, mid.String()) {
-		t.Fatalf(
-			"pending origins = %#v, want high and mid scored picks",
-			origins,
-		)
-	}
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return origins
 }

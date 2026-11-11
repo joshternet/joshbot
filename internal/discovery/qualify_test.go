@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -8,7 +9,6 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 
@@ -127,7 +127,7 @@ func TestQualifyPersonalSiteUnsupportedContent(t *testing.T) {
 	}
 }
 
-func TestQualifyPersonalSiteTooLarge(t *testing.T) {
+func TestQualifyPersonalSiteOversizedAssessed(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(
@@ -135,9 +135,11 @@ func TestQualifyPersonalSiteTooLarge(t *testing.T) {
 		_ *http.Request,
 	) {
 		writer.Header().Set("Content-Type", "text/html")
-		_, _ = writer.Write(
-			[]byte(strings.Repeat("x", MaxRawBody+1)),
+		prefix := []byte(
+			`<html><body><a href="/cart">cart</a></body></html>`,
 		)
+		_, _ = writer.Write(prefix)
+		_, _ = writer.Write(bytes.Repeat([]byte("x"), MaxRawBody))
 	}))
 	t.Cleanup(server.Close)
 
@@ -149,11 +151,14 @@ func TestQualifyPersonalSiteTooLarge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QualifyPersonalSite() error = %v", err)
 	}
-	if qualification.Outcome != personalsite.QualificationTooLarge {
+	if qualification.Outcome != personalsite.QualificationAssessed {
 		t.Fatalf(
-			"outcome = %q, want too_large",
+			"outcome = %q, want assessed",
 			qualification.Outcome,
 		)
+	}
+	if !qualification.Truncated {
+		t.Fatal("Truncated = false, want true")
 	}
 }
 

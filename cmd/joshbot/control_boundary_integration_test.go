@@ -91,6 +91,41 @@ func (*controlBoundaryIntegrationCommander) SetOriginBlocked(
 	return nil
 }
 
+func (*controlBoundaryIntegrationCommander) SetPersonalSiteOverride(
+	context.Context,
+	string,
+	int,
+	int64,
+	control.Audit,
+) error {
+	return nil
+}
+
+func (*controlBoundaryIntegrationCommander) ClearPersonalSiteOverride(
+	context.Context,
+	string,
+	int64,
+	control.Audit,
+) error {
+	return nil
+}
+
+func (*controlBoundaryIntegrationCommander) RequestPersonalSiteRescore(
+	context.Context,
+	string,
+	control.Audit,
+) (string, error) {
+	return "ok", nil
+}
+
+func (*controlBoundaryIntegrationCommander) RequestOriginCrawl(
+	context.Context,
+	string,
+	control.Audit,
+) (string, error) {
+	return "ok", nil
+}
+
 func (*controlBoundaryIntegrationCommander) RecordRejected(
 	context.Context,
 	control.Audit,

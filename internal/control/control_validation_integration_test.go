@@ -78,6 +78,49 @@ func (
 
 func (
 	commander *controlValidationIntegrationCommander,
+) SetPersonalSiteOverride(
+	context.Context,
+	string,
+	int,
+	int64,
+	Audit,
+) error {
+	return commander.mutationErr
+}
+
+func (
+	commander *controlValidationIntegrationCommander,
+) ClearPersonalSiteOverride(
+	context.Context,
+	string,
+	int64,
+	Audit,
+) error {
+	return commander.mutationErr
+}
+
+func (
+	commander *controlValidationIntegrationCommander,
+) RequestPersonalSiteRescore(
+	context.Context,
+	string,
+	Audit,
+) (string, error) {
+	return "ok", commander.mutationErr
+}
+
+func (
+	commander *controlValidationIntegrationCommander,
+) RequestOriginCrawl(
+	context.Context,
+	string,
+	Audit,
+) (string, error) {
+	return "ok", commander.mutationErr
+}
+
+func (
+	commander *controlValidationIntegrationCommander,
 ) RecordRejected(
 	_ context.Context,
 	audit Audit,

@@ -45,7 +45,7 @@ type runtimeCandidateSink struct {
 	store                  discoveryCandidateStore
 	resolver               netguard.Resolver
 	getter                 discovery.Getter
-	scoring                personalsite.ScoringMode
+	leaseOwner             string
 	maxAutomaticPromotions int
 	logger                 *slog.Logger
 }
@@ -109,13 +109,14 @@ type automaticCandidateStore interface {
 }
 
 type personalSiteAssessmentStore interface {
-	CandidatesNeedingPersonalSiteAssessment(
+	ClaimPersonalSiteQualifications(
 		context.Context,
+		string,
 		int,
-	) ([]origin.Origin, error)
-	UpsertPersonalSiteAssessment(
+	) ([]store.PersonalSiteQualifyClaim, error)
+	CompletePersonalSiteQualification(
 		context.Context,
-		origin.Origin,
+		store.PersonalSiteQualifyClaim,
 		personalsite.Qualification,
 	) error
 }
@@ -203,10 +204,18 @@ func (sink runtimeCandidateSink) FinalizeCandidates(
 	)
 }
 
+// DrainPersonalSiteQualifications runs due personal-site qualification work
+// even when no crawl source is claimed.
+func (sink runtimeCandidateSink) DrainPersonalSiteQualifications(
+	ctx context.Context,
+) error {
+	return sink.qualifyPersonalSiteCandidates(ctx)
+}
+
 func (sink runtimeCandidateSink) qualifyPersonalSiteCandidates(
 	ctx context.Context,
 ) error {
-	if !sink.scoring.Active() || sink.getter == nil {
+	if sink.getter == nil {
 		return nil
 	}
 
@@ -215,39 +224,49 @@ func (sink runtimeCandidateSink) qualifyPersonalSiteCandidates(
 		return nil
 	}
 
+	owner := sink.leaseOwner
+	if owner == "" {
+		owner = "discovery"
+	}
 	limit := personalSiteQualificationLimit(sink.maxAutomaticPromotions)
-	candidates, err := assessmentStore.CandidatesNeedingPersonalSiteAssessment(
+	claims, err := assessmentStore.ClaimPersonalSiteQualifications(
 		ctx,
+		owner,
 		limit,
 	)
 	if err != nil {
 		return err
 	}
 
-	for _, candidate := range candidates {
+	for _, claim := range claims {
 		started := time.Now().UTC()
 		qualification, qualifyErr := discovery.QualifyPersonalSite(
 			ctx,
 			sink.getter,
-			candidate,
+			claim.Origin,
 		)
 		if qualifyErr != nil {
 			return qualifyErr
 		}
-		if err := assessmentStore.UpsertPersonalSiteAssessment(
+		if err := assessmentStore.CompletePersonalSiteQualification(
 			ctx,
-			candidate,
+			claim,
 			qualification,
 		); err != nil {
+			if errors.Is(err, store.ErrPersonalSiteClaimLost) {
+				continue
+			}
 			return err
 		}
 		if sink.logger != nil {
 			sink.logger.Info(
 				"personal site assessment",
-				"origin", candidate.String(),
+				"origin", claim.Origin.String(),
 				"outcome", string(qualification.Outcome),
 				"score", qualification.Assessment.Score,
 				"version", qualification.Assessment.Version,
+				"truncated", qualification.Truncated,
+				"http_status", qualification.HTTPStatus,
 				"reasons", qualification.Assessment.Reasons,
 				"duration_ms", time.Since(started).Milliseconds(),
 			)
@@ -425,7 +444,7 @@ func newDiscoveryRuntimeWithStoreFactory(
 			store:                  discoveryStore,
 			resolver:               net.DefaultResolver,
 			getter:                 checker,
-			scoring:                settings.automatic.PersonalSiteScoring,
+			leaseOwner:             settings.leaseOwner,
 			maxAutomaticPromotions: settings.automatic.MaxAutomaticPromotionsPerRun,
 			logger:                 slog.Default(),
 		},

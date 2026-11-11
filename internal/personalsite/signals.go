@@ -4,6 +4,8 @@
 // outputs are a 0-100 score plus enum-like reason codes with no page text.
 package personalsite
 
+import "time"
+
 // AssessmentVersion identifies the current scoring behavior.
 //
 // Increment when weights or reason codes materially change.
@@ -89,7 +91,8 @@ const (
 	QualificationTimeout QualificationOutcome = "timeout"
 	// QualificationUnsupportedContent means the root was not HTML.
 	QualificationUnsupportedContent QualificationOutcome = "unsupported_content"
-	// QualificationTooLarge means the root exceeded size limits.
+	// QualificationTooLarge is retained for historical rows only.
+	// New qualification writes must assess a bounded prefix instead.
 	QualificationTooLarge QualificationOutcome = "too_large"
 	// QualificationDNSFailure means DNS resolution failed.
 	QualificationDNSFailure QualificationOutcome = "dns_failure"
@@ -107,4 +110,10 @@ const (
 type Qualification struct {
 	Outcome    QualificationOutcome
 	Assessment Assessment
+	// Truncated is true when scoring used a bounded HTML prefix.
+	Truncated bool
+	// HTTPStatus is set for HTTP outcomes; zero otherwise.
+	HTTPStatus int
+	// RetryAfter is a validated Retry-After delay for HTTP 429, if any.
+	RetryAfter time.Duration
 }

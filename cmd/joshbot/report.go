@@ -380,9 +380,21 @@ func newReportHandler(
 	reader reporting.Reader,
 	token string,
 ) (http.Handler, error) {
-	return reporting.NewHandler(
+	state := "available"
+	if buildVersion == "" ||
+		buildVersion == "dev" ||
+		buildCommit == "" ||
+		buildCommit == "unknown" {
+		state = "unknown"
+	}
+	return reporting.NewHandlerWithBuild(
 		reader,
 		token,
+		reporting.BuildInfo{
+			Version: buildVersion,
+			Commit:  buildCommit,
+			State:   state,
+		},
 	)
 }
 
