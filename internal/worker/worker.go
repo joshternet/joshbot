@@ -91,6 +91,14 @@ type verificationPauseQueue interface {
 	VerificationPaused(context.Context) (bool, error)
 }
 
+// claimStatsQueue exposes claim diagnostics when the backing store supports them.
+type claimStatsQueue interface {
+	ClaimWithStats(
+		context.Context,
+		string,
+	) (store.Lease, store.ClaimStats, error)
+}
+
 // Config contains the operational policy for one worker.
 type Config struct {
 	WorkerID        string
@@ -213,10 +221,7 @@ func (w *Worker) RunOnce(
 		return false, err
 	}
 
-	lease, found, err := w.queue.Claim(
-		ctx,
-		w.config.WorkerID,
-	)
+	lease, found, claimMessage, err := w.claimWork(ctx)
 	if err != nil {
 		w.observe("failed", origin.Origin{}, "claim_failed")
 		return false, fmt.Errorf(
@@ -237,7 +242,7 @@ func (w *Worker) RunOnce(
 				state = "paused"
 			}
 		}
-		w.observe(state, origin.Origin{}, "")
+		w.observe(state, origin.Origin{}, claimMessage)
 		return false, nil
 	}
 	w.observe("running", lease.Origin, "")
@@ -337,6 +342,56 @@ func (w *Worker) RunOnce(
 	w.observe("idle", origin.Origin{}, "")
 
 	return true, nil
+}
+
+/**
+ * claimWork claims one verification lease and maps diagnostics to observe messages.
+ *
+ * Prefer ClaimWithStats when available so deferred contention is not reported as
+ * a hard claim_failed and is distinct from an empty queue.
+ *
+ * @param ctx - Request context.
+ * @returns The lease, whether work was claimed, an observe message for idle
+ * outcomes, and any hard claim error.
+ */
+func (w *Worker) claimWork(
+	ctx context.Context,
+) (store.Lease, bool, string, error) {
+	if statsQueue, ok := w.queue.(claimStatsQueue); ok {
+		lease, stats, err := statsQueue.ClaimWithStats(
+			ctx,
+			w.config.WorkerID,
+		)
+		if err != nil {
+			return store.Lease{}, false, "", err
+		}
+		switch stats.Outcome {
+		case store.ClaimOutcomeSuccess:
+			return lease, true, "", nil
+		case store.ClaimOutcomeDeferred:
+			return store.Lease{}, false, "claim_deferred", nil
+		case store.ClaimOutcomeNoWork:
+			return store.Lease{}, false, "", nil
+		case store.ClaimOutcomeError:
+			return store.Lease{}, false, "", fmt.Errorf(
+				"worker: claim outcome error without err",
+			)
+		default:
+			return store.Lease{}, false, "", fmt.Errorf(
+				"worker: unknown claim outcome %q",
+				stats.Outcome,
+			)
+		}
+	}
+
+	lease, found, err := w.queue.Claim(
+		ctx,
+		w.config.WorkerID,
+	)
+	if err != nil {
+		return store.Lease{}, false, "", err
+	}
+	return lease, found, "", nil
 }
 
 func (w *Worker) verifyWithRetries(

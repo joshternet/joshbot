@@ -116,10 +116,10 @@ func (tx *discoveryLeaseCaptureTx) QueryRow(
 	query string,
 	args ...any,
 ) pgx.Row {
-	if strings.Contains(
-		query,
-		"WITH scheduled_candidate AS",
-	) {
+	// Capture the nonlocking identify query (and later lock query) used to
+	// select a discovery source candidate.
+	if strings.Contains(query, "discovery_source_schedule") &&
+		strings.Contains(query, "pending_probes") {
 		tx.claimQuery = query
 		tx.claimArgs = append(
 			[]any(nil),
@@ -333,6 +333,14 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				execResults: []discoveryUnitExecResult{
 					{},
 				},
+				rowResults: []discoveryUnitRow{
+					{
+						values: []any{
+							false,
+							false,
+						},
+					},
+				},
 			}
 			tx := &discoveryLeaseCaptureTx{
 				discoveryPolicyUnitTx: baseTx,
@@ -373,18 +381,19 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				)
 			}
 
-			if len(events) != 2 ||
+			// Global discovery advisory, crawl control, then attempt clock.
+			if len(events) < 2 ||
 				events[0] != "lock" ||
 				events[1] != "clock" {
 				t.Fatalf(
-					"claim ordering = %#v, want [lock clock]",
+					"claim ordering = %#v, want lock then clock...",
 					events,
 				)
 			}
 
-			if baseTx.rowIndex != 0 {
+			if baseTx.rowIndex != 1 {
 				t.Fatalf(
-					"database rows read after clock failure = %d, want 0",
+					"database rows read after clock failure = %d, want 1",
 					baseTx.rowIndex,
 				)
 			}
@@ -861,6 +870,23 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 					},
 					{
 						values: []any{
+							false,
+						},
+					},
+					{
+						values: []any{
+							false,
+						},
+					},
+					{
+						values: []any{
+							"https://example.com",
+							false,
+							int64(6),
+						},
+					},
+					{
+						values: []any{
 							"example.com",
 						},
 					},
@@ -941,6 +967,23 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 					{
 						values: []any{
 							false,
+							false,
+						},
+					},
+					{
+						values: []any{
+							"https://example.com",
+							false,
+							int64(6),
+						},
+					},
+					{
+						values: []any{
+							false,
+						},
+					},
+					{
+						values: []any{
 							false,
 						},
 					},
@@ -1052,6 +1095,23 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 					},
 					{
 						values: []any{
+							false,
+						},
+					},
+					{
+						values: []any{
+							false,
+						},
+					},
+					{
+						values: []any{
+							"https://example.com",
+							false,
+							int64(6),
+						},
+					},
+					{
+						values: []any{
 							"example.com",
 						},
 					},
@@ -1108,11 +1168,13 @@ func TestClaimDiscoverySourceLeaseWithoutDatabase(
 				)
 			}
 
-			if len(events) != 2 ||
+			// Global discovery advisory first, then clock reads for
+			// identify and the authoritative attempt.
+			if len(events) < 2 ||
 				events[0] != "lock" ||
 				events[1] != "clock" {
 				t.Fatalf(
-					"claim ordering = %#v, want [lock clock]",
+					"claim ordering = %#v, want lock then clock...",
 					events,
 				)
 			}

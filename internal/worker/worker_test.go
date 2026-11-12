@@ -17,15 +17,196 @@ import (
 )
 
 type recordingWorkerObserver struct {
-	states []string
+	states   []string
+	messages []string
 }
 
 func (observer *recordingWorkerObserver) Observe(
 	state string,
 	_ origin.Origin,
-	_ string,
+	message string,
 ) {
 	observer.states = append(observer.states, state)
+	observer.messages = append(observer.messages, message)
+}
+
+type statsClaimQueue struct {
+	*fakeQueue
+	stats store.ClaimStats
+	err   error
+}
+
+/**
+ * ClaimWithStats returns scripted claim diagnostics for worker unit tests.
+ *
+ * @param ctx - Request context (unused).
+ * @param workerID - Claiming worker identity.
+ * @returns Scripted lease, stats, and error.
+ */
+func (queue *statsClaimQueue) ClaimWithStats(
+	ctx context.Context,
+	workerID string,
+) (store.Lease, store.ClaimStats, error) {
+	lease, found, err := queue.Claim(ctx, workerID)
+	if queue.err != nil {
+		return store.Lease{}, store.ClaimStats{
+			Outcome: store.ClaimOutcomeError,
+		}, queue.err
+	}
+	if err != nil {
+		return store.Lease{}, store.ClaimStats{
+			Outcome: store.ClaimOutcomeError,
+		}, err
+	}
+	stats := queue.stats
+	if stats.Outcome == "" {
+		if found {
+			stats.Outcome = store.ClaimOutcomeSuccess
+		} else {
+			stats.Outcome = store.ClaimOutcomeNoWork
+		}
+	}
+	return lease, stats, nil
+}
+
+func TestRunOnceObservesClaimDeferred(t *testing.T) {
+	queue := &statsClaimQueue{
+		fakeQueue: &fakeQueue{},
+		stats: store.ClaimStats{
+			Outcome:   store.ClaimOutcomeDeferred,
+			BusySkips: 3,
+		},
+	}
+	runtime, err := New(queue, &fakeVerifier{}, workerTestConfig())
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	observer := &recordingWorkerObserver{}
+	runtime.SetLifecycleObserver(observer)
+
+	worked, err := runtime.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	if worked {
+		t.Fatal("RunOnce() worked = true, want false")
+	}
+	if !reflect.DeepEqual(observer.states, []string{"idle"}) {
+		t.Fatalf("states = %#v, want [idle]", observer.states)
+	}
+	if !reflect.DeepEqual(observer.messages, []string{"claim_deferred"}) {
+		t.Fatalf(
+			"messages = %#v, want [claim_deferred]",
+			observer.messages,
+		)
+	}
+}
+
+func TestRunOnceClaimStatsErrorOutcomes(t *testing.T) {
+	t.Run("stats error without err", func(t *testing.T) {
+		queue := &statsClaimQueue{
+			fakeQueue: &fakeQueue{},
+			stats: store.ClaimStats{
+				Outcome: store.ClaimOutcomeError,
+			},
+		}
+		runtime, err := New(queue, &fakeVerifier{}, workerTestConfig())
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		worked, runErr := runtime.RunOnce(context.Background())
+		if worked {
+			t.Fatal("worked = true")
+		}
+		if runErr == nil || !strings.Contains(
+			runErr.Error(),
+			"claim outcome error without err",
+		) {
+			t.Fatalf("error = %v", runErr)
+		}
+	})
+
+	t.Run("unknown outcome", func(t *testing.T) {
+		queue := &statsClaimQueue{
+			fakeQueue: &fakeQueue{},
+			stats: store.ClaimStats{
+				Outcome: store.ClaimOutcome("weird"),
+			},
+		}
+		runtime, err := New(queue, &fakeVerifier{}, workerTestConfig())
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		worked, runErr := runtime.RunOnce(context.Background())
+		if worked {
+			t.Fatal("worked = true")
+		}
+		if runErr == nil || !strings.Contains(
+			runErr.Error(),
+			"unknown claim outcome",
+		) {
+			t.Fatalf("error = %v", runErr)
+		}
+	})
+
+	t.Run("claim with stats transport error", func(t *testing.T) {
+		testErr := errors.New("stats claim boom")
+		queue := &statsClaimQueue{
+			fakeQueue: &fakeQueue{},
+			err:       testErr,
+		}
+		runtime, err := New(queue, &fakeVerifier{}, workerTestConfig())
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		worked, runErr := runtime.RunOnce(context.Background())
+		if worked {
+			t.Fatal("worked = true")
+		}
+		if !errors.Is(runErr, testErr) {
+			t.Fatalf("error = %v", runErr)
+		}
+	})
+
+	t.Run("stats success", func(t *testing.T) {
+		source := mustWorkerOrigin(t)
+		lease := workerTestLease(source)
+		queue := &statsClaimQueue{
+			fakeQueue: &fakeQueue{
+				claims: []fakeClaim{{lease: lease, found: true}},
+			},
+			stats: store.ClaimStats{Outcome: store.ClaimOutcomeSuccess},
+		}
+		runtime, err := New(queue, &fakeVerifier{result: workerTestResult(source)}, workerTestConfig())
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		worked, runErr := runtime.RunOnce(context.Background())
+		if runErr != nil {
+			t.Fatalf("error = %v", runErr)
+		}
+		if !worked {
+			t.Fatal("worked = false")
+		}
+	})
+
+	t.Run("stats no work", func(t *testing.T) {
+		queue := &statsClaimQueue{
+			fakeQueue: &fakeQueue{},
+			stats:     store.ClaimStats{Outcome: store.ClaimOutcomeNoWork},
+		}
+		runtime, err := New(queue, &fakeVerifier{}, workerTestConfig())
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		worked, runErr := runtime.RunOnce(context.Background())
+		if runErr != nil {
+			t.Fatalf("error = %v", runErr)
+		}
+		if worked {
+			t.Fatal("worked = true")
+		}
+	})
 }
 
 func TestRunOnceProcessesOneVerification(t *testing.T) {

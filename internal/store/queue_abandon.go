@@ -40,6 +40,15 @@ func (q *Queue) AbandonVerification(
 				return err
 			}
 
+			domainKey := domainInflightKey(lease.Origin)
+			if err := lockNeighborhoodAdvisory(
+				ctx,
+				tx,
+				domainKey,
+			); err != nil {
+				return err
+			}
+
 			commandTag, err := tx.Exec(
 				ctx,
 				`
@@ -71,7 +80,7 @@ func (q *Queue) AbandonVerification(
 			return releaseDomainInflight(
 				ctx,
 				tx,
-				domainInflightKey(lease.Origin),
+				domainKey,
 				lease.Origin,
 				lease.Generation,
 			)

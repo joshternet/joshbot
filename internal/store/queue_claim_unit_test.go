@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 func TestQueueClaimWithoutDatabase(t *testing.T) {
@@ -110,7 +108,15 @@ func TestQueueClaimWithoutDatabase(t *testing.T) {
 
 			queue := queueSimpleDatabaseStore(
 				discoveryPolicyDatabase(
-					&discoveryPolicyUnitTx{},
+					&discoveryPolicyUnitTx{
+						rowResults: []discoveryUnitRow{
+							{
+								values: []any{
+									false,
+								},
+							},
+						},
+					},
 				),
 				queueUnitClock{
 					err: testErr,
@@ -160,7 +166,15 @@ func TestQueueClaimWithoutDatabase(t *testing.T) {
 
 			queue := queueSimpleDatabaseStore(
 				discoveryPolicyDatabase(
-					&discoveryPolicyUnitTx{},
+					&discoveryPolicyUnitTx{
+						rowResults: []discoveryUnitRow{
+							{
+								values: []any{
+									false,
+								},
+							},
+						},
+					},
 				),
 				queueContractTransactionClock{
 					transactionErr: testErr,
@@ -370,8 +384,10 @@ func TestQueueClaimWithoutDatabase(t *testing.T) {
 							false,
 						},
 					},
+				},
+				queryResults: []discoveryUnitQueryResult{
 					{
-						err: pgx.ErrNoRows,
+						rows: &discoveryUnitRows{},
 					},
 				},
 			}
@@ -423,6 +439,8 @@ func TestQueueClaimWithoutDatabase(t *testing.T) {
 							false,
 						},
 					},
+				},
+				queryResults: []discoveryUnitQueryResult{
 					{
 						err: testErr,
 					},
@@ -480,10 +498,20 @@ func TestQueueClaimWithoutDatabase(t *testing.T) {
 							false,
 						},
 					},
+				},
+				queryResults: []discoveryUnitQueryResult{
 					{
-						values: []any{
-							"ftp://example.com",
-							int64(0),
+						rows: &discoveryUnitRows{
+							rows: []discoveryUnitRow{
+								{
+									values: []any{
+										"ftp://example.com",
+										int64(0),
+										now,
+										0,
+									},
+								},
+							},
 						},
 					},
 				},
@@ -558,23 +586,53 @@ func TestQueueClaimWithoutDatabase(t *testing.T) {
 							false,
 						},
 					},
+					// reserveNeighborhoodForAcquire EXISTS checks
+					{
+						values: []any{
+							false,
+						},
+					},
+					{
+						values: []any{
+							false,
+						},
+					},
+					// FOR UPDATE
 					{
 						values: []any{
 							"https://example.com",
 							int64(6),
 						},
 					},
+					// upsert
 					{
 						values: []any{
 							"example.com",
 						},
 					},
+					// bind lease
 					{
 						values: []any{
 							workerID,
 							int64(7),
 							claimedAt,
 							expiresAt,
+						},
+					},
+				},
+				queryResults: []discoveryUnitQueryResult{
+					{
+						rows: &discoveryUnitRows{
+							rows: []discoveryUnitRow{
+								{
+									values: []any{
+										"https://example.com",
+										int64(6),
+										now,
+										2,
+									},
+								},
+							},
 						},
 					},
 				},
@@ -624,4 +682,5 @@ func TestQueueClaimWithoutDatabase(t *testing.T) {
 			}
 		},
 	)
+
 }

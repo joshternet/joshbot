@@ -239,213 +239,18 @@ func (q *Queue) VerificationPaused(ctx context.Context) (bool, error) {
 // Claim leases the first eligible origin visible to this claimant.
 //
 // Eligible rows prefer recurring work, then fresh probes, then reprobes, then
-// earliest available_at and canonical origin. Locked rows are skipped so
-// concurrent consumers can claim different work without waiting. A false found
-// result with a nil error means no work is currently eligible.
+// earliest available_at and canonical origin. Neighborhood acquisition is
+// fail-fast; busy or locked candidates are skipped without blocking. A false
+// found result with a nil error means no_work or deferred (see ClaimWithStats).
 func (q *Queue) Claim(
 	ctx context.Context,
 	workerID string,
 ) (Lease, bool, error) {
-	if err := q.validate(ctx); err != nil {
+	lease, stats, err := q.ClaimWithStats(ctx, workerID)
+	if err != nil {
 		return Lease{}, false, err
 	}
-
-	if !validQueueWorkerID(workerID) {
-		return Lease{}, false, errInvalidWorkerID
-	}
-
-	var (
-		lease Lease
-		found bool
-	)
-
-	err := pgx.BeginFunc(
-		ctx,
-		q.pool,
-		func(tx pgx.Tx) error {
-			now, err := q.claimTime(ctx, tx)
-			if err != nil {
-				return err
-			}
-
-			expiresAt := now.Add(
-				q.config.LeaseDuration,
-			).UTC()
-			politeBefore := now.Add(
-				-q.config.MinOriginInterval,
-			).UTC()
-
-			var paused bool
-			if err := tx.QueryRow(
-				ctx,
-				"SELECT verification_paused FROM crawl_control WHERE singleton",
-			).Scan(&paused); err != nil {
-				return fmt.Errorf(
-					"store: read queue control: %w",
-					err,
-				)
-			}
-
-			if paused {
-				return nil
-			}
-
-			skippedOrigins := make([]string, 0)
-			skippedDomains := make(map[string]struct{})
-			for {
-				var (
-					storedOrigin string
-					currentGen   int64
-				)
-
-				scanErr := tx.QueryRow(
-					ctx,
-					`
-						SELECT
-							origin,
-							lease_generation
-						FROM verification_queue
-						WHERE available_at <= $1
-							AND (
-								mode = 'recurring'
-								OR NOT EXISTS (
-									SELECT 1 FROM discovery_source_state
-									WHERE source_origin = verification_queue.origin
-										AND crawl_blocked
-								)
-							)
-							AND (
-								next_attempt_at IS NULL
-								OR next_attempt_at <= $1
-							)
-							AND (
-								lease_expires_at IS NULL
-								OR lease_expires_at <= $1
-							)
-							AND (
-								last_claimed_at IS NULL
-								OR last_claimed_at <= $2
-							)
-							AND NOT (
-								origin = ANY ($3::text[])
-							)
-						ORDER BY
-							CASE
-								WHEN mode = 'recurring' THEN 0
-								WHEN mode = 'probe' THEN 1
-								ELSE 2
-							END ASC,
-							available_at ASC,
-							origin ASC
-						FOR UPDATE SKIP LOCKED
-						LIMIT 1
-					`,
-					now,
-					politeBefore,
-					skippedOrigins,
-				).Scan(
-					&storedOrigin,
-					&currentGen,
-				)
-
-				if errors.Is(scanErr, pgx.ErrNoRows) {
-					return nil
-				}
-
-				if scanErr != nil {
-					return scanErr
-				}
-
-				source, parseErr := origin.Parse(
-					storedOrigin,
-				)
-				if parseErr != nil {
-					return fmt.Errorf(
-						"store: invalid queued origin: %w",
-						parseErr,
-					)
-				}
-
-				domainKey := domainInflightKey(source)
-				if _, busy := skippedDomains[domainKey]; busy {
-					skippedOrigins = append(
-						skippedOrigins,
-						storedOrigin,
-					)
-					continue
-				}
-
-				nextGeneration := currentGen + 1
-				acquired, acquireErr := acquireDomainInflight(
-					ctx,
-					tx,
-					domainKey,
-					source,
-					workerID,
-					nextGeneration,
-					now,
-					expiresAt,
-				)
-				if acquireErr != nil {
-					return acquireErr
-				}
-
-				if !acquired {
-					skippedDomains[domainKey] = struct{}{}
-					skippedOrigins = append(
-						skippedOrigins,
-						storedOrigin,
-					)
-					continue
-				}
-
-				scanErr = tx.QueryRow(
-					ctx,
-					`
-						UPDATE verification_queue
-						SET
-							lease_generation = $2,
-							lease_owner = $3,
-							lease_expires_at = $4,
-							last_claimed_at = $5
-						WHERE origin = $1
-						RETURNING
-							lease_owner,
-							lease_generation,
-							last_claimed_at,
-							lease_expires_at
-					`,
-					storedOrigin,
-					nextGeneration,
-					workerID,
-					expiresAt,
-					now,
-				).Scan(
-					&lease.WorkerID,
-					&lease.Generation,
-					&lease.ClaimedAt,
-					&lease.ExpiresAt,
-				)
-				if scanErr != nil {
-					return scanErr
-				}
-
-				lease.Origin = source
-				lease.ClaimedAt = lease.ClaimedAt.UTC()
-				lease.ExpiresAt = lease.ExpiresAt.UTC()
-				found = true
-				return nil
-			}
-		},
-	)
-	if err != nil {
-		return Lease{}, false, fmt.Errorf(
-			"store: claim queue work: %w",
-			err,
-		)
-	}
-
-	return lease, found, nil
+	return lease, stats.Outcome == ClaimOutcomeSuccess, nil
 }
 
 // Renew extends a lease that is still authoritative.
@@ -480,6 +285,15 @@ func (q *Queue) Renew(
 			candidateExpiresAt := now.Add(
 				q.config.LeaseDuration,
 			).UTC()
+
+			domainKey := domainInflightKey(lease.Origin)
+			if err := lockNeighborhoodAdvisory(
+				ctx,
+				tx,
+				domainKey,
+			); err != nil {
+				return err
+			}
 
 			err = tx.QueryRow(
 				ctx,
@@ -532,7 +346,7 @@ func (q *Queue) Renew(
 			if err := extendDomainInflight(
 				ctx,
 				tx,
-				domainInflightKey(lease.Origin),
+				domainKey,
 				lease.Origin,
 				lease.Generation,
 				renewed.ExpiresAt,
@@ -591,6 +405,15 @@ func (q *Queue) Reschedule(
 				return err
 			}
 
+			domainKey := domainInflightKey(lease.Origin)
+			if err := lockNeighborhoodAdvisory(
+				ctx,
+				tx,
+				domainKey,
+			); err != nil {
+				return err
+			}
+
 			commandTag, err := tx.Exec(
 				ctx,
 				`
@@ -633,7 +456,7 @@ func (q *Queue) Reschedule(
 			return releaseDomainInflight(
 				ctx,
 				tx,
-				domainInflightKey(lease.Origin),
+				domainKey,
 				lease.Origin,
 				lease.Generation,
 			)
@@ -719,6 +542,15 @@ func (q *Queue) CompleteVerification(
 				ctx,
 				tx,
 				lease.Origin.String(),
+			); err != nil {
+				return err
+			}
+
+			domainKey := domainInflightKey(lease.Origin)
+			if err := lockNeighborhoodAdvisory(
+				ctx,
+				tx,
+				domainKey,
 			); err != nil {
 				return err
 			}
@@ -1129,7 +961,7 @@ func (q *Queue) CompleteVerification(
 			return releaseDomainInflight(
 				ctx,
 				tx,
-				domainInflightKey(lease.Origin),
+				domainKey,
 				lease.Origin,
 				lease.Generation,
 			)

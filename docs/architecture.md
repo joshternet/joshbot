@@ -413,10 +413,12 @@ requests.
 
 Verification and discovery also share one in-flight origin per registrable
 domain or private public suffix. Claiming an origin takes that neighborhood
-slot in `domain_inflight_leases`. Sibling hosts stay unclaimed until the
-holder completes, abandons, releases, or the lease expires. Completion frees
-the domain immediately. IP addresses and bare ICANN suffixes use the
-canonical origin string as their exclusivity key.
+slot in `domain_inflight_leases` after a nonblocking advisory try-lock and
+row revalidation; busy siblings are skipped without blocking on the durable
+upsert. Sibling hosts stay unclaimed until the holder completes, abandons,
+releases, or the lease expires. Completion frees the domain immediately. IP
+addresses and bare ICANN suffixes use the canonical origin string as their
+exclusivity key.
 
 ### Origin politeness
 
