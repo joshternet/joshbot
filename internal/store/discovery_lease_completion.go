@@ -53,6 +53,15 @@ func (s *DiscoveryStore) CompleteDiscoverySourceLeaseRetry(
 			}
 			completedAt = completedAt.UTC()
 
+			domainKey := domainInflightKey(lease.Origin)
+			if err := lockNeighborhoodAdvisory(
+				ctx,
+				tx,
+				domainKey,
+			); err != nil {
+				return err
+			}
+
 			var consecutiveFailures int
 			err = tx.QueryRow(
 				ctx,
@@ -143,7 +152,7 @@ func (s *DiscoveryStore) CompleteDiscoverySourceLeaseRetry(
 			if err := releaseDomainInflight(
 				ctx,
 				tx,
-				domainInflightKey(lease.Origin),
+				domainKey,
 				lease.Origin,
 				lease.Generation,
 			); err != nil {

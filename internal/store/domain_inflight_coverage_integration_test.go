@@ -63,6 +63,58 @@ func TestDomainInflightIntegrationCoverage(t *testing.T) {
 			name: "queue abandon without database",
 			run:  TestAbandonVerificationWithoutDatabase,
 		},
+		{
+			name: "claim with stats skip diagnostics",
+			run:  TestClaimWithStatsSkipDiagnosticsWithoutDatabase,
+		},
+		{
+			name: "claim budget exhaustion",
+			run:  TestClaimBudgetExhaustionWithoutDatabase,
+		},
+		{
+			name: "neighborhood advisory helpers",
+			run:  TestNeighborhoodAdvisoryHelpersWithoutDatabase,
+		},
+		{
+			name: "lock timeout helper",
+			run:  TestIsLockTimeoutErrorWithoutDatabase,
+		},
+		{
+			name: "claim savepoint failures",
+			run:  TestClaimWithStatsSavepointFailuresWithoutDatabase,
+		},
+		{
+			name: "queue mutator neighborhood lock failures",
+			run:  TestQueueMutatorsNeighborhoodLockFailureWithoutDatabase,
+		},
+		{
+			name: "claim with stats additional branches",
+			run:  TestClaimWithStatsAdditionalBranchesWithoutDatabase,
+		},
+		{
+			name: "attempt claim clock branches",
+			run:  TestAttemptClaimCandidateClockBranchesWithoutDatabase,
+		},
+		{
+			name: "discovery claim lock-order branches",
+			run:  TestDiscoveryClaimLockOrderBranchesWithoutDatabase,
+		},
+		{
+			name: "discovery claim hard failures",
+			run:  TestDiscoveryClaimAttemptHardFailuresWithoutDatabase,
+		},
+		{
+			name: "discovery renew/release neighborhood lock failures",
+			run:  TestDiscoveryRenewReleaseNeighborhoodLockFailureWithoutDatabase,
+		},
+		{
+			name: "discovery complete neighborhood lock failure",
+			run:  TestDiscoveryCompleteNeighborhoodLockFailureWithoutDatabase,
+		},
+		{
+			name: "complete verification neighborhood lock failure",
+			run:  TestCompleteVerificationNeighborhoodLockFailureWithoutDatabase,
+		},
 	}
 
 	for _, test := range tests {

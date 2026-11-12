@@ -21,6 +21,18 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Fixed
 
+- Verification and discovery claims no longer block on `domain_inflight_leases`
+  unique-index waits under neighborhood contention. Acquire uses nonlocking
+  candidate discovery, per-candidate savepoints, `pg_try_advisory_xact_lock`,
+  then `FOR UPDATE SKIP LOCKED` with full eligibility revalidation before the
+  durable upsert (discovery keeps its global claim advisory). Busy neighborhoods
+  and row-lock contention return `deferred` (with distinct
+  busy/locked/ineligible counters) instead of `claim_failed`. Renew, release,
+  reschedule, abandon, and completion take the blocking neighborhood advisory
+  before row mutations; acquisition-only `lock_timeout=50ms` is restored before
+  later statements in the same transaction. Workers observe idle
+  `claim_deferred` when the queue is temporarily contended rather than empty.
+
 - Independent unit coverage includes the operator personal-site control,
   reporting, claim/complete, drain, retry, and score paths so the quality gate
   stays at exact 100% statement coverage for the new API surface.

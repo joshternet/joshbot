@@ -52,6 +52,18 @@ type discoveryPolicyUnitTx struct {
 	rowIndex   int
 
 	discoveryScheduleLockErr error
+	advisoryLockCalls        int
+	failAdvisoryAfter        int
+	advisoryLockFailErr      error
+
+	// tryAdvisoryResult overrides the auto-success try-lock helper when set.
+	tryAdvisoryResult *bool
+	// scriptAdvisoryHelpers disables auto current_schema/try-lock responses.
+	scriptAdvisoryHelpers bool
+	// lockTimeoutErrs are returned in order for set_config('lock_timeout') calls.
+	lockTimeoutErrs []error
+	// scriptSavepoints disables auto SAVEPOINT handling so fixtures can fail them.
+	scriptSavepoints bool
 
 	commitErr   error
 	rollbackErr error
@@ -69,15 +81,48 @@ func (tx *discoveryPolicyUnitTx) Exec(
 		len(arguments) == 1 {
 		key, ok := arguments[0].(int64)
 		if ok && key < 0 {
+			tx.advisoryLockCalls++
 			if tx.discoveryScheduleLockErr != nil {
 				return pgconn.CommandTag{},
 					tx.discoveryScheduleLockErr
+			}
+			if tx.failAdvisoryAfter > 0 &&
+				tx.advisoryLockCalls >= tx.failAdvisoryAfter {
+				err := tx.advisoryLockFailErr
+				if err == nil {
+					err = errUnexpectedDiscoveryUnitDatabaseCall
+				}
+				return pgconn.CommandTag{}, err
 			}
 
 			return pgconn.NewCommandTag(
 				"SELECT 1",
 			), nil
 		}
+	}
+
+	// Acquisition-scoped lock_timeout is a local set_config; ignore in mocks
+	// unless a scripted error sequence is provided for coverage.
+	if strings.Contains(query, "set_config('lock_timeout'") {
+		if len(tx.lockTimeoutErrs) > 0 {
+			err := tx.lockTimeoutErrs[0]
+			tx.lockTimeoutErrs = tx.lockTimeoutErrs[1:]
+			if err != nil {
+				return pgconn.CommandTag{}, err
+			}
+		}
+		return pgconn.NewCommandTag("SELECT 1"), nil
+	}
+
+	// Claim attempt savepoints are protocol scaffolding, not fixture steps.
+	if !tx.scriptSavepoints &&
+		(strings.Contains(query, "SAVEPOINT claim_attempt") ||
+			strings.Contains(query, "RELEASE SAVEPOINT claim_attempt") ||
+			strings.Contains(query, "ROLLBACK TO SAVEPOINT claim_attempt") ||
+			strings.Contains(query, "SAVEPOINT discovery_claim_attempt") ||
+			strings.Contains(query, "RELEASE SAVEPOINT discovery_claim_attempt") ||
+			strings.Contains(query, "ROLLBACK TO SAVEPOINT discovery_claim_attempt")) {
+		return pgconn.NewCommandTag("SAVEPOINT"), nil
 	}
 
 	if tx.execIndex >= len(tx.execResults) {
@@ -107,10 +152,29 @@ func (tx *discoveryPolicyUnitTx) Query(
 }
 
 func (tx *discoveryPolicyUnitTx) QueryRow(
-	context.Context,
-	string,
-	...any,
+	_ context.Context,
+	query string,
+	_ ...any,
 ) pgx.Row {
+	// Auto-serve neighborhood advisory helpers so renew/release/complete
+	// fixtures only script durable row mutations.
+	if !tx.scriptAdvisoryHelpers {
+		if strings.Contains(query, "current_schema()") {
+			return discoveryUnitRow{
+				values: []any{"public"},
+			}
+		}
+		if strings.Contains(query, "pg_try_advisory_xact_lock") {
+			acquired := true
+			if tx.tryAdvisoryResult != nil {
+				acquired = *tx.tryAdvisoryResult
+			}
+			return discoveryUnitRow{
+				values: []any{acquired},
+			}
+		}
+	}
+
 	if tx.rowIndex >= len(tx.rowResults) {
 		return discoveryUnitRow{
 			err: errUnexpectedDiscoveryUnitDatabaseCall,
