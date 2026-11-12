@@ -151,11 +151,13 @@ neighborhoods use independent schedules. Requests within one source crawl
 remain sequential.
 
 Verification claim order prefers recurring member rechecks over fresh probes
-and reprobes. Claim selection also uses the same neighborhood grouping across
-verification and discovery: only one origin in a neighborhood may be leased at
-a time. Completion frees the domain immediately; a crashed claimant frees it
-when the origin lease expires. That claim rule does not change
-`JOSHBOT_CRAWL_REQUEST_DELAY` or sequential page walks inside one crawl.
+and any residual legacy reprobes. Terminal first-probe misses leave the queue
+after the observation is recorded; rediscovery requires newer discovery
+evidence or `joshbot schedule`. Claim selection also uses the same neighborhood
+grouping across verification and discovery: only one origin in a neighborhood
+may be leased at a time. Completion frees the domain immediately; a crashed
+claimant frees it when the origin lease expires. That claim rule does not
+change `JOSHBOT_CRAWL_REQUEST_DELAY` or sequential page walks inside one crawl.
 
 Each checker retains at most 1,024 robots policies, 1,024 origin schedules,
 and 1,024 neighborhood schedules. Policies expire after 24 hours. Idle
@@ -471,7 +473,7 @@ JoshBot retains origin-level semantic and operational data:
 - effective participant state;
 - verification queue and lease state;
 - recent verification queue transition history;
-- compact per-origin reprobe scheduling state;
+- historical `verification_reprobe_state` rows (compatibility only);
 - bounded crawl-run summaries and stop reasons;
 - sanitized requested and final page URLs without queries, fragments, or credentials;
 - per-page HTTP status, duration, response size, media type, redirect count,
@@ -525,8 +527,8 @@ preserves the newest observation and newest authoritative declaration
 observation for each origin, even when those protected rows are older than
 the threshold.
 
-Durable participation metadata, compact reprobe scheduling state, current
-verification queue state, discovery candidates, discovery provenance, source
+Durable participation metadata, historical reprobe-state compatibility rows,
+current verification queue state, discovery candidates, discovery provenance, source
 state, and operator audit history are retained independently from disposable
 verification history.
 
@@ -546,7 +548,7 @@ candidate from deferred to admitted without resolving an unbounded batch.
 
 Private discovery state does not appear in the public registry.
 
-Blocked probe and reprobe work remains queued with its existing mode, retry
+Blocked probe work remains queued with its existing mode, retry
 state, and availability. It cannot be claimed, renewed, or completed while
 blocked. Removing the effective block makes it eligible again. Suspended
 probes still count toward the pending-probe capacity limit. The control

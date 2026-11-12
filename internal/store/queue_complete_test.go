@@ -903,15 +903,108 @@ func TestProbeCompletionRollsBackWhenReprobeHistoryCannotBeRead(
 	)
 }
 
-func TestProbeFirstReprobeIntervalIsCapped(
-	t *testing.T,
-) {
+func TestTerminalProbeMissRemovesQueueRow(t *testing.T) {
+	outcomes := []declaration.Outcome{
+		declaration.OutcomeAbsent,
+		declaration.OutcomeInvalid,
+		declaration.OutcomeUnsupportedVersion,
+		declaration.OutcomeRobotsDenied,
+		declaration.OutcomeCrossOriginRedirect,
+	}
+
+	for _, outcome := range outcomes {
+		t.Run(queueDiscoveryOutcomeName(outcome), func(t *testing.T) {
+			fixture := newCompletionFixture(
+				t,
+				QueueConfig{
+					LeaseDuration:     10 * time.Minute,
+					MinOriginInterval: time.Minute,
+				},
+				queueTestTime(),
+			)
+
+			_, err := fixture.pool.Exec(
+				fixture.ctx,
+				`
+					UPDATE verification_queue
+					SET mode = 'probe'
+					WHERE origin = $1
+				`,
+				fixture.source.String(),
+			)
+			if err != nil {
+				t.Fatalf("set probe mode: %v", err)
+			}
+
+			completedAt := fixture.lease.ClaimedAt.Add(time.Minute)
+			fixture.queue.clock = fixedQueueClock{
+				now: completedAt,
+			}
+
+			err = fixture.queue.CompleteVerification(
+				fixture.ctx,
+				fixture.lease,
+				declaration.Result{
+					Outcome: outcome,
+					Origin:  fixture.source,
+				},
+				24*time.Hour,
+			)
+			if err != nil {
+				t.Fatalf(
+					"CompleteVerification() error = %v, want nil",
+					err,
+				)
+			}
+
+			assertQueueRowAbsent(t, fixture)
+
+			if got := completionObservationCount(t, fixture); got != 1 {
+				t.Fatalf(
+					"observation count = %d, want 1",
+					got,
+				)
+			}
+
+			for _, delay := range []time.Duration{
+				12 * time.Hour,
+				24 * time.Hour,
+				48 * time.Hour,
+				96 * time.Hour,
+				7 * 24 * time.Hour,
+			} {
+				fixture.queue.clock = fixedQueueClock{
+					now: completedAt.Add(delay),
+				}
+				lease, found, err := fixture.queue.Claim(
+					fixture.ctx,
+					"worker-a",
+				)
+				if err != nil {
+					t.Fatalf(
+						"Claim after %v error = %v",
+						delay,
+						err,
+					)
+				}
+				if found {
+					t.Fatalf(
+						"Claim after %v found lease %#v, want none",
+						delay,
+						lease,
+					)
+				}
+			}
+		})
+	}
+}
+
+func TestTerminalReprobeMissRemovesQueueRow(t *testing.T) {
 	fixture := newCompletionFixture(
 		t,
 		QueueConfig{
-			LeaseDuration:        10 * time.Minute,
-			MinOriginInterval:    time.Minute,
-			FirstReprobeInterval: 2 * maxReprobeInterval,
+			LeaseDuration:     10 * time.Minute,
+			MinOriginInterval: time.Minute,
 		},
 		queueTestTime(),
 	)
@@ -920,13 +1013,13 @@ func TestProbeFirstReprobeIntervalIsCapped(
 		fixture.ctx,
 		`
 			UPDATE verification_queue
-			SET mode = 'probe'
+			SET mode = 'reprobe'
 			WHERE origin = $1
 		`,
 		fixture.source.String(),
 	)
 	if err != nil {
-		t.Fatalf("set probe mode: %v", err)
+		t.Fatalf("set reprobe mode: %v", err)
 	}
 
 	completedAt := fixture.lease.ClaimedAt.Add(time.Minute)
@@ -950,142 +1043,9 @@ func TestProbeFirstReprobeIntervalIsCapped(
 		)
 	}
 
-	state := readCompletionQueueState(t, fixture)
-	wantAvailableAt := completedAt.Add(maxReprobeInterval)
-
-	if !state.availableAt.Equal(wantAvailableAt) {
-		t.Fatalf(
-			"available_at = %v, want capped %v",
-			state.availableAt,
-			wantAvailableAt,
-		)
-	}
-}
-
-func TestProbeMissesUseBoundedReprobeBackoff(t *testing.T) {
-	fixture := newCompletionFixture(
-		t,
-		QueueConfig{
-			LeaseDuration:        10 * time.Minute,
-			MinOriginInterval:    time.Minute,
-			FirstReprobeInterval: 12 * time.Hour,
-		},
-		queueTestTime(),
-	)
-
-	_, err := fixture.pool.Exec(
-		fixture.ctx,
-		`
-			UPDATE verification_queue
-			SET mode = 'probe'
-			WHERE origin = $1
-		`,
-		fixture.source.String(),
-	)
-	if err != nil {
-		t.Fatalf("set probe mode: %v", err)
-	}
-
-	wantDelays := []time.Duration{
-		12 * time.Hour,
-		24 * time.Hour,
-		48 * time.Hour,
-		96 * time.Hour,
-		7 * 24 * time.Hour,
-		7 * 24 * time.Hour,
-	}
-
-	for index, wantDelay := range wantDelays {
-		completedAt := fixture.lease.ClaimedAt.Add(time.Minute)
-		fixture.queue.clock = fixedQueueClock{
-			now: completedAt,
-		}
-
-		outcome := declaration.OutcomeAbsent
-		if index == 0 {
-			outcome = declaration.OutcomeRobotsDenied
-		}
-
-		err := fixture.queue.CompleteVerification(
-			fixture.ctx,
-			fixture.lease,
-			declaration.Result{
-				Outcome: outcome,
-				Origin:  fixture.source,
-			},
-			24*time.Hour,
-		)
-		if err != nil {
-			t.Fatalf(
-				"CompleteVerification(%d) error = %v",
-				index,
-				err,
-			)
-		}
-
-		state := readCompletionQueueState(t, fixture)
-		wantAvailableAt := completedAt.Add(wantDelay)
-		if !state.availableAt.Equal(wantAvailableAt) {
-			t.Fatalf(
-				"completion %d available_at = %v, want %v",
-				index,
-				state.availableAt,
-				wantAvailableAt,
-			)
-		}
-
-		var mode string
-		if err := fixture.pool.QueryRow(
-			fixture.ctx,
-			`
-				SELECT mode
-				FROM verification_queue
-				WHERE origin = $1
-			`,
-			fixture.source.String(),
-		).Scan(&mode); err != nil {
-			t.Fatalf(
-				"query completion %d mode: %v",
-				index,
-				err,
-			)
-		}
-
-		if mode != "reprobe" {
-			t.Fatalf(
-				"completion %d mode = %q, want reprobe",
-				index,
-				mode,
-			)
-		}
-
-		if index == len(wantDelays)-1 {
-			break
-		}
-
-		fixture.queue.clock = fixedQueueClock{
-			now: wantAvailableAt,
-		}
-
-		lease, found, err := fixture.queue.Claim(
-			fixture.ctx,
-			"worker-a",
-		)
-		if err != nil {
-			t.Fatalf(
-				"Claim(%d) error = %v",
-				index,
-				err,
-			)
-		}
-		if !found {
-			t.Fatalf(
-				"Claim(%d) found = false, want true",
-				index,
-			)
-		}
-
-		fixture.lease = lease
+	assertQueueRowAbsent(t, fixture)
+	if got := completionObservationCount(t, fixture); got != 1 {
+		t.Fatalf("observation count = %d, want 1", got)
 	}
 }
 
@@ -1641,6 +1601,39 @@ func readCompletionQueueState(
 	}
 
 	return state
+}
+
+/**
+ * assertQueueRowAbsent fails when the fixture origin still has verification_queue work.
+ *
+ * @param t - test harness
+ * @param fixture - completion fixture whose origin is checked
+ */
+func assertQueueRowAbsent(
+	t *testing.T,
+	fixture completionFixture,
+) {
+	t.Helper()
+
+	var queueCount int
+	err := fixture.pool.QueryRow(
+		fixture.ctx,
+		`
+			SELECT count(*)
+			FROM verification_queue
+			WHERE origin = $1
+		`,
+		fixture.source.String(),
+	).Scan(&queueCount)
+	if err != nil {
+		t.Fatalf("count queue rows: %v", err)
+	}
+	if queueCount != 0 {
+		t.Fatalf(
+			"queue row count = %d, want 0",
+			queueCount,
+		)
+	}
 }
 
 func assertCompletionQueueState(

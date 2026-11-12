@@ -73,15 +73,6 @@ func TestRuntimeConfigurationDefaults(t *testing.T) {
 		)
 	}
 
-	if settings.queue.FirstReprobeInterval !=
-		defaultFirstReprobeInterval {
-		t.Errorf(
-			"first reprobe interval = %v, want %v",
-			settings.queue.FirstReprobeInterval,
-			defaultFirstReprobeInterval,
-		)
-	}
-
 	if settings.worker != (worker.Config{
 		WorkerID:        "worker-test",
 		PollInterval:    defaultPollInterval,
@@ -98,14 +89,13 @@ func TestRuntimeConfigurationDefaults(t *testing.T) {
 
 func TestRuntimeConfigurationOverrides(t *testing.T) {
 	environment := mapEnvironment{
-		leaseDurationEnvironment:        "10m",
-		minOriginIntervalEnvironment:    "2m",
-		firstReprobeIntervalEnvironment: "6h",
-		pollIntervalEnvironment:         "5s",
-		jobTimeoutEnvironment:           "3m",
-		completionGraceEnvironment:      "1m",
-		recheckIntervalEnvironment:      "12h",
-		workerIDEnvironment:             "configured-worker",
+		leaseDurationEnvironment:     "10m",
+		minOriginIntervalEnvironment: "2m",
+		pollIntervalEnvironment:      "5s",
+		jobTimeoutEnvironment:        "3m",
+		completionGraceEnvironment:   "1m",
+		recheckIntervalEnvironment:   "12h",
+		workerIDEnvironment:          "configured-worker",
 	}
 
 	settings, err := loadWorkerSettings(
@@ -122,9 +112,8 @@ func TestRuntimeConfigurationOverrides(t *testing.T) {
 	}
 
 	if settings.queue != (store.QueueConfig{
-		LeaseDuration:        10 * time.Minute,
-		MinOriginInterval:    2 * time.Minute,
-		FirstReprobeInterval: 6 * time.Hour,
+		LeaseDuration:     10 * time.Minute,
+		MinOriginInterval: 2 * time.Minute,
 	}) {
 		t.Errorf(
 			"queue config = %#v, want overrides",
@@ -163,12 +152,6 @@ func TestRuntimeConfigurationRejectsInvalidValues(
 			name: "invalid minimum interval",
 			environment: mapEnvironment{
 				minOriginIntervalEnvironment: "0s",
-			},
-		},
-		{
-			name: "invalid first reprobe interval",
-			environment: mapEnvironment{
-				firstReprobeIntervalEnvironment: "0s",
 			},
 		},
 		{

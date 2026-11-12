@@ -34,8 +34,10 @@ and Compose health checks. The report port is not published to the host:
 5. Watch pages attempted versus pages parsed on recent runs.
 6. Watch external origins found and candidates retained.
 7. Watch automatic promotions versus deferred candidates and pending probes.
-8. Watch verification queue depth for `probe`, `reprobe`, and `recurring`
-   modes.
+8. Watch verification queue depth for `probe` and `recurring` modes. Treat
+   residual `reprobe` depth as legacy backlog only; it should trend to zero
+   after authorized cleanup and must not regenerate from terminal misses
+   without newer discovery evidence.
 9. Sample retry streaks and failure categories from queue items and source
    detail where available.
 10. Sample robots decisions from crawl page attempts and source detail

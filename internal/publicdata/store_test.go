@@ -458,25 +458,24 @@ func TestDiscoveredCandidateBecomesPublicOnlyAfterValidProbe(
 		)
 	}
 
-	var absentReprobeCount int
+	var absentQueueCount int
 	err = pool.QueryRow(
 		ctx,
 		`
 			SELECT count(*)
 			FROM verification_queue
 			WHERE origin = $1
-				AND mode = 'reprobe'
 		`,
 		candidate.String(),
-	).Scan(&absentReprobeCount)
+	).Scan(&absentQueueCount)
 	if err != nil {
-		t.Fatalf("count absent reprobe rows: %v", err)
+		t.Fatalf("count absent queue rows: %v", err)
 	}
 
-	if absentReprobeCount != 1 {
+	if absentQueueCount != 0 {
 		t.Errorf(
-			"absent reprobe rows = %d, want 1",
-			absentReprobeCount,
+			"absent queue rows = %d, want 0",
+			absentQueueCount,
 		)
 	}
 
@@ -487,25 +486,12 @@ func TestDiscoveredCandidateBecomesPublicOnlyAfterValidProbe(
 		t.Error("absent candidate changed public snapshot")
 	}
 
-	_, err = pool.Exec(
+	if err := queue.Schedule(
 		ctx,
-		`
-			UPDATE verification_queue
-			SET
-				available_at =
-					statement_timestamp() - interval '2 minutes',
-				last_claimed_at =
-					statement_timestamp() - interval '2 minutes'
-			WHERE origin = $1
-				AND mode = 'reprobe'
-		`,
-		candidate.String(),
-	)
-	if err != nil {
-		t.Fatalf(
-			"make reprobe due: %v",
-			err,
-		)
+		candidate,
+		time.Now().UTC().Add(-2*time.Minute),
+	); err != nil {
+		t.Fatalf("Schedule() after absent error = %v", err)
 	}
 
 	validLease := claimCandidate("candidate-probe-valid")

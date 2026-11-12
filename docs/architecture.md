@@ -371,13 +371,13 @@ Manually scheduled work is recurring.
 
 A discovered candidate begins as a one-shot probe. A valid declaration
 promotes it to recurring work. An absent, invalid, unsupported-version,
-cross-origin, or robots-denied result converts a fresh probe into delayed
-reprobe work. The first reprobe defaults to 12 hours. Repeated terminal misses
-back off to 24 hours, 48 hours, 96 hours, then a seven-day cap. Recurring
-member rechecks are claimed before fresh probes, and fresh probes are claimed
-before reprobes, so verified-member upkeep cannot starve behind discovery
-catch-up. Reprobe work does not consume pending-probe backpressure capacity. A
-later valid reprobe promotes the origin to recurring work.
+cross-origin, or robots-denied terminal miss removes the active probe (or
+legacy reprobe) row after recording the observation. Readmission requires
+discovery evidence newer than that observation, or an explicit
+`joshbot schedule`. Robots-denied results suppress automatic probe readmission
+but are not treated as declaration withdrawal for participation/source
+scheduling. Recurring member rechecks are claimed before fresh probes, and
+fresh probes before any residual legacy reprobes.
 
 A transient unavailable outcome retains the current queue mode with durable
 retry state and does not replace the latest authoritative declaration state.

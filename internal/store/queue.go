@@ -18,8 +18,6 @@ import (
 const (
 	maxQueueWorkerIDLength = 128
 
-	defaultFirstReprobeInterval     = 12 * time.Hour
-	maxReprobeInterval              = 7 * 24 * time.Hour
 	transientRetryBackoffSteps      = 5
 	staleParticipantRecheckInterval = 7 * 24 * time.Hour
 )
@@ -42,10 +40,9 @@ var (
 
 // QueueConfig contains the operational timing policy for a queue.
 type QueueConfig struct {
-	LeaseDuration        time.Duration
-	MinOriginInterval    time.Duration
-	FirstReprobeInterval time.Duration
-	RetryJitter          retry.Jitter
+	LeaseDuration     time.Duration
+	MinOriginInterval time.Duration
+	RetryJitter       retry.Jitter
 }
 
 // Lease is temporary authority to process one queued origin.
@@ -660,12 +657,16 @@ func (q *Queue) Reschedule(
 // the active queue lease.
 //
 // Recurring work remains queued. Valid probes and reprobes become recurring.
-// Reprobe-eligible terminal outcomes from fresh probes, including robots-denied
-// results, become delayed reprobes. Transient unavailable work retains its
-// queue mode with retry state. Non-transient unavailable probes are removed and
-// suppress discovery re-admission for probeFailureSuppressionInterval.
+// Authoritative terminal misses from probe or reprobe work (absent, invalid,
+// unsupported_version, robots_denied, cross_origin_redirect) remove the active
+// queue row after recording the observation; they do not schedule delayed
+// reprobes. Transient unavailable work retains its queue mode with retry state.
+// Non-transient unavailable probes are removed and suppress discovery
+// re-admission for probeFailureSuppressionInterval.
 //
 // Observations always store the resolved failure_category when present.
+// Participation-authoritative source unscheduling continues to exclude
+// robots_denied so a robots denial is not treated as declaration withdrawal.
 //
 // @param ctx - request context for database work
 // @param lease - active queue lease being completed
@@ -709,7 +710,6 @@ func (q *Queue) CompleteVerification(
 	transient := result.Outcome ==
 		declaration.OutcomeUnavailable &&
 		failureCategory.Transient()
-	reprobe := shouldReprobeOutcome(result.Outcome)
 
 	err := pgx.BeginFunc(
 		ctx,
@@ -731,7 +731,6 @@ func (q *Queue) CompleteVerification(
 
 			var (
 				consecutiveFailures int
-				priorReprobeMisses  int64
 				hasParticipated     bool
 			)
 
@@ -740,17 +739,9 @@ func (q *Queue) CompleteVerification(
 				`
 					SELECT
 						queued.consecutive_failures,
-						COALESCE(
-							reprobe_state.miss_count,
-							0
-						),
 						stored_origin.first_participated_at
 							IS NOT NULL
 					FROM verification_queue AS queued
-					LEFT JOIN verification_reprobe_state
-						AS reprobe_state
-						ON reprobe_state.origin =
-							queued.origin
 					LEFT JOIN origins AS stored_origin
 						ON stored_origin.origin =
 							queued.origin
@@ -774,7 +765,6 @@ func (q *Queue) CompleteVerification(
 				completedAt,
 			).Scan(
 				&consecutiveFailures,
-				&priorReprobeMisses,
 				&hasParticipated,
 			)
 			if errors.Is(lockErr, pgx.ErrNoRows) {
@@ -788,23 +778,6 @@ func (q *Queue) CompleteVerification(
 			requestedAvailableAt := completedAt.
 				Add(recheckAfter).
 				UTC()
-			reprobeAvailableAt := requestedAvailableAt
-
-			if reprobe {
-				firstReprobeInterval :=
-					q.config.FirstReprobeInterval
-				if firstReprobeInterval == 0 {
-					firstReprobeInterval =
-						defaultFirstReprobeInterval
-				}
-
-				reprobeAvailableAt = completedAt.Add(
-					reprobeInterval(
-						firstReprobeInterval,
-						priorReprobeMisses,
-					),
-				).UTC()
-			}
 
 			nextFailures := 0
 			if transient {
@@ -858,26 +831,10 @@ func (q *Queue) CompleteVerification(
 							mode = CASE
 								WHEN $7 = 'valid'
 								THEN 'recurring'
-								WHEN
-									queued.mode IN (
-										'probe',
-										'reprobe'
-									)
-									AND $13::boolean
-								THEN 'reprobe'
 								ELSE queued.mode
 							END,
 							available_at = GREATEST(
-								CASE
-									WHEN
-										leased_queue.mode IN (
-											'probe',
-											'reprobe'
-										)
-										AND $13::boolean
-									THEN $14::timestamptz
-									ELSE $5::timestamptz
-								END,
+								$5::timestamptz,
 								queued.last_claimed_at +
 								make_interval(
 									secs =>
@@ -904,13 +861,9 @@ func (q *Queue) CompleteVerification(
 						WHERE queued.origin =
 								leased_queue.origin
 							AND (
-								leased_queue.mode IN (
-									'recurring',
-									'reprobe'
-								)
+								leased_queue.mode = 'recurring'
 								OR $7 = 'valid'
 								OR $12::boolean
-								OR $13::boolean
 							)
 						RETURNING queued.origin
 					),
@@ -919,10 +872,12 @@ func (q *Queue) CompleteVerification(
 						USING leased_queue
 						WHERE verification_queue.origin =
 								leased_queue.origin
-							AND leased_queue.mode = 'probe'
+							AND leased_queue.mode IN (
+								'probe',
+								'reprobe'
+							)
 							AND $7 <> 'valid'
 							AND NOT $12::boolean
-							AND NOT $13::boolean
 						RETURNING verification_queue.origin
 					),
 					completed_queue AS (
@@ -1050,41 +1005,22 @@ func (q *Queue) CompleteVerification(
 							END
 						RETURNING origin
 					),
-					recorded_reprobe_state AS (
-						INSERT INTO verification_reprobe_state (
-							origin,
-							miss_count
-						)
-						SELECT
-							recorded_origin.origin,
-							CASE
-								WHEN $13::boolean
-								THEN 1
-								ELSE 0
-							END
-						FROM recorded_origin
-						ON CONFLICT (origin) DO UPDATE
-						SET miss_count =
-							verification_reprobe_state.miss_count +
-							EXCLUDED.miss_count
-						RETURNING origin
-					),
 					scheduled_discovery_source AS (
 						INSERT INTO discovery_source_schedule (
 							source_origin
 						)
 						SELECT
-							recorded_reprobe_state.origin
-						FROM recorded_reprobe_state
+							recorded_origin.origin
+						FROM recorded_origin
 						WHERE $7::text = 'valid'
 						ON CONFLICT (source_origin) DO NOTHING
 					),
 					unscheduled_discovery_source AS (
 						DELETE FROM discovery_source_schedule
-						USING recorded_reprobe_state
+						USING recorded_origin
 						WHERE
 							discovery_source_schedule.source_origin =
-								recorded_reprobe_state.origin
+								recorded_origin.origin
 							AND $7::text IN (
 								'absent',
 								'invalid',
@@ -1096,14 +1032,14 @@ func (q *Queue) CompleteVerification(
 								FROM discovery_source_state
 									AS source_state
 								WHERE source_state.source_origin =
-										recorded_reprobe_state.origin
+										recorded_origin.origin
 									AND source_state.seeded
 							)
 							AND NOT EXISTS (
 								SELECT 1
 								FROM discovery_candidates AS candidate
 								WHERE candidate.origin =
-										recorded_reprobe_state.origin
+										recorded_origin.origin
 									AND candidate.last_discovered_at >
 										$4::timestamptz
 							)
@@ -1122,8 +1058,8 @@ func (q *Queue) CompleteVerification(
 							$4::timestamptz,
 							$4::timestamptz,
 							1,
-							$15::text,
-							$16::timestamptz
+							$13::text,
+							$14::timestamptz
 						FROM removed_probe
 						WHERE $7::text = 'unavailable'
 							AND NOT $12::boolean
@@ -1152,13 +1088,13 @@ func (q *Queue) CompleteVerification(
 						failure_category
 					)
 					SELECT
-						recorded_reprobe_state.origin,
+						recorded_origin.origin,
 						$4::timestamptz,
 						$7::text,
 						$8::integer,
 						$9::text,
-						$15::text
-					FROM recorded_reprobe_state
+						$13::text
+					FROM recorded_origin
 				`,
 				lease.Origin.String(),
 				lease.WorkerID,
@@ -1175,8 +1111,6 @@ func (q *Queue) CompleteVerification(
 					failureCategory,
 				),
 				transient,
-				reprobe,
-				reprobeAvailableAt,
 				observationFailureCategoryValue(
 					failureCategory,
 				),
@@ -1224,42 +1158,6 @@ func nullableFailureCategory(
 	}
 
 	return string(category)
-}
-
-func shouldReprobeOutcome(
-	outcome declaration.Outcome,
-) bool {
-	switch outcome {
-	case declaration.OutcomeAbsent,
-		declaration.OutcomeInvalid,
-		declaration.OutcomeUnsupportedVersion,
-		declaration.OutcomeRobotsDenied,
-		declaration.OutcomeCrossOriginRedirect:
-		return true
-	default:
-		return false
-	}
-}
-
-func reprobeInterval(
-	first time.Duration,
-	priorMisses int64,
-) time.Duration {
-	interval := first
-
-	if interval >= maxReprobeInterval {
-		return maxReprobeInterval
-	}
-
-	for attempt := int64(0); attempt < priorMisses; attempt++ {
-		if interval >= maxReprobeInterval/2 {
-			return maxReprobeInterval
-		}
-
-		interval *= 2
-	}
-
-	return interval
 }
 
 func (q *Queue) validate(ctx context.Context) error {
@@ -1354,8 +1252,7 @@ func (q *Queue) completionTime(
 
 func validQueueConfig(config QueueConfig) bool {
 	return config.LeaseDuration > 0 &&
-		config.MinOriginInterval > 0 &&
-		config.FirstReprobeInterval >= 0
+		config.MinOriginInterval > 0
 }
 
 func validQueueWorkerID(workerID string) bool {

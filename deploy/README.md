@@ -23,15 +23,15 @@ schedules future recurring work in one PostgreSQL transaction.
 
 Manually scheduled work is recurring. A discovered candidate starts as a
 one-shot probe. A valid declaration promotes the origin to recurring work.
-Absent, invalid, unsupported-version, cross-origin, and robots-denied results
-convert fresh probes into delayed reprobes. The first reprobe defaults to 12
-hours, then repeated terminal misses back off to 24 hours, 48 hours, 96 hours,
-and finally a seven-day cap. Fresh probes are claimed before reprobes, and
-reprobes do not consume pending-probe backpressure capacity. Transient
-unavailable work retains its queue mode and authoritative declaration state
-with durable retry state. A previously valid participant uses the normal
-transient retry ladder for five consecutive failures, then moves to a
-seven-day stale-participant recheck cadence beginning with the sixth failure.
+Absent, invalid, unsupported-version, cross-origin, and robots-denied terminal
+misses remove the active probe row after recording the observation. Another
+automatic probe requires discovery evidence newer than that observation;
+operators may also run `joshbot schedule`. Fresh probes are claimed after
+recurring work. Transient unavailable work retains its queue mode and
+authoritative declaration state with durable retry state. A previously valid
+participant uses the normal transient retry ladder for five consecutive
+failures, then moves to a seven-day stale-participant recheck cadence
+beginning with the sixth failure.
 
 JoshBot does not promise exactly-once network requests.
 
@@ -268,7 +268,6 @@ JOSHBOT_POLL_INTERVAL=30s
 JOSHBOT_JOB_TIMEOUT=2m
 JOSHBOT_COMPLETION_GRACE=30s
 JOSHBOT_RECHECK_INTERVAL=24h
-JOSHBOT_FIRST_REPROBE_INTERVAL=12h
 
 JOSHBOT_JOB_TIMEOUT + JOSHBOT_COMPLETION_GRACE
     < JOSHBOT_LEASE_DURATION
@@ -277,7 +276,7 @@ Each verification attempt must fit inside the remaining lease. The worker renews
 only when remaining wall-clock time cannot hold another
 `JOB_TIMEOUT + COMPLETION_GRACE` attempt.```
 
-All six durations must be positive. `JOSHBOT_WORKER_ID` is optional outside
+All five durations must be positive. `JOSHBOT_WORKER_ID` is optional outside
 Compose; when empty, the command generates `worker-` followed by 32 lowercase
 hexadecimal characters. A configured ID must be valid UTF-8 and no more than
 128 characters. It identifies the verification queue worker and is separate

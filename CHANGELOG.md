@@ -6,6 +6,19 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Terminal first-probe misses (absent, invalid, unsupported version, robots
+  denied, cross-origin redirect) remove the active verification queue row after
+  recording the observation instead of creating delayed timer-based reprobes.
+  Automatic readmission requires discovery evidence newer than that observation
+  (`last_discovered_at > observed_at`) or an explicit `joshbot schedule`.
+  Robots-denied admission suppression remains distinct from participation
+  withdrawal. `JOSHBOT_FIRST_REPROBE_INTERVAL` and runtime ladder helpers are
+  removed. Legacy `reprobe` schema/reporting remain for compatibility; production
+  backlog retirement is a separately authorized manual runbook
+  (`docs/runbooks/legacy-reprobe-cleanup.md`), not an auto-migrate.
+
 ### Fixed
 
 - Independent unit coverage includes the operator personal-site control,
