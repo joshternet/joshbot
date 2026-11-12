@@ -260,18 +260,15 @@ func TestNonValidProbeRetentionPolicy(t *testing.T) {
 	}{
 		{
 			outcome:   declaration.OutcomeAbsent,
-			wantMode:  "reprobe",
-			wantQueue: true,
+			wantQueue: false,
 		},
 		{
 			outcome:   declaration.OutcomeInvalid,
-			wantMode:  "reprobe",
-			wantQueue: true,
+			wantQueue: false,
 		},
 		{
 			outcome:   declaration.OutcomeUnsupportedVersion,
-			wantMode:  "reprobe",
-			wantQueue: true,
+			wantQueue: false,
 		},
 		{
 			outcome:   declaration.OutcomeUnavailable,
@@ -280,13 +277,11 @@ func TestNonValidProbeRetentionPolicy(t *testing.T) {
 		},
 		{
 			outcome:   declaration.OutcomeRobotsDenied,
-			wantMode:  "reprobe",
-			wantQueue: true,
+			wantQueue: false,
 		},
 		{
 			outcome:   declaration.OutcomeCrossOriginRedirect,
-			wantMode:  "reprobe",
-			wantQueue: true,
+			wantQueue: false,
 		},
 	}
 
@@ -358,35 +353,6 @@ func TestNonValidProbeRetentionPolicy(t *testing.T) {
 					)
 				}
 
-				if shouldReprobeOutcome(test.outcome) {
-					state := readCompletionQueueState(
-						t,
-						fixture,
-					)
-					wantAvailableAt := completedAt.Add(
-						defaultFirstReprobeInterval,
-					)
-
-					if !state.availableAt.Equal(
-						wantAvailableAt,
-					) {
-						t.Errorf(
-							"available_at = %v, want %v",
-							state.availableAt,
-							wantAvailableAt,
-						)
-					}
-
-					if state.consecutiveFailures != 0 ||
-						state.lastFailureCategory != nil ||
-						state.nextAttemptAt != nil {
-						t.Errorf(
-							"reprobe retry state = %#v",
-							state,
-						)
-					}
-				}
-
 				if test.outcome == declaration.OutcomeUnavailable {
 					state := readCompletionQueueState(
 						t,
@@ -419,7 +385,7 @@ func TestNonValidProbeRetentionPolicy(t *testing.T) {
 	}
 }
 
-func TestAbsentProbeCanBeClaimedAndBecomeValidAfterReprobeWindow(
+func TestAbsentProbeCanBeRescheduledByOperatorAfterTerminalMiss(
 	t *testing.T,
 ) {
 	fixture := newProbeCompletionFixture(t)
@@ -446,80 +412,65 @@ func TestAbsentProbeCanBeClaimedAndBecomeValidAfterReprobeWindow(
 		)
 	}
 
-	state := readQueueDiscoveryLeaseState(
-		t,
+	var queueCount int
+	if err := fixture.pool.QueryRow(
 		fixture.ctx,
-		fixture.pool,
+		`
+			SELECT count(*)
+			FROM verification_queue
+			WHERE origin = $1
+		`,
 		fixture.source.String(),
-	)
-	wantDueAt := completedAt.Add(
-		defaultFirstReprobeInterval,
-	)
-
-	if state.mode != "reprobe" {
+	).Scan(&queueCount); err != nil {
+		t.Fatalf("count queue rows: %v", err)
+	}
+	if queueCount != 0 {
 		t.Fatalf(
-			"queue mode = %q, want reprobe",
-			state.mode,
+			"queue row count after terminal miss = %d, want 0",
+			queueCount,
 		)
 	}
 
-	if !state.availableAt.Equal(wantDueAt) {
-		t.Fatalf(
-			"available_at = %v, want %v",
-			state.availableAt,
-			wantDueAt,
-		)
-	}
-
-	fixture.queue.clock = fixedQueueClock{
-		now: wantDueAt.Add(-time.Nanosecond),
-	}
-
-	earlyLease, found, err := fixture.queue.Claim(
+	scheduleAt := completedAt.Add(time.Hour)
+	if err := fixture.queue.Schedule(
 		fixture.ctx,
-		"worker-b",
-	)
-	if err != nil {
+		fixture.source,
+		scheduleAt,
+	); err != nil {
 		t.Fatalf(
-			"early Claim() error = %v, want nil",
+			"Schedule() error = %v, want nil",
 			err,
 		)
 	}
-	if found {
-		t.Fatalf(
-			"early Claim() = %#v, true; want no claim",
-			earlyLease,
-		)
-	}
 
 	fixture.queue.clock = fixedQueueClock{
-		now: wantDueAt,
+		now: scheduleAt,
 	}
 
-	reprobeLease, found, err := fixture.queue.Claim(
+	operatorLease, found, err := fixture.queue.Claim(
 		fixture.ctx,
 		"worker-b",
 	)
 	if err != nil {
 		t.Fatalf(
-			"due Claim() error = %v, want nil",
+			"Claim() error = %v, want nil",
 			err,
 		)
 	}
 	if !found {
 		t.Fatal(
-			"due Claim() found = false, want true",
+			"Claim() found = false, want true",
 		)
 	}
 
-	validAt := wantDueAt.Add(time.Minute)
+	validAt := scheduleAt.Add(time.Minute)
 	fixture.queue.clock = fixedQueueClock{
 		now: validAt,
 	}
 
 	if err := fixture.queue.CompleteVerification(
 		fixture.ctx,
-		reprobeLease,
+		operatorLease,
 		declaration.Result{
 			Outcome: declaration.OutcomeValid,
 			Origin:  fixture.source,

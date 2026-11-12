@@ -38,25 +38,14 @@ declaration check. Retention never deletes those facts.
 
 ## Reprobe scheduling state
 
-Reprobe scheduling does not depend on disposable observation history.
+Automatic timer-based reprobe scheduling has been removed. Terminal first-probe
+misses leave the verification queue after the observation is recorded.
+Readmission uses discovery freshness against retained observations.
 
-`verification_reprobe_state` stores the cumulative count of outcomes that
-contribute to the existing reprobe backoff calculation. It contains at most
-one row per origin and is retained with that origin.
-
-Migration `0022_history_retention.sql` backfills this count from existing
-observations before any history is deleted. New verification results update
-the compact counter atomically with the observation.
-
-The outcomes counted for reprobe backoff are:
-
-- `absent`;
-- `invalid`;
-- `unsupported_version`;
-- `robots_denied`;
-- `cross_origin_redirect`.
-
-Temporary `unavailable` results do not increment this counter.
+`verification_reprobe_state` remains in the schema for historical compatibility
+and is no longer written by new verification completions. Existing rows are
+retained with their origins and are not age-purged by operational history
+cleanup.
 
 ## Verification queue
 

@@ -513,7 +513,6 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 					{
 						values: []any{
 							0,
-							int64(0),
 							false,
 						},
 					},
@@ -563,7 +562,6 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 					{
 						values: []any{
 							0,
-							int64(0),
 							false,
 						},
 					},
@@ -612,7 +610,6 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 					{
 						values: []any{
 							0,
-							int64(0),
 							false,
 						},
 					},
@@ -667,7 +664,6 @@ func TestCompleteVerificationWithoutDatabase(t *testing.T) {
 					{
 						values: []any{
 							0,
-							int64(0),
 							false,
 						},
 					},
@@ -734,7 +730,6 @@ func TestCompleteVerificationUsesStaleParticipantRecheckWithoutDatabase(
 			{
 				values: []any{
 					transientRetryBackoffSteps,
-					int64(0),
 					true,
 				},
 			},
@@ -788,9 +783,9 @@ func TestCompleteVerificationUsesStaleParticipantRecheckWithoutDatabase(
 	}
 
 	arguments := tx.execArguments[0]
-	if len(arguments) != 16 {
+	if len(arguments) != 14 {
 		t.Fatalf(
-			"completion argument count = %d, want 16",
+			"completion argument count = %d, want 14",
 			len(arguments),
 		)
 	}
@@ -832,18 +827,18 @@ func TestCompleteVerificationUsesStaleParticipantRecheckWithoutDatabase(
 		)
 	}
 
-	observationCategory, ok := arguments[14].(string)
+	observationCategory, ok := arguments[12].(string)
 	if !ok ||
 		observationCategory != string(retry.CategoryDNS) {
 		t.Fatalf(
 			"observation failure_category = %#v, want %q",
-			arguments[14],
+			arguments[12],
 			retry.CategoryDNS,
 		)
 	}
 }
 
-func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
+func TestCompleteVerificationRemovesTerminalMissWithoutDatabase(
 	t *testing.T,
 ) {
 	ctx := context.Background()
@@ -868,7 +863,6 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 			{
 				values: []any{
 					0,
-					int64(2),
 					false,
 				},
 			},
@@ -921,44 +915,17 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 	}
 
 	arguments := tx.execArguments[0]
-	if len(arguments) != 16 {
+	if len(arguments) != 14 {
 		t.Fatalf(
-			"completion argument count = %d, want 16",
+			"completion argument count = %d, want 14",
 			len(arguments),
 		)
 	}
 
-	reprobe, ok := arguments[12].(bool)
-	if !ok || !reprobe {
-		t.Fatalf(
-			"reprobe argument = %#v, want true",
-			arguments[12],
-		)
-	}
-
-	reprobeAt, ok := arguments[13].(time.Time)
-	if !ok {
-		t.Fatalf(
-			"reprobe availability = %#v, want time.Time",
-			arguments[13],
-		)
-	}
-
-	if arguments[14] != nil {
+	if arguments[12] != nil {
 		t.Fatalf(
 			"observation failure_category = %#v, want nil",
-			arguments[14],
-		)
-	}
-
-	wantReprobeAt := now.Add(
-		48 * time.Hour,
-	)
-	if !reprobeAt.Equal(wantReprobeAt) {
-		t.Fatalf(
-			"reprobe availability = %v, want %v",
-			reprobeAt,
-			wantReprobeAt,
+			arguments[12],
 		)
 	}
 
@@ -976,164 +943,45 @@ func TestCompleteVerificationPassesReprobeDecisionWithoutDatabase(
 
 	if !strings.Contains(
 		normalizedQuery,
-		"THEN $14::timestamptz ELSE $5::timestamptz END",
+		"leased_queue.mode IN ( 'probe', 'reprobe' )",
 	) {
 		t.Fatalf(
-			"completion reprobe availability does not explicitly use timestamptz",
+			"completion query does not delete probe and reprobe terminal misses",
 		)
 	}
 
-	if !strings.Contains(
+	if strings.Contains(
 		normalizedQuery,
-		"leased_queue.mode IN (",
-	) ||
-		!strings.Contains(
-			normalizedQuery,
-			"'recurring', 'reprobe'",
-		) {
+		"THEN 'reprobe'",
+	) {
 		t.Fatalf(
-			"completion query does not retain existing reprobes",
+			"completion query still creates reprobe work",
 		)
 	}
 
 	for _, fragment := range []string{
-		"DELETE FROM discovery_source_schedule USING recorded_reprobe_state",
+		"DELETE FROM discovery_source_schedule USING recorded_origin",
 		"source_state.seeded",
 		"candidate.last_discovered_at > $4::timestamptz",
+		"'absent', 'invalid', 'unsupported_version', 'cross_origin_redirect'",
 	} {
 		if !strings.Contains(
 			normalizedQuery,
 			fragment,
 		) {
 			t.Fatalf(
-				"completion query does not protect newer discovery evidence: missing %q",
+				"completion query does not protect participation authority: missing %q",
 				fragment,
 			)
 		}
 	}
-}
 
-func TestReprobeInterval(t *testing.T) {
-	tests := []struct {
-		name        string
-		first       time.Duration
-		priorMisses int64
-		want        time.Duration
-	}{
-		{
-			name:  "first attempt",
-			first: 12 * time.Hour,
-			want:  12 * time.Hour,
-		},
-		{
-			name:        "second attempt",
-			first:       12 * time.Hour,
-			priorMisses: 1,
-			want:        24 * time.Hour,
-		},
-		{
-			name:        "doubling",
-			first:       12 * time.Hour,
-			priorMisses: 3,
-			want:        96 * time.Hour,
-		},
-		{
-			name:        "caps while doubling",
-			first:       12 * time.Hour,
-			priorMisses: 4,
-			want:        maxReprobeInterval,
-		},
-		{
-			name:  "configured interval already at cap",
-			first: maxReprobeInterval,
-			want:  maxReprobeInterval,
-		},
-		{
-			name:  "configured interval above cap",
-			first: maxReprobeInterval + time.Hour,
-			want:  maxReprobeInterval,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(
-			test.name,
-			func(t *testing.T) {
-				got := reprobeInterval(
-					test.first,
-					test.priorMisses,
-				)
-
-				if got != test.want {
-					t.Fatalf(
-						"reprobeInterval(%v, %d) = %v, want %v",
-						test.first,
-						test.priorMisses,
-						got,
-						test.want,
-					)
-				}
-			},
-		)
-	}
-}
-
-func TestShouldReprobeOutcome(t *testing.T) {
-	tests := []struct {
-		name    string
-		outcome declaration.Outcome
-		want    bool
-	}{
-		{
-			name:    "valid",
-			outcome: declaration.OutcomeValid,
-		},
-		{
-			name:    "absent",
-			outcome: declaration.OutcomeAbsent,
-			want:    true,
-		},
-		{
-			name:    "invalid",
-			outcome: declaration.OutcomeInvalid,
-			want:    true,
-		},
-		{
-			name:    "unsupported version",
-			outcome: declaration.OutcomeUnsupportedVersion,
-			want:    true,
-		},
-		{
-			name:    "unavailable",
-			outcome: declaration.OutcomeUnavailable,
-		},
-		{
-			name:    "robots denied",
-			outcome: declaration.OutcomeRobotsDenied,
-			want:    true,
-		},
-		{
-			name:    "cross-origin redirect",
-			outcome: declaration.OutcomeCrossOriginRedirect,
-			want:    true,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(
-			test.name,
-			func(t *testing.T) {
-				if got := shouldReprobeOutcome(
-					test.outcome,
-				); got != test.want {
-					t.Fatalf(
-						"shouldReprobeOutcome(%v) = %v, want %v",
-						test.outcome,
-						got,
-						test.want,
-					)
-				}
-			},
+	if strings.Contains(
+		normalizedQuery,
+		"'robots_denied'",
+	) {
+		t.Fatalf(
+			"completion query treats robots_denied as participation withdrawal",
 		)
 	}
 }

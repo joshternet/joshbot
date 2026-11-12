@@ -43,7 +43,6 @@ func TestRuntimeConfigurationIntegrationLoadsOperationalSettingsAndWebBotAuth(
 	environment := map[string]string{
 		leaseDurationEnvironment:                     "10m",
 		minOriginIntervalEnvironment:                 "2s",
-		firstReprobeIntervalEnvironment:              "6h",
 		pollIntervalEnvironment:                      "3s",
 		jobTimeoutEnvironment:                        "30s",
 		completionGraceEnvironment:                   "5s",
@@ -97,14 +96,6 @@ func TestRuntimeConfigurationIntegrationLoadsOperationalSettingsAndWebBotAuth(
 		t.Errorf(
 			"LeaseDuration = %v, want 10m",
 			workerSettings.queue.LeaseDuration,
-		)
-	}
-
-	if workerSettings.queue.FirstReprobeInterval !=
-		6*time.Hour {
-		t.Errorf(
-			"FirstReprobeInterval = %v, want 6h",
-			workerSettings.queue.FirstReprobeInterval,
 		)
 	}
 

@@ -1017,24 +1017,10 @@ func (s *DiscoveryStore) SchedulePendingDiscoveryProbes(
 		FROM discovery_candidates AS candidate
 		LEFT JOIN discovery_source_state AS source_state
 			ON source_state.source_origin = candidate.origin
-		LEFT JOIN LATERAL (
-			SELECT
-				observation.observed_at,
-				observation.outcome
-			FROM verification_observations AS observation
-			WHERE observation.origin = candidate.origin
-				AND observation.outcome IN (
-					'valid',
-					'absent',
-					'invalid',
-					'unsupported_version',
-					'cross_origin_redirect'
-				)
-			ORDER BY
-				observation.observed_at DESC,
-				observation.id DESC
-			LIMIT 1
-		) AS effective ON true
+		`+probeAdmissionEffectiveObservationSQL(
+		"candidate.origin",
+		"effective",
+	)+`
 		WHERE EXISTS (
 			SELECT 1
 			FROM discovery_edges AS edge
@@ -1046,15 +1032,11 @@ func (s *DiscoveryStore) SchedulePendingDiscoveryProbes(
 				SELECT 1
 				FROM verification_queue AS queue
 				WHERE queue.origin = candidate.origin
-			)
-			AND (
-				effective.observed_at IS NULL
-				OR (
-					effective.outcome <> 'valid'
-					AND candidate.last_discovered_at >
-						effective.observed_at
-				)
 			)`+
+		probeAdmissionFreshEvidenceSQL(
+			"candidate.last_discovered_at",
+			"effective",
+		)+
 		probeAdmissionNotSuppressedSQL(
 			"candidate.origin",
 			"statement_timestamp()",
@@ -1181,11 +1163,21 @@ func (s *DiscoveryStore) scheduleProbeCandidatesCounted(
 			FROM unnest($1::text[]) AS candidate(origin)
 			LEFT JOIN discovery_source_state AS source_state
 				ON source_state.source_origin = candidate.origin
+			LEFT JOIN discovery_candidates AS discovered
+				ON discovered.origin = candidate.origin
+			`+probeAdmissionEffectiveObservationSQL(
+			"candidate.origin",
+			"effective",
+		)+`
 			WHERE NOT COALESCE(source_state.crawl_blocked, false)
 				AND NOT EXISTS (
 					SELECT 1 FROM verification_queue
 					WHERE verification_queue.origin = candidate.origin
 				)`+
+			probeAdmissionFreshEvidenceSQL(
+				"discovered.last_discovered_at",
+				"effective",
+			)+
 			probeAdmissionNotSuppressedSQL(
 				"candidate.origin",
 				"$2::timestamptz",
@@ -1305,6 +1297,10 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 				FROM discovery_candidates AS candidate
 				LEFT JOIN discovery_source_state AS source_state
 					ON source_state.source_origin = candidate.origin
+				`+probeAdmissionEffectiveObservationSQL(
+				"candidate.origin",
+				"effective",
+			)+`
 				WHERE NOT COALESCE(source_state.crawl_blocked, false)
 					AND EXISTS (
 						SELECT 1
@@ -1322,6 +1318,10 @@ func (s *DiscoveryStore) PendingAutomaticCandidates(
 						SELECT 1 FROM verification_queue AS queue
 						WHERE queue.origin = candidate.origin
 					)`+
+				probeAdmissionFreshEvidenceSQL(
+					"candidate.last_discovered_at",
+					"effective",
+				)+
 				probeAdmissionNotSuppressedSQL(
 					"candidate.origin",
 					"$3::timestamptz",
@@ -1651,24 +1651,10 @@ func (s *DiscoveryStore) CompleteAutomaticCandidates(
 					ON schedule.source_origin = input.origin
 				LEFT JOIN discovery_candidates AS candidate
 					ON candidate.origin = input.origin
-				LEFT JOIN LATERAL (
-					SELECT
-						observation.observed_at,
-						observation.outcome
-					FROM verification_observations AS observation
-					WHERE observation.origin = input.origin
-						AND observation.outcome IN (
-							'valid',
-							'absent',
-							'invalid',
-							'unsupported_version',
-							'cross_origin_redirect'
-						)
-					ORDER BY
-						observation.observed_at DESC,
-						observation.id DESC
-					LIMIT 1
-				) AS effective ON true
+				`+probeAdmissionEffectiveObservationSQL(
+				"input.origin",
+				"effective",
+			)+`
 			`, rawOrigin).Scan(
 				&automaticallyDiscovered,
 				&crawlBlocked,

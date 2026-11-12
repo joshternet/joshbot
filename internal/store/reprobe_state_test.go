@@ -2,13 +2,19 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/joshternet/joshbot/internal/declaration"
 )
 
-func TestRecordVerificationMaintainsCompactReprobeState(
+/**
+ * TestRecordVerificationDoesNotWriteReprobeState verifies RecordVerification
+ * persists observations without updating verification_reprobe_state.
+ */
+func TestRecordVerificationDoesNotWriteReprobeState(
 	t *testing.T,
 ) {
 	ctx := context.Background()
@@ -31,99 +37,86 @@ func TestRecordVerificationMaintainsCompactReprobeState(
 		time.UTC,
 	)
 
-	results := []struct {
-		outcome declaration.Outcome
-		want    int64
-	}{
-		{
-			outcome: declaration.OutcomeValid,
-			want:    0,
-		},
-		{
-			outcome: declaration.OutcomeAbsent,
-			want:    1,
-		},
-		{
-			outcome: declaration.OutcomeUnavailable,
-			want:    1,
-		},
-		{
-			outcome: declaration.OutcomeInvalid,
-			want:    2,
-		},
-		{
-			outcome: declaration.OutcomeRobotsDenied,
-			want:    3,
-		},
-		{
-			outcome: declaration.OutcomeCrossOriginRedirect,
-			want:    4,
-		},
-		{
-			outcome: declaration.OutcomeUnsupportedVersion,
-			want:    5,
-		},
+	outcomes := []declaration.Outcome{
+		declaration.OutcomeValid,
+		declaration.OutcomeAbsent,
+		declaration.OutcomeUnavailable,
+		declaration.OutcomeInvalid,
+		declaration.OutcomeRobotsDenied,
+		declaration.OutcomeCrossOriginRedirect,
+		declaration.OutcomeUnsupportedVersion,
 	}
 
-	for index, test := range results {
+	for index, outcome := range outcomes {
 		result := declaration.Result{
-			Outcome: test.outcome,
+			Outcome: outcome,
 			Origin:  source,
 		}
 
-		if test.outcome ==
-			declaration.OutcomeValid {
-			result.Declaration =
-				declaration.Declaration{
-					Version:  1,
-					Identity: declaration.IdentityAffirmed,
-				}
+		if outcome == declaration.OutcomeValid {
+			result.Declaration = declaration.Declaration{
+				Version:  1,
+				Identity: declaration.IdentityAffirmed,
+			}
 		}
 
 		if err := storage.RecordVerification(
 			ctx,
-			base.Add(
-				time.Duration(index)*
-					time.Minute,
-			),
+			base.Add(time.Duration(index)*time.Minute),
 			result,
 		); err != nil {
 			t.Fatalf(
 				"RecordVerification(%v) error = %v",
-				test.outcome,
+				outcome,
 				err,
-			)
-		}
-
-		var got int64
-
-		if err := pool.QueryRow(
-			ctx,
-			`
-				SELECT miss_count
-				FROM verification_reprobe_state
-				WHERE origin = $1
-			`,
-			source.String(),
-		).Scan(&got); err != nil {
-			t.Fatalf(
-				"read reprobe state: %v",
-				err,
-			)
-		}
-
-		if got != test.want {
-			t.Errorf(
-				"miss count after %v = %d, want %d",
-				test.outcome,
-				got,
-				test.want,
 			)
 		}
 	}
+
+	var missCount int64
+	err := pool.QueryRow(
+		ctx,
+		`
+			SELECT miss_count
+			FROM verification_reprobe_state
+			WHERE origin = $1
+		`,
+		source.String(),
+	).Scan(&missCount)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf(
+			"reprobe state lookup error = %v, miss_count = %d; want ErrNoRows",
+			err,
+			missCount,
+		)
+	}
+
+	var observationCount int
+	if err := pool.QueryRow(
+		ctx,
+		`
+			SELECT count(*)
+			FROM verification_observations
+			WHERE origin = $1
+		`,
+		source.String(),
+	).Scan(&observationCount); err != nil {
+		t.Fatalf("count observations: %v", err)
+	}
+	if observationCount != len(outcomes) {
+		t.Fatalf(
+			"observation count = %d, want %d",
+			observationCount,
+			len(outcomes),
+		)
+	}
 }
 
-func TestQueueReprobeSchedulingUsesCompactState(
+/**
+ * TestLegacyReprobeCompletionRemovesQueueRow verifies terminal completion of a
+ * legacy reprobe row removes active queue work while retaining the observation.
+ */
+func TestLegacyReprobeCompletionRemovesQueueRow(
 	t *testing.T,
 ) {
 	ctx := context.Background()
@@ -144,9 +137,8 @@ func TestQueueReprobeSchedulingUsesCompactState(
 		t,
 		pool,
 		QueueConfig{
-			LeaseDuration:        30 * time.Minute,
-			MinOriginInterval:    time.Minute,
-			FirstReprobeInterval: 12 * time.Hour,
+			LeaseDuration:     30 * time.Minute,
+			MinOriginInterval: time.Minute,
 		},
 		now,
 	)
@@ -168,10 +160,7 @@ func TestQueueReprobeSchedulingUsesCompactState(
 		source.String(),
 		now.Add(-24*time.Hour),
 	); err != nil {
-		t.Fatalf(
-			"insert origin: %v",
-			err,
-		)
+		t.Fatalf("insert origin: %v", err)
 	}
 
 	if _, err := pool.Exec(
@@ -185,10 +174,7 @@ func TestQueueReprobeSchedulingUsesCompactState(
 		`,
 		source.String(),
 	); err != nil {
-		t.Fatalf(
-			"insert reprobe state: %v",
-			err,
-		)
+		t.Fatalf("insert reprobe state: %v", err)
 	}
 
 	if _, err := pool.Exec(
@@ -204,59 +190,19 @@ func TestQueueReprobeSchedulingUsesCompactState(
 		source.String(),
 		now,
 	); err != nil {
-		t.Fatalf(
-			"insert reprobe queue row: %v",
-			err,
-		)
+		t.Fatalf("insert reprobe queue row: %v", err)
 	}
 
-	var observationCount int
-
-	if err := pool.QueryRow(
-		ctx,
-		`
-			SELECT count(*)
-			FROM verification_observations
-			WHERE origin = $1
-		`,
-		source.String(),
-	).Scan(&observationCount); err != nil {
-		t.Fatalf(
-			"count observations before completion: %v",
-			err,
-		)
-	}
-
-	if observationCount != 0 {
-		t.Fatalf(
-			"observations before completion = %d, want 0",
-			observationCount,
-		)
-	}
-
-	lease, found, err := queue.Claim(
-		ctx,
-		"worker-a",
-	)
+	lease, found, err := queue.Claim(ctx, "worker-a")
 	if err != nil {
-		t.Fatalf(
-			"Claim() error = %v",
-			err,
-		)
+		t.Fatalf("Claim() error = %v", err)
 	}
-
 	if !found {
-		t.Fatal(
-			"Claim() found = false, want true",
-		)
+		t.Fatal("Claim() found = false, want true")
 	}
 
-	completedAt := now.Add(
-		time.Minute,
-	)
-	clock.Set(
-		completedAt,
-	)
+	completedAt := now.Add(time.Minute)
+	clock.Set(completedAt)
 
 	if err := queue.CompleteVerification(
 		ctx,
@@ -267,35 +213,26 @@ func TestQueueReprobeSchedulingUsesCompactState(
 		},
 		24*time.Hour,
 	); err != nil {
-		t.Fatalf(
-			"CompleteVerification() error = %v",
-			err,
-		)
+		t.Fatalf("CompleteVerification() error = %v", err)
 	}
 
-	state := readQueueState(
-		t,
-		pool,
+	var queueCount int
+	if err := pool.QueryRow(
+		ctx,
+		`
+			SELECT count(*)
+			FROM verification_queue
+			WHERE origin = $1
+		`,
 		source.String(),
-	)
-
-	wantAvailableAt :=
-		completedAt.Add(
-			maxReprobeInterval,
-		)
-
-	if !state.availableAt.Equal(
-		wantAvailableAt,
-	) {
-		t.Errorf(
-			"available_at = %v, want %v",
-			state.availableAt,
-			wantAvailableAt,
-		)
+	).Scan(&queueCount); err != nil {
+		t.Fatalf("count queue rows: %v", err)
+	}
+	if queueCount != 0 {
+		t.Fatalf("queue row count = %d, want 0", queueCount)
 	}
 
 	var missCount int64
-
 	if err := pool.QueryRow(
 		ctx,
 		`
@@ -305,19 +242,16 @@ func TestQueueReprobeSchedulingUsesCompactState(
 		`,
 		source.String(),
 	).Scan(&missCount); err != nil {
-		t.Fatalf(
-			"read reprobe miss count: %v",
-			err,
-		)
+		t.Fatalf("read reprobe miss count: %v", err)
 	}
-
-	if missCount != 5 {
+	if missCount != 4 {
 		t.Errorf(
-			"reprobe miss count = %d, want 5",
+			"reprobe miss count = %d, want unchanged 4",
 			missCount,
 		)
 	}
 
+	var observationCount int
 	if err := pool.QueryRow(
 		ctx,
 		`
@@ -327,15 +261,11 @@ func TestQueueReprobeSchedulingUsesCompactState(
 		`,
 		source.String(),
 	).Scan(&observationCount); err != nil {
-		t.Fatalf(
-			"count observations after completion: %v",
-			err,
-		)
+		t.Fatalf("count observations: %v", err)
 	}
-
 	if observationCount != 1 {
-		t.Errorf(
-			"observations after completion = %d, want 1",
+		t.Fatalf(
+			"observation count = %d, want 1",
 			observationCount,
 		)
 	}

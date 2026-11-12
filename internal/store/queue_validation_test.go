@@ -41,11 +41,6 @@ func TestNewQueueValidatesDependenciesAndConfiguration(
 			LeaseDuration:     time.Minute,
 			MinOriginInterval: -time.Minute,
 		},
-		{
-			LeaseDuration:        time.Minute,
-			MinOriginInterval:    time.Minute,
-			FirstReprobeInterval: -time.Minute,
-		},
 	}
 
 	for _, config := range invalidConfigs {

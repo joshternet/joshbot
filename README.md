@@ -395,12 +395,18 @@ JOSHBOT_CRAWL_TELEMETRY_RETENTION
 JoshBot records verification queue transitions so operators can understand how
 work moves through the system.
 
-Verification work has three queue modes. Fresh discovered candidates use
-`probe`, terminal misses are retained as delayed `reprobe` work, and verified
-participants use `recurring`. The first reprobe defaults to 12 hours. Repeated
-terminal misses back off to 24 hours, 48 hours, 96 hours, then a seven-day cap.
-Fresh probes are claimed ahead of reprobes so catch-up work cannot stall new
-discovery, and reprobes do not consume pending-probe backpressure capacity.
+Verification work uses `probe` for freshly discovered candidates and
+`recurring` for verified participants. Authoritative terminal misses from a
+first probe (absent, invalid, unsupported version, robots denied, or
+cross-origin redirect) record an observation and remove the active queue row.
+They do not create delayed timer-based reprobes. A later probe may be admitted
+only when discovery evidence is strictly newer than that terminal observation
+(`last_discovered_at > observed_at`), or when an operator runs
+`joshbot schedule` (recurring). Discovery during an in-flight verification is
+covered by that verification. Claim order remains recurring, then probe, then
+any legacy `reprobe` rows during backlog drain. The `reprobe` reporting surface
+remains for compatibility while residual legacy rows are retired; it is not an
+active scheduling policy.
 
 Queue events include transitions such as:
 

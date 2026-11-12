@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joshternet/joshbot/internal/declaration"
 )
@@ -584,7 +585,7 @@ func TestPurgeOperationalHistoryPreservesSemanticState(
 
 	var withdrawnMissCount int64
 
-	if err := pool.QueryRow(
+	err = pool.QueryRow(
 		ctx,
 		`
 			SELECT miss_count
@@ -592,16 +593,11 @@ func TestPurgeOperationalHistoryPreservesSemanticState(
 			WHERE origin = $1
 		`,
 		withdrawn.String(),
-	).Scan(&withdrawnMissCount); err != nil {
+	).Scan(&withdrawnMissCount)
+	if !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf(
-			"read withdrawn reprobe state: %v",
+			"withdrawn reprobe state error = %v, miss_count = %d; want ErrNoRows",
 			err,
-		)
-	}
-
-	if withdrawnMissCount != 1 {
-		t.Errorf(
-			"withdrawn reprobe miss count = %d, want 1",
 			withdrawnMissCount,
 		)
 	}
